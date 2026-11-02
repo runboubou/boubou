@@ -1,8 +1,13 @@
-use anyhow::{Context, Result, anyhow, bail, ensure};
+#[cfg(target_os = "macos")]
+use anyhow::{Context, bail, ensure};
+use anyhow::{Result, anyhow};
+#[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
+use std::io::Read;
+#[cfg(target_os = "macos")]
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -14,12 +19,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "macos")]
 pub struct CapturedAudio {
     pub samples: Vec<i16>,
     pub captured_at: Instant,
     pub near_end_speech: bool,
 }
 
+#[cfg(target_os = "macos")]
 pub enum CaptureFrame {
     /// 20 ms of echo-cancelled mono PCM16 at 16 kHz.
     Samples(CapturedAudio),
@@ -27,6 +34,7 @@ pub enum CaptureFrame {
 }
 
 /// Owns the native audio process and its bounded capture and playback queues.
+#[cfg(target_os = "macos")]
 pub struct Audio {
     child: Child,
     input: ChildStdin,
@@ -55,6 +63,7 @@ impl Playback {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Audio {
     #[cfg(target_os = "macos")]
     pub fn start(
@@ -201,17 +210,6 @@ impl Audio {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn start(
-        _cache_dir: &Path,
-        _detect_voice: bool,
-        _stopped: &AtomicBool,
-    ) -> Result<(Self, Receiver<CaptureFrame>)> {
-        bail!(
-            "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
-        );
-    }
-
     /// Schedules PCM16 mono audio at 24 kHz. Playback progress comes from the device.
     pub fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
         self.check_error()?;
@@ -270,6 +268,7 @@ impl Audio {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for Audio {
     fn drop(&mut self) {
         // Normal shutdown lets the native process remove its HAL listener.
@@ -340,8 +339,11 @@ impl HostClock {
             .context("Invalid microphone timestamp")?;
         Ok(CapturedAudio {
             samples: payload[9..]
-                .chunks_exact(2)
-                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(i16::from_le_bytes)
                 .collect(),
             captured_at,
             near_end_speech: payload[8] != 0,
@@ -433,6 +435,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     #[ignore = "Plays a supplied model reply on real speakers and checks microphone VAD"]
     fn speaker_echo_probe() {
