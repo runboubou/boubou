@@ -1,0 +1,83 @@
+name: Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event_name }}-${{ github.event.action == 'edited' && !github.event.changes.base && 'metadata' || 'code' }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Check contribution guardrails
+        run: python3 scripts/verify.py --repository-only
+
+  rust:
+    name: rust (${{ matrix.os }}, ${{ matrix.toolchain }})
+    needs: repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            toolchain: stable
+          - os: macos-15
+            toolchain: '1.88.0'
+          - os: ubuntu-24.04
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Verify Apple Silicon runner
+        if: runner.os == 'macOS'
+        run: test "$(uname -m)" = arm64
+      - name: Install selected Rust toolchain
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$TOOLCHAIN"
+          rustc --version
+          cargo --version
+      - name: Prepare locked dependencies
+        run: cargo fetch --locked
+      - name: Run ordinary verification without Cargo network access
+        run: python3 scripts/verify.py --offline
+
+  quality:
+    name: quality
+    if: always()
+    needs: [repository, rust]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every verification job to succeed
+        env:
+          REPOSITORY_RESULT: ${{ needs.repository.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: |
+          test "$REPOSITORY_RESULT" = success
+          test "$RUST_RESULT" = success
