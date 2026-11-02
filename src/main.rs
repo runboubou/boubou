@@ -101,6 +101,7 @@ fn run() -> Result<()> {
             );
             println!("Profile: Liquid LFM3-Audio-2B · Q4_K_M + Q8_0 audio · llama.cpp b11960");
             println!("Voice chat: English · audio input 16 kHz · audio output 24 kHz");
+            println!("Conversation context: {} tokens", backend::CONTEXT_TOKENS);
             println!("Cache: {}", cache.display());
             assets::status(&cache)
         }
@@ -134,11 +135,12 @@ fn run() -> Result<()> {
             eprintln!("Loading Liquid locally…");
             let backend = backend::Backend::start(&files, &cache)?;
             let mut connection = Realtime::connect(&backend.address)?;
-            if turns.is_empty() {
+            let result = if turns.is_empty() {
                 microphone(&cache, &mut connection, &stopped, manual)
             } else {
                 from_files(turns, output.as_deref(), &mut connection, &stopped)
-            }
+            };
+            result.map_err(|error| backend.explain_failure(error))
         }
     }
 }
@@ -412,17 +414,7 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     print!("{}", text.replace('\n', "\r\n"));
                     io::stdout().flush()?;
                 }
-                Output::Audio(pcm) => {
-                    trace(
-                        "session.audio",
-                        format_args!(
-                            "listening={} samples={}",
-                            listening_since.is_some(),
-                            pcm.len()
-                        ),
-                    );
-                    audio.enqueue(&pcm)?;
-                }
+                Output::Audio(pcm) => audio.enqueue(&pcm)?,
                 Output::Done => {
                     print!("\r\n");
                     reply_open = false;

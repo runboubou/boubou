@@ -133,11 +133,17 @@ BOUBOU_TRACE=1 boubou run liquid --offline
 ```
 
 Trace lines contain relative times, input turn numbers, response IDs, playback epochs,
-sample counts, pause/resume events, and cancellation/filtering decisions. They do not
+per-response sample totals, pause/resume events, and cancellation decisions. They do not
 contain PCM, transcripts, or generated text. Tracing is off by default and does not
 save audio or create a trace file. Normal conversation text remains visible as usual.
 `playback.clear.applied` acknowledges the native player's stop/clear operation; it
 does not measure the remaining hardware or acoustic tail.
+
+The Liquid profile uses a 32,768-token context, matching the model's published
+context length. The pinned backend does not roll realtime conversation history.
+Once the context is full, start a new conversation. Boubou identifies the known
+context-exhaustion crash from its backend log instead of only reporting a lost
+connection. This does not provide unlimited conversation history.
 
 `Esc` pauses input submission until `Enter`. Microphone capture remains open and
 captured frames are discarded while paused. Spoken “stop” or “goodbye” is currently

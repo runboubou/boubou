@@ -191,19 +191,13 @@ impl Audio {
         state.pending += pcm.len();
         let epoch = state.epoch;
         drop(state);
-        crate::trace(
-            "playback.enqueue.send",
-            format_args!("epoch={epoch} samples={}", pcm.len()),
-        );
         let mut payload = Vec::with_capacity(8 + pcm.len() * 2);
         payload.extend_from_slice(&epoch.to_le_bytes());
         for sample in pcm {
             payload.extend_from_slice(&sample.to_le_bytes());
         }
         self.command(1, &payload)
-            .context("Could not send speech to the audio device")?;
-        crate::trace("playback.enqueue.sent", format_args!("epoch={epoch}"));
-        Ok(())
+            .context("Could not send speech to the audio device")
     }
 
     /// Discards scheduled audio and stops the currently playing native buffer.

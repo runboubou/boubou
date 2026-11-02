@@ -39,6 +39,7 @@ pub struct Realtime {
     phase: Phase,
     interrupted: bool,
     user_samples: usize,
+    audio_samples: usize,
 }
 
 impl Realtime {
@@ -57,6 +58,7 @@ impl Realtime {
             phase: Phase::Idle,
             interrupted: false,
             user_samples: 0,
+            audio_samples: 0,
         };
         let created = this.wait_for("session.created")?;
         ensure!(
@@ -155,6 +157,7 @@ impl Realtime {
         self.send(json!({"type":"response.create"}))?;
         crate::trace("response.create.sent", format_args!(""));
         self.user_samples = 0;
+        self.audio_samples = 0;
         self.phase = Phase::Generating {
             id: None,
             since: Instant::now(),
@@ -240,7 +243,7 @@ impl Realtime {
             Phase::Idle => None,
         };
         if expected.is_none() || id != expected {
-            if kind.starts_with("response.") {
+            if kind == "response.done" {
                 crate::trace(
                     "response.drop_mismatched",
                     format_args!("kind={kind} id={id:?} expected={expected:?}"),
@@ -257,7 +260,10 @@ impl Realtime {
             );
             crate::trace(
                 "response.done",
-                format_args!("id={id:?} status={status} cancelling={cancelled}"),
+                format_args!(
+                    "id={id:?} status={status} cancelling={cancelled} audio_samples={}",
+                    self.audio_samples
+                ),
             );
             self.phase = Phase::Idle;
             return Ok(Some(if cancelled {
@@ -267,10 +273,6 @@ impl Realtime {
             }));
         }
         if self.cancelling() {
-            crate::trace(
-                "response.drop_cancelled",
-                format_args!("kind={kind} id={id:?}"),
-            );
             return Ok(None);
         }
         match kind {
@@ -287,10 +289,10 @@ impl Realtime {
                     bytes.len() % 2 == 0,
                     "Liquid returned an incomplete PCM16 sample"
                 );
-                crate::trace(
-                    "response.audio",
-                    format_args!("id={id:?} samples={}", bytes.len() / 2),
-                );
+                if self.audio_samples == 0 {
+                    crate::trace("response.first_audio", format_args!("id={id:?}"));
+                }
+                self.audio_samples += bytes.len() / 2;
                 Ok(Some(Output::Audio(
                     bytes
                         .chunks_exact(2)
@@ -533,6 +535,80 @@ mod tests {
             "Unexpected next turn: {text}"
         );
         eprintln!("Next turn: {text}; {} audio samples", samples);
+    }
+
+    #[test]
+    #[ignore = "Checks real Liquid context beyond the former limit; no audio devices"]
+    fn liquid_conversation_exceeds_the_previous_context_limit() {
+        let cache = dirs::cache_dir().unwrap().join("boubou");
+        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let backend = crate::backend::Backend::start(&assets, &cache).unwrap();
+        let http = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap();
+        let prompt = format!(
+            "Remember this code word: mango. The following is padding:{}\nReply only with the code word.",
+            " ocean".repeat(9000)
+        );
+        let tokens: Value = serde_json::from_str(
+            &http
+                .post(format!("http://{}/tokenize", backend.address))
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(json!({"content": prompt, "add_special": false}).to_string())
+                .send()
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .unwrap(),
+        )
+        .unwrap();
+        let token_count = tokens["tokens"].as_array().unwrap().len();
+        assert!(
+            token_count > 8192,
+            "The regression must cross the old capacity"
+        );
+        assert!(token_count + 2048 < crate::backend::CONTEXT_TOKENS as usize);
+        let mut chat = Realtime::connect(&backend.address).unwrap();
+        for text in [
+            &prompt,
+            "What was the code word? Reply only with that word.",
+        ] {
+            chat.text_turn(text).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let mut reply = String::new();
+            let mut audio_samples = 0;
+            while chat.busy() {
+                assert!(Instant::now() < deadline, "Context regression timed out");
+                match chat.poll().unwrap() {
+                    Some(Output::Text(text)) => reply.push_str(&text),
+                    Some(Output::Audio(pcm)) => audio_samples += pcm.len(),
+                    _ => {}
+                }
+            }
+            assert!(
+                reply.to_lowercase().contains("mango"),
+                "Lost conversation context: {reply}"
+            );
+            assert!(
+                audio_samples > 0,
+                "No speech after crossing the old context limit"
+            );
+            eprintln!("CONTEXT_REPLY text={reply:?} audio_samples={audio_samples}");
+        }
+        assert!(
+            http.get(format!("http://{}/health", backend.address))
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
+        eprintln!(
+            "CONTEXT_REGRESSION input_tokens={token_count} context={} turns=2 backend_alive=true",
+            crate::backend::CONTEXT_TOKENS
+        );
     }
 
     #[test]
