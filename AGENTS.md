@@ -26,7 +26,7 @@ Deleting or recreating issues, deleting discussions, force-pushing, rewriting Gi
 ## Engineering
 
 - Keep changes small, direct, and specific to this private Rust/macOS project.
-- Use `docs/specs/TEMPLATE.md` for material behavior, interface, asset, or privacy changes; small fixes need no separate Spec.
+- Use `spec/TEMPLATE.md` for material behavior, interface, asset, or privacy changes; small fixes need no separate Spec.
 - Test behavior and relevant failures with ordinary Rust tests. Never treat simulated tests as real microphone/model acceptance.
 - Before merging, review the final diff and current checks. No independent approval is required unless the repository itself enforces one.
 - Keep secrets, recordings, transcripts, and personal diagnostics out of commits.
