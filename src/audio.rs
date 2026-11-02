@@ -339,8 +339,11 @@ impl HostClock {
             .context("Invalid microphone timestamp")?;
         Ok(CapturedAudio {
             samples: payload[9..]
-                .chunks_exact(2)
-                .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(i16::from_le_bytes)
                 .collect(),
             captured_at,
             near_end_speech: payload[8] != 0,

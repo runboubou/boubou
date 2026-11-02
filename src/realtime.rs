@@ -317,8 +317,11 @@ impl Realtime {
                 self.audio_samples += bytes.len() / 2;
                 Ok(Some(Output::Audio(
                     bytes
-                        .chunks_exact(2)
-                        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .copied()
+                        .map(i16::from_le_bytes)
                         .collect(),
                 )))
             }
@@ -627,7 +630,7 @@ mod tests {
             text.to_lowercase().contains("ready"),
             "Unexpected next turn: {text}"
         );
-        eprintln!("Next turn: {text}; {} audio samples", samples);
+        eprintln!("Next turn: {text}; {samples} audio samples");
     }
 
     #[test]
