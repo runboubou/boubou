@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -141,6 +141,12 @@ impl Audio {
                             state.acknowledge(acknowledged_epoch, count);
                         }
                         4 => bail!("{}", String::from_utf8_lossy(&payload)),
+                        5 => {
+                            ensure!(payload.len() == 8, "Invalid playback clear acknowledgment");
+                            let epoch =
+                                u64::from_le_bytes(payload.try_into().expect("eight bytes"));
+                            crate::trace("playback.clear.applied", format_args!("epoch={epoch}"));
+                        }
                         _ => bail!("The audio helper returned an unknown event"),
                     }
                 }
@@ -185,13 +191,19 @@ impl Audio {
         state.pending += pcm.len();
         let epoch = state.epoch;
         drop(state);
+        crate::trace(
+            "playback.enqueue.send",
+            format_args!("epoch={epoch} samples={}", pcm.len()),
+        );
         let mut payload = Vec::with_capacity(8 + pcm.len() * 2);
         payload.extend_from_slice(&epoch.to_le_bytes());
         for sample in pcm {
             payload.extend_from_slice(&sample.to_le_bytes());
         }
         self.command(1, &payload)
-            .context("Could not send speech to the audio device")
+            .context("Could not send speech to the audio device")?;
+        crate::trace("playback.enqueue.sent", format_args!("epoch={epoch}"));
+        Ok(())
     }
 
     /// Discards scheduled audio and stops the currently playing native buffer.
@@ -199,8 +211,11 @@ impl Audio {
         let mut state = self.playback.lock().expect("audio playback lock");
         let epoch = state.clear();
         drop(state);
+        crate::trace("playback.clear.send", format_args!("epoch={epoch}"));
         self.command(2, &epoch.to_le_bytes())
-            .context("Could not interrupt audio playback")
+            .context("Could not interrupt audio playback")?;
+        crate::trace("playback.clear.sent", format_args!("epoch={epoch}"));
+        Ok(())
     }
 
     pub fn pending_samples(&self) -> usize {

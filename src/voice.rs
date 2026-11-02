@@ -9,15 +9,22 @@ pub enum Segment {
 
 #[derive(Default)]
 pub struct PendingAudio {
-    turns: VecDeque<(Vec<i16>, bool)>,
+    turns: VecDeque<(u64, Vec<i16>, bool)>,
     samples: usize,
+    next_id: u64,
 }
 
 impl PendingAudio {
-    pub fn push(&mut self, segment: Segment) -> Result<()> {
+    pub fn clear(&mut self) {
+        self.turns.clear();
+        self.samples = 0;
+    }
+
+    pub fn push(&mut self, segment: Segment) -> Result<u64> {
         let (pcm, end) = match segment {
             Segment::Start(pcm) => {
-                self.turns.push_back((Vec::new(), false));
+                self.next_id += 1;
+                self.turns.push_back((self.next_id, Vec::new(), false));
                 (pcm, false)
             }
             Segment::Continue(pcm) => (pcm, false),
@@ -27,28 +34,29 @@ impl PendingAudio {
             self.samples + pcm.len() <= 16_000 * 30,
             "Too much audio accumulated while Liquid was stopping"
         );
-        let (buffer, complete) = self
+        let (id, buffer, complete) = self
             .turns
             .back_mut()
             .context("Audio arrived without a user turn")?;
         self.samples += pcm.len();
         buffer.extend(pcm);
         *complete = end;
-        Ok(())
+        Ok(*id)
     }
 
-    pub fn take(&mut self, allow_finish: bool) -> Option<(Vec<i16>, bool)> {
-        let (buffer, complete) = self.turns.front_mut()?;
+    pub fn take(&mut self, allow_finish: bool) -> Option<(u64, Vec<i16>, bool)> {
+        let (id, buffer, complete) = self.turns.front_mut()?;
         if (*complete && !allow_finish) || (buffer.is_empty() && !*complete) {
             return None;
         }
         let pcm = std::mem::take(buffer);
         let end = *complete;
+        let id = *id;
         self.samples -= pcm.len();
         if end {
             self.turns.pop_front();
         }
-        Some((pcm, end))
+        Some((id, pcm, end))
     }
 }
 
@@ -163,11 +171,11 @@ mod tests {
         pending.push(Segment::Start(vec![3; 320])).unwrap();
         assert_eq!(
             pending.take(true),
-            Some(([vec![1; 320], vec![2; 320]].concat(), true))
+            Some((1, [vec![1; 320], vec![2; 320]].concat(), true))
         );
-        assert_eq!(pending.take(false), Some((vec![3; 320], false)));
+        assert_eq!(pending.take(false), Some((2, vec![3; 320], false)));
         pending.push(Segment::End(vec![4; 320])).unwrap();
-        assert_eq!(pending.take(true), Some((vec![4; 320], true)));
+        assert_eq!(pending.take(true), Some((2, vec![4; 320], true)));
         assert_eq!(pending.take(true), None);
     }
 
@@ -194,12 +202,28 @@ mod tests {
         assert!(!voice.is_active());
         assert_eq!(
             pending.take(!voice.is_active()),
-            Some(([vec![1; 320], vec![2; 320]].concat(), true))
+            Some((1, [vec![1; 320], vec![2; 320]].concat(), true))
         );
         assert_eq!(
             pending.take(!voice.is_active()),
-            Some(([vec![3; 5 * 320], vec![4; 30 * 320]].concat(), true))
+            Some((2, [vec![3; 5 * 320], vec![4; 30 * 320]].concat(), true))
         );
         assert_eq!(pending.take(true), None);
+    }
+
+    #[test]
+    fn pause_discards_queued_input_without_reusing_its_identity() {
+        let mut pending = PendingAudio::default();
+        assert_eq!(pending.push(Segment::Start(vec![1; 320])).unwrap(), 1);
+        pending.push(Segment::End(vec![2; 320])).unwrap();
+        pending.clear();
+        assert_eq!(pending.take(true), None);
+        assert_eq!(pending.samples, 0);
+        assert_eq!(pending.push(Segment::Start(vec![3; 320])).unwrap(), 2);
+        pending.push(Segment::End(vec![4; 320])).unwrap();
+        assert_eq!(
+            pending.take(true),
+            Some((2, [vec![3; 320], vec![4; 320]].concat(), true))
+        );
     }
 }

@@ -124,6 +124,10 @@ impl Realtime {
 
     pub fn end_input_without_response(&mut self) -> Result<()> {
         if self.user_samples > 0 {
+            crate::trace(
+                "input.commit_without_response",
+                format_args!("samples={}", self.user_samples),
+            );
             // This backend encodes audio as it arrives; clear is a no-op. End the
             // partial audio without response.create, so it cannot speak on its own.
             self.send(json!({"type":"input_audio_buffer.commit"}))?;
@@ -144,7 +148,12 @@ impl Realtime {
 
     fn request_response(&mut self) -> Result<()> {
         ensure!(!self.busy(), "The previous turn is still running");
+        crate::trace(
+            "response.create.send",
+            format_args!("samples={}", self.user_samples),
+        );
         self.send(json!({"type":"response.create"}))?;
+        crate::trace("response.create.sent", format_args!(""));
         self.user_samples = 0;
         self.phase = Phase::Generating {
             id: None,
@@ -158,7 +167,9 @@ impl Realtime {
         self.interrupted = true;
         if let Phase::Generating { id, .. } = &self.phase {
             let id = id.clone();
+            crate::trace("response.cancel.send", format_args!("id={id:?}"));
             self.send(json!({"type":"response.cancel"}))?;
+            crate::trace("response.cancel.sent", format_args!("id={id:?}"));
             let now = Instant::now();
             self.phase = Phase::Cancelling {
                 id,
@@ -208,6 +219,10 @@ impl Realtime {
             let new_id = event["response"]["id"]
                 .as_str()
                 .context("Response is missing its ID")?;
+            crate::trace(
+                "response.created",
+                format_args!("id={new_id} cancelling={}", self.cancelling()),
+            );
             match &mut self.phase {
                 Phase::Generating { id, .. } | Phase::Cancelling { id, .. } => {
                     ensure!(id.is_none(), "Unexpected overlapping Liquid responses");
@@ -225,6 +240,12 @@ impl Realtime {
             Phase::Idle => None,
         };
         if expected.is_none() || id != expected {
+            if kind.starts_with("response.") {
+                crate::trace(
+                    "response.drop_mismatched",
+                    format_args!("kind={kind} id={id:?} expected={expected:?}"),
+                );
+            }
             return Ok(None);
         }
         if kind == "response.done" {
@@ -232,7 +253,11 @@ impl Realtime {
             let status = event["response"]["status"].as_str().unwrap_or_default();
             ensure!(
                 status == "completed" || status == "cancelled",
-                "Liquid response failed: {event}"
+                "Liquid response failed (status: {status})"
+            );
+            crate::trace(
+                "response.done",
+                format_args!("id={id:?} status={status} cancelling={cancelled}"),
             );
             self.phase = Phase::Idle;
             return Ok(Some(if cancelled {
@@ -242,6 +267,10 @@ impl Realtime {
             }));
         }
         if self.cancelling() {
+            crate::trace(
+                "response.drop_cancelled",
+                format_args!("kind={kind} id={id:?}"),
+            );
             return Ok(None);
         }
         match kind {
@@ -257,6 +286,10 @@ impl Realtime {
                 ensure!(
                     bytes.len() % 2 == 0,
                     "Liquid returned an incomplete PCM16 sample"
+                );
+                crate::trace(
+                    "response.audio",
+                    format_args!("id={id:?} samples={}", bytes.len() / 2),
                 );
                 Ok(Some(Output::Audio(
                     bytes

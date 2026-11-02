@@ -38,9 +38,13 @@ int main(void) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 [host.lock lock];
                 NSUInteger obsolete = host.events.count;
+                NSData *cleared = [host.events firstObject];
+                BOOL clearAcknowledged = obsolete == 1 && cleared.length == 13 &&
+                    ((const uint8_t *)cleared.bytes)[0] == 5 && readU64(cleared, 5) == 1;
+                [host.events removeAllObjects];
                 BOOL failed = host.failure != nil;
                 [host.lock unlock];
-                require(host, !failed && obsolete == 0, "cancelled buffers filled the capture event queue");
+                require(host, !failed && clearAcknowledged, "clear acknowledgment missing or obsolete playback acknowledgments leaked");
                 require(host, host.queuedSamples == 0, "cancelled samples remain pending");
 
                 NSMutableData *nextPayload = [payload mutableCopy];
@@ -55,7 +59,7 @@ int main(void) {
                     BOOL failed = host.failure != nil;
                     [host.lock unlock];
                     require(host, !failed && completed == 5 && host.queuedSamples == 0, "next playback did not complete normally");
-                    fprintf(stderr, "NATIVE_CANCEL buffers=400 obsolete_acks=0 overflow=0 next_epoch_completed=5 pending_samples=0\n");
+                    fprintf(stderr, "NATIVE_CANCEL buffers=400 clear_applied=1 obsolete_acks=0 overflow=0 next_epoch_completed=5 pending_samples=0\n");
                     [host stop];
                     exit(0);
                 });

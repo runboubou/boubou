@@ -70,6 +70,21 @@ fn main() {
     }
 }
 
+// Opt-in control metadata only: never pass speech, transcripts, or PCM here.
+fn trace(event: &'static str, details: std::fmt::Arguments<'_>) {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    if let Some(started) = START.get_or_init(|| {
+        std::env::var("BOUBOU_TRACE")
+            .is_ok_and(|value| value == "1")
+            .then(Instant::now)
+    }) {
+        eprintln!(
+            "\r\n[trace +{}ms] {event} {details}\r",
+            started.elapsed().as_millis()
+        );
+    }
+}
+
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let cache = cli
@@ -260,20 +275,26 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 break;
             }
             if key.code == KeyCode::Esc {
+                trace(
+                    "pause.key",
+                    format_args!("queued_samples={}", audio.pending_samples()),
+                );
                 audio.clear()?;
                 chat.interrupt()?;
                 chat.end_input_without_response()?;
-                pending = voice::PendingAudio::default();
+                pending.clear();
                 voice = voice::Voice::new();
                 recording_since = None;
                 recording_samples = 0;
                 submit_at = None;
                 listening_since = None;
+                trace("pause.latched", format_args!(""));
                 eprint!("\r\nPaused · Press Enter to resume · Ctrl+C exits\r\n");
                 reply_open = false;
             }
             if key.code == KeyCode::Enter && listening_since.is_none() {
                 listening_since = Some(Instant::now());
+                trace("resume.key", format_args!(""));
                 if !manual {
                     eprint!("\r\nListening…\r\n");
                 }
@@ -288,7 +309,8 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                         chat.interrupt()?;
                         eprint!("\r\n[Interrupted]\r\n");
                     }
-                    pending.push(voice::Segment::Start(Vec::new()))?;
+                    let turn = pending.push(voice::Segment::Start(Vec::new()))?;
+                    trace("input.start", format_args!("turn={turn} manual=true"));
                     recording_since = Some(Instant::now());
                     recording_samples = 0;
                     reply_open = false;
@@ -331,7 +353,8 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                             "\r\nNo audio received yet. Keep recording, then press Enter to send.\r\n"
                         );
                     } else {
-                        pending.push(voice::Segment::End(Vec::new()))?;
+                        let turn = pending.push(voice::Segment::End(Vec::new()))?;
+                        trace("input.end", format_args!("turn={turn} manual=true"));
                         recording_since = None;
                     }
                     continue;
@@ -348,7 +371,18 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 };
                 segment
             };
-            if matches!(segment, voice::Segment::Start(_)) {
+            let starting = matches!(segment, voice::Segment::Start(_));
+            let ending = matches!(segment, voice::Segment::End(_));
+            let turn = pending.push(segment)?;
+            if starting {
+                trace(
+                    "input.start",
+                    format_args!(
+                        "turn={turn} manual=false backend_busy={} queued_samples={}",
+                        chat.busy(),
+                        audio.pending_samples()
+                    ),
+                );
                 if chat.busy() || audio.pending_samples() > 0 {
                     audio.clear()?;
                     chat.interrupt()?;
@@ -356,7 +390,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 }
                 reply_open = false;
             }
-            pending.push(segment)?;
+            if ending {
+                trace("input.end", format_args!("turn={turn} manual=false"));
+            }
             if !chat.busy() && audio.pending_samples() == 0 {
                 send_pending(
                     &mut pending,
@@ -376,7 +412,17 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     print!("{}", text.replace('\n', "\r\n"));
                     io::stdout().flush()?;
                 }
-                Output::Audio(pcm) => audio.enqueue(&pcm)?,
+                Output::Audio(pcm) => {
+                    trace(
+                        "session.audio",
+                        format_args!(
+                            "listening={} samples={}",
+                            listening_since.is_some(),
+                            pcm.len()
+                        ),
+                    );
+                    audio.enqueue(&pcm)?;
+                }
                 Output::Done => {
                     print!("\r\n");
                     reply_open = false;
@@ -407,9 +453,10 @@ fn send_pending(
     chat: &mut Realtime,
     allow_finish: bool,
 ) -> Result<()> {
-    if let Some((pcm, end)) = pending.take(allow_finish) {
+    if let Some((turn, pcm, end)) = pending.take(allow_finish) {
         chat.append_audio(&pcm)?;
         if end {
+            trace("input.submit", format_args!("turn={turn}"));
             chat.finish_audio()?;
             eprint!("\r\nThinking…\r\n");
         }

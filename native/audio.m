@@ -11,7 +11,7 @@
 // Private pipe protocol: byte kind, UInt32 LE payload length, then payload.
 // Commands: 1 playback (UInt64 epoch + PCM16/24k), 2 clear (epoch), 3 quit.
 // Events: 1 ready, 2 capture (UInt64 host ticks + byte near-end speech + PCM16/16k),
-// 3 played (epoch + count), 4 error.
+// 3 played (epoch + count), 4 error, 5 clear applied (epoch).
 static NSData *packet(uint8_t kind, NSData *payload) {
     NSMutableData *data = [NSMutableData dataWithBytes:&kind length:1];
     uint32_t length = CFSwapInt32HostToLittle((uint32_t)payload.length);
@@ -376,6 +376,7 @@ static NSError *audioError(NSString *description) {
     [self.player stop];
     self.queuedSamples = 0;
     [self.player play];
+    [self emit:5 payload:payload];
     return YES;
 }
 

@@ -124,6 +124,26 @@ BOUBOU_SPEAKER_TEST_WAV=/path/to/model-reply-24khz.wav \
 cargo test --locked cancelled_playback_does_not_overflow_capture_events -- --ignored --nocapture
 ```
 
+## Conversation diagnostics
+
+For a coordinated investigation, enable control metadata in the terminal:
+
+```sh
+BOUBOU_TRACE=1 boubou run liquid --offline
+```
+
+Trace lines contain relative times, input turn numbers, response IDs, playback epochs,
+sample counts, pause/resume events, and cancellation/filtering decisions. They do not
+contain PCM, transcripts, or generated text. Tracing is off by default and does not
+save audio or create a trace file. Normal conversation text remains visible as usual.
+`playback.clear.applied` acknowledges the native player's stop/clear operation; it
+does not measure the remaining hardware or acoustic tail.
+
+`Esc` pauses input submission until `Enter`. Microphone capture remains open and
+captured frames are discarded while paused. Spoken “stop” or “goodbye” is currently
+ordinary input to Liquid, not an explicit pause control. Passing an Esc test does
+not establish that spoken stopping, speaker echo, or human barge-in is working.
+
 ## 上游与许可证
 
 模型使用自定义 **LFM Open License v1.0**，包含商业使用及再分发条件。模型许可证随权重下载至缓存目录。llama.cpp 使用 MIT 许可证，其完整上游归档与许可证随推理后端保留。
