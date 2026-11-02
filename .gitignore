@@ -2,3 +2,7 @@
 .DS_Store
 *.wav
 *.aiff
+
+# Local Python verification artifacts.
+__pycache__/
+*.py[cod]

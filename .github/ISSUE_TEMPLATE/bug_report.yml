@@ -1,0 +1,44 @@
+name: Bug report
+description: Report reproducible, nonsensitive behavior that does not match expectations.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write this report in English. Do not include private recordings, transcripts,
+        credentials, or raw logs. For a vulnerability, follow SECURITY.md instead
+        of disclosing technical details in a public Issue.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Identify the exact Boubou version or source commit.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS version, architecture, and relevant device/model/backend versions; omit personal hostnames and paths.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give minimal steps using disposable inputs and note whether a real model or audio device is needed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and safe evidence
+      description: Include the exit status and a short redacted error where useful; do not attach raw conversation logs.
+    validations:
+      required: true

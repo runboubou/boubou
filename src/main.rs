@@ -1,11 +1,14 @@
 mod assets;
+#[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
 mod realtime;
+#[cfg(any(target_os = "macos", test))]
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
+#[cfg(target_os = "macos")]
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal,
@@ -17,10 +20,11 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::TryRecvError,
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
+#[cfg(target_os = "macos")]
+use std::{sync::mpsc::TryRecvError, time::Duration};
 
 #[derive(Parser)]
 #[command(version, about = "Local voice conversations, one command away")]
@@ -247,13 +251,16 @@ fn from_files(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 struct Terminal;
+#[cfg(target_os = "macos")]
 impl Terminal {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
         Ok(Self)
     }
 }
+#[cfg(target_os = "macos")]
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
@@ -261,6 +268,19 @@ impl Drop for Terminal {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+fn microphone(
+    _cache: &Path,
+    _chat: &mut Realtime,
+    _stopped: &AtomicBool,
+    _manual: bool,
+) -> Result<()> {
+    bail!(
+        "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: bool) -> Result<()> {
     eprintln!("Allow microphone access if macOS asks. Speak English.");
     let (mut audio, captured) = audio::Audio::start(cache, !manual, stopped)?;
@@ -462,6 +482,7 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn send_pending(
     pending: &mut voice::PendingAudio,
     chat: &mut Realtime,
@@ -481,6 +502,118 @@ fn send_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, sync::atomic::AtomicU64};
+
+    struct TestWav {
+        path: PathBuf,
+    }
+
+    impl TestWav {
+        fn new(spec: hound::WavSpec, samples: usize) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let directory = std::env::temp_dir().join(format!(
+                "boubou-wav-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&directory).unwrap();
+            let fixture = Self {
+                path: directory.join("input.wav"),
+            };
+            let mut writer = hound::WavWriter::create(&fixture.path, spec).unwrap();
+            for _ in 0..samples {
+                match spec.sample_format {
+                    hound::SampleFormat::Int => writer.write_sample(123_i32).unwrap(),
+                    hound::SampleFormat::Float => writer.write_sample(0.25_f32).unwrap(),
+                }
+            }
+            writer.finalize().unwrap();
+            fixture
+        }
+    }
+
+    impl Drop for TestWav {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.path.parent().unwrap());
+        }
+    }
+
+    fn input_wav_spec() -> hound::WavSpec {
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        }
+    }
+
+    #[test]
+    fn reads_pcm16_mono_input_and_accepts_exactly_thirty_seconds() {
+        let short = TestWav::new(input_wav_spec(), 320);
+        assert_eq!(read_wav(&short.path).unwrap(), vec![123; 320]);
+
+        let boundary = TestWav::new(input_wav_spec(), 30 * 16_000);
+        assert_eq!(read_wav(&boundary.path).unwrap().len(), 30 * 16_000);
+    }
+
+    #[test]
+    fn rejects_empty_and_overlong_wav_input() {
+        for samples in [0, 30 * 16_000 + 1] {
+            let fixture = TestWav::new(input_wav_spec(), samples);
+            assert!(
+                read_wav(&fixture.path).is_err(),
+                "Accepted {samples} samples"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_wav_formats() {
+        for spec in [
+            hound::WavSpec {
+                channels: 2,
+                ..input_wav_spec()
+            },
+            hound::WavSpec {
+                sample_rate: 44_100,
+                ..input_wav_spec()
+            },
+            hound::WavSpec {
+                bits_per_sample: 8,
+                ..input_wav_spec()
+            },
+            hound::WavSpec {
+                bits_per_sample: 24,
+                ..input_wav_spec()
+            },
+            hound::WavSpec {
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+                ..input_wav_spec()
+            },
+        ] {
+            let fixture = TestWav::new(spec, 320);
+            assert!(read_wav(&fixture.path).is_err(), "Accepted {spec:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_missing_malformed_and_truncated_wav_input() {
+        let fixture = TestWav::new(input_wav_spec(), 320);
+        assert!(read_wav(&fixture.path.with_file_name("missing.wav")).is_err());
+
+        let length = fs::metadata(&fixture.path).unwrap().len();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&fixture.path)
+            .unwrap()
+            .set_len(length - 1)
+            .unwrap();
+        assert!(read_wav(&fixture.path).is_err());
+
+        fs::write(&fixture.path, b"not a WAV file").unwrap();
+        assert!(read_wav(&fixture.path).is_err());
+    }
 
     #[test]
     fn output_requires_a_file_input() {

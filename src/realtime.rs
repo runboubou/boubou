@@ -145,6 +145,7 @@ impl Realtime {
         self.request_response()
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn end_input_without_response(&mut self) -> Result<()> {
         if self.user_samples > 0 {
             crate::trace(
@@ -378,6 +379,34 @@ impl Drop for Realtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{net::TcpListener, thread};
+
+    fn accept_mock(listener: TcpListener) -> TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    return stream;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Mock server accepted no connection"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("Mock server could not accept a connection: {error}"),
+            }
+        }
+    }
 
     #[test]
     fn startup_cancellation_covers_handshake_and_session_initialization() {
@@ -388,10 +417,7 @@ mod tests {
             let stopped = Arc::new(AtomicBool::new(false));
             let signal = stopped.clone();
             let server = std::thread::spawn(move || {
-                let (stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
+                let stream = accept_mock(listener);
                 if stage == 0 {
                     signal.store(true, Ordering::SeqCst);
                     std::thread::sleep(Duration::from_millis(100));
@@ -422,13 +448,13 @@ mod tests {
             assert!(began.elapsed() < Duration::from_secs(1));
         }
     }
-    use std::{net::TcpListener, thread};
-
-    fn mock_server(work: impl FnOnce(WebSocket<TcpStream>) + Send + 'static) -> String {
+    fn mock_server(
+        work: impl FnOnce(WebSocket<TcpStream>) + Send + 'static,
+    ) -> (String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap().to_string();
-        thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
+        let worker = thread::spawn(move || {
+            let stream = accept_mock(listener);
             let mut ws = tungstenite::accept(stream).unwrap();
             ws.send(Message::Text(
                 json!({"type":"session.created","session":{"audio":{
@@ -445,12 +471,12 @@ mod tests {
             .unwrap();
             work(ws);
         });
-        address
+        (address, worker)
     }
 
     #[test]
     fn interrupt_before_created_discards_late_audio_and_waits_for_done() {
-        let addr = mock_server(|mut ws| {
+        let (addr, server) = mock_server(|mut ws| {
             let _ = ws.read().unwrap(); // user text
             let _ = ws.read().unwrap(); // create
             let _ = ws.read().unwrap(); // cancel
@@ -508,12 +534,12 @@ mod tests {
             }
         }
         assert_eq!(audio, [2]);
+        server.join().expect("Mock server assertions failed");
     }
 
     #[test]
     fn ending_partial_input_does_not_request_a_reply() {
-        let (done, result) = std::sync::mpsc::channel();
-        let addr = mock_server(move |mut ws| {
+        let (addr, server) = mock_server(|mut ws| {
             let append: Value =
                 serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
             assert_eq!(append["type"], "input_audio_buffer.append");
@@ -525,7 +551,6 @@ mod tests {
                 .unwrap();
             assert!(matches!(ws.read(), Err(tungstenite::Error::Io(e))
                 if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)));
-            done.send(()).unwrap();
         });
         let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
         client.append_audio(&[0; 320]).unwrap();
@@ -533,18 +558,19 @@ mod tests {
         client.end_input_without_response().unwrap();
         assert!(client.finish_audio().is_err());
         assert!(!client.busy());
-        result.recv_timeout(Duration::from_secs(2)).unwrap();
+        server.join().expect("Mock server assertions failed");
     }
 
     #[test]
     fn odd_pcm_delta_is_rejected() {
-        let addr = mock_server(|_| thread::sleep(Duration::from_millis(200)));
+        let (addr, server) = mock_server(|_| thread::sleep(Duration::from_millis(200)));
         let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
         client.phase = Phase::Generating {
             id: Some("x".into()),
             since: Instant::now(),
         };
         assert!(client.process(json!({"type":"response.output_audio.delta","response_id":"x","delta":STANDARD.encode([1])})).is_err());
+        server.join().expect("Mock server assertions failed");
     }
 
     #[test]
