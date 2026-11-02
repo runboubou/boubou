@@ -2,333 +2,344 @@
 
 ## Classification
 
-- Type: 产品化 / 本地语音运行时。
-- Spec name: **Boubou Liquid-first macOS Product Specification**。
-- Status: **Draft — 可供拆解开发；不是已完成实现或发布批准。**
-- Priority: P1；自然对话与打断未验收是首版发布阻塞项，不代表生产事故。
-- Owner: 待仓库维护者指派；本次不代指派成员。
-- Target: Apple Silicon Mac，Liquid LFM3-Audio-2B，英语语音对话。
-- Evidence date: 2026-11-02。
-- Scope of this change: 仅规划文档和 Issues；不提交、改写或发布本地未提交实现，不合并代码，不发布安装包。
+- Type: productization / local speech runtime.
+- Spec name: **Boubou Liquid-first macOS Product Specification**.
+- Status: **Draft — implementation planning, not completed functionality or release approval.**
+- Priority: P1. Unvalidated hands-free conversations and barge-in block the initial release; this is not a production incident.
+- Owner: to be assigned by repository maintainers. No contributor is assigned by this document.
+- Target: Apple Silicon Mac, Liquid LFM3-Audio-2B, English voice conversations.
+- Original evidence date: 2026-11-02.
+- Change scope: planning documentation and issues only. Do not modify or publish the uncommitted local implementation, merge code, or publish an installer.
 
-> **沿着现有 Rust + macOS 原生音频 + llama.cpp 实现往下做。先把真实对话做可靠，再做模型选择和免配置安装，最后做网页。不要重建 Go/Python 项目，也不要把 Liquid 强行拆成 STT → LLM → TTS。**
+> **Extend the existing Rust + native macOS audio + llama.cpp implementation. First make real conversations reliable, then add model selection and no-toolchain installation, and finally build the website. Do not rebuild the project in Go/Python or force Liquid into an STT -> LLM -> TTS cascade.**
+
+### Current tracking
+
+Keep **one roadmap and one active implementation task**: [roadmap #1](https://github.com/entropyai-labs/boubou/issues/1) and [Step 1 in #2](https://github.com/entropyai-labs/boubou/issues/2). The former lifecycle issue #3 is consolidated into #2. Issues #4-#6 are deferred references for model selection, distribution, and the website; closing them does not mean their functionality is complete.
+
+The sequence is **Step 1: reliable conversations and lifecycle -> Step 2: model selection -> Step 3: installer -> Step 4: Library website**. Sections 6 and 7 are two parts of Step 1, not separate active issues. Repository-facing planning documentation, issues, and PR descriptions are written in English.
 
 ## Why
 
-### 1. 当前不是空白项目
+### 1. This is not an empty project
 
-远端 `main` 在审查时为 `a9120242d55e954349791897f66c39e03524363a`，只有初始 README。本地工作区已有约 2,950 行 Rust / Objective-C / 文档，但尚未提交。本文的文件定位指向**附录指纹绑定的本地快照**，不表示这些文件已存在于该 Git commit。
+At the original review, remote `main` was `a9120242d55e954349791897f66c39e03524363a` and contained only the initial README. The local worktree already contained approximately 2,950 lines of Rust, Objective-C, and documentation, but that implementation was uncommitted. File locations below refer to the **local snapshot identified by the appendix fingerprints**, not files claimed to exist in that Git commit.
 
-| 部分 | 当前证据 | 本次结论 |
+| Component | Evidence in the reviewed snapshot | Planning conclusion |
 | --- | --- | --- |
-| CLI | `src/main.rs:25–129`；`run liquid`、`pull liquid`、`doctor`、`--offline`、`--manual`、文件输入 | 已实现原型；不是待从零开发 |
-| 下载与缓存 | `src/assets.rs:13–103,160–315`；固定 revision、大小和 SHA-256、断点续传、安装锁、校验后发布文件 | 继续复用，不另建下载平台 |
-| 推理进程 | `src/backend.rs:19–88`；自管 llama.cpp、loopback、健康检查、退出回收 | 已有边界，补启动取消和故障体验 |
-| 模型协议 | `src/realtime.rs:45–301`；16 kHz 输入、24 kHz 输出、流式事件、取消和 response ID 过滤 | 已实现；不等于公开完整 Realtime API 产品 |
-| 音频设备 | `src/audio.rs`、`native/audio.m`；VoiceProcessingIO、重采样、播放代次和有界队列 | 保留现有路径；设备兼容性仍需实测 |
-| 自动轮次 | `src/voice.rs:55–112`；20 ms 帧、近端语音标记、200 ms 预留、600 ms 静音提交 | 已实现策略；真人免提和插话尚未完整验收 |
-| 发布 | `build.rs:20–65`；原生 helper 编译及 ad-hoc 签名 | 不是已签名、公证、可公开分发的产品安装包 |
-| 模型目录 / 网页 | CLI 仅接受 `liquid`，资产和展示文字写在代码中；没有 Library | 需要新增，但不是先做漂亮网页 |
+| CLI | `src/main.rs:25-129`; `run liquid`, `pull liquid`, `doctor`, offline/manual modes, file input | A prototype already exists; do not plan it from scratch |
+| Downloads/cache | `src/assets.rs:13-103,160-315`; fixed revision, size/SHA-256, resumable downloads, installation lock, verified publication | Reuse this implementation rather than building another download platform |
+| Inference process | `src/backend.rs:19-88`; owned llama.cpp process, loopback, health checks, cleanup | Preserve the boundary; improve startup cancellation and failure handling |
+| Model protocol | `src/realtime.rs:45-301`; 16 kHz input, 24 kHz output, streaming, cancellation, response-ID filtering | Implemented internally; not a complete public Realtime API product |
+| Audio devices | `src/audio.rs`, `native/audio.m`; VoiceProcessingIO, resampling, playback epochs, bounded queues | Retain the path; device compatibility still needs real tests |
+| Automatic turns | `src/voice.rs:55-112`; 20 ms frames, near-end speech indication, 200 ms preroll, 600 ms silence endpoint | A policy exists; integrated hands-free and human-interruption acceptance remains open |
+| Distribution | `build.rs:20-65`; native-helper build and ad-hoc signing | Not a signed, notarized public installer |
+| Catalog/website | Only `liquid` is accepted; assets/descriptions are hard-coded; no Library | Necessary later work, not a reason to build the website first |
 
-本次实际执行 `cargo test --locked --offline`：**19 passed、0 failed、4 ignored**。四个忽略测试涉及真实模型或音频设备，本次没有执行。没有打开麦克风或扬声器，没有重新下载模型。源文件指纹在执行前后保持一致。
+The original planning task ran `cargo test --locked --offline`: **19 passed, 0 failed, 4 ignored**. The ignored tests require a real model or audio devices and were not run. No microphone/speaker was opened and no models were downloaded. Source fingerprints matched immediately before and after this test run.
 
-### 2. 三个会改变开发路线的事实
+**Evidence boundary:** later concurrent edits affected Cargo files, README, and audio/main/realtime code, including Esc pause/Enter resume and development-only VAD comparisons. The earlier test result does not validate those later changes. Reconcile the latest source before implementation; the language correction does not constitute a new code review or test run.
 
-1. **Liquid 是原生音频模型，不是四段式应用管线。**官方描述为 LFM3 backbone、causal audio encoder 与 LiquidCodec；模型与音频组件需要成套选择，不能把 projector 当作可任意替换的 TTS。[S1][S2]
-2. **首个聊天能力按英语交付。**官方区分英语 voice chat 与多语言 ASR/TTS；不能因为包含中文识别/合成，就在产品上标记中文语音聊天可用。[S1]
-3. **“停止声音”不等于“撤回模型听说历史”。**当前实现清空播放、取消生成、过滤迟到事件，并在下一轮插入 interruption notice；没有按用户实际听到的音频截断模型历史。保留这一明确限制，不宣称原生全双工或精确历史回滚。见 `src/realtime.rs:108–117,146–239`。
+### 2. Three facts that determine the implementation direction
+
+1. **Liquid is an audio-native model, not a four-stage application pipeline.** The official description identifies an LFM3 backbone, causal audio encoder, and LiquidCodec. Select the model and matching audio components together; the projector is not an interchangeable standalone TTS backend. [S1][S2]
+2. **Ship the initial chat capability as English.** The model card distinguishes English voice chat from multilingual ASR/TTS. Chinese recognition/synthesis support does not establish supported Chinese voice conversations in this product. [S1]
+3. **Stopping playback is not rolling back model history.** The reviewed implementation flushes playback, cancels generation, filters late events, and inserts an interruption notice before the next turn. It does not truncate model history to the audio the user actually heard. Preserve this limitation; do not claim model-native full duplex or precise history rollback. See `src/realtime.rs:108-117,146-239` in the reviewed snapshot.
 
 ## Outcome
 
-### 3. 用户最终要完成的事
+### 3. User outcome
 
-用户安装一个经过验证的 Mac 发行包后，不配置 Python、Rust、编译器或 llama.cpp。执行已有命令：
+After installing a verified Mac distribution, the user does not configure Python, Rust, a compiler, or llama.cpp. They run the existing command:
 
 ```sh
 boubou run liquid
 ```
 
-产品检查兼容性和资源，下载缺少的固定版本文件，申请麦克风权限，加载本地模型，开始英语对话。之后用户可以停止回答、插话、继续下一轮和退出。模型已齐备时：
+Boubou checks compatibility/resources, downloads missing pinned assets, requests microphone access, loads the local model, and starts an English conversation. The user can stop a reply, interrupt, continue the next turn, and exit. With all assets cached:
 
 ```sh
 boubou run liquid --offline
 ```
 
-所有推理留在本机。首次下载和麦克风授权是明确展示的步骤，不伪装成无需下载、无需授权。
+All inference remains local. Initial downloads and microphone authorization are visible steps, not hidden behind a claim that neither is required.
 
-“完成首版”同时要求：**真实对话通过、可在另一台干净 Mac 安装、目录信息与可运行能力一致。**仅本机编译成功或生成了一段 WAV，不满足这个结果。
+The initial product requires **working real conversations, installation on another clean Mac, and catalog information matching runnable capabilities**. A successful developer build or generated WAV alone does not satisfy that outcome.
 
-### 4. 首版边界
+### 4. Initial scope
 
-| 项目 | 本阶段合同 |
+| Area | Contract |
 | --- | --- |
-| 系统 | Apple Silicon macOS；最低系统版本和设备支持范围由实际二进制依赖、HAL 能力和测试共同确定 |
-| 模型 | 首先一个固定的 Liquid Q4_K_M + Q8_0 audio projector 配置 |
-| 语言 | 英语语音聊天；中文 UI/文档与中文聊天能力是两件事 |
-| 交互 | 前台 CLI、一个会话、默认音频设备；保留手动模式用于对照与显式降级 |
-| 本地 | 无云推理兜底、无遥测默认上传、无账号要求 |
-| 设置 | 先开放可解释的模型配置选择和已有参数；不把所有底层参数暴露给用户 |
-| 网站 | 静态模型 Library，负责选择和复制命令；不是浏览器内执行模型 |
-| 非目标 | Linux/Windows、原生完整 App、后台常驻 daemon、多用户、任意 HF 仓库加载、工具执行、训练/微调、通用插件系统、完整公共 Realtime API |
+| Platform | Apple Silicon macOS; derive the minimum OS/device envelope from actual binaries, HAL capabilities, and tests |
+| Model | Start with one pinned Liquid Q4_K_M model plus Q8_0 audio projector profile |
+| Language | English voice chat; documentation/interface language is separate from model language support |
+| Interaction | Foreground CLI, one session, default audio devices; retain manual mode as a diagnostic and explicitly selected alternative |
+| Local operation | No cloud-inference fallback, default telemetry upload, or account requirement |
+| Settings | Expose understandable profile selection and supported settings, not every backend flag |
+| Website | A static model Library for selection and command copying, not in-browser model execution |
+| Non-goals | Linux/Windows, full native app, persistent daemon, multiple users, arbitrary HF repository loading, tool execution, training/fine-tuning, generic plugins, complete public Realtime API |
 
 ## Scope
 
-### 5. 保留的技术边界
+### 5. Preserve the existing technical boundaries
 
 ```text
-boubou CLI（Rust）
-  ├─ 配置解析、下载校验、错误提示和进程生命周期
-  ├─ 原生音频 helper（Objective-C / AVAudioEngine）
-  │    麦克风 → 回声处理/近端语音 → PCM16 16 kHz
-  │    PCM16 24 kHz → 播放队列 → 扬声器
-  └─ 本次启动的 llama.cpp 子进程（loopback WebSocket）
-       固定 Liquid GGUF + 配套音频 projector → 文本/语音流
+Boubou CLI (Rust)
+  |-- Profile resolution, asset verification, errors, process lifecycle
+  |-- Native audio helper (Objective-C / AVAudioEngine)
+  |     Microphone -> echo processing / near-end speech -> PCM16 16 kHz
+  |     PCM16 24 kHz -> playback queue -> speakers
+  `-- Owned llama.cpp child process (loopback WebSocket)
+        Pinned Liquid GGUF + matching audio projector -> text/audio streams
 ```
 
-语音边界、播放取消和设备处理属于 Boubou；模型架构、tokenizer/codec 与推理由固定后端负责。不要在应用层另加一次 ASR 和 TTS 来“适配”Liquid，也不要把未来 HF/LiveKit 方案作为本阶段依赖。
+Boubou owns turn boundaries, playback cancellation, and device handling. The pinned backend owns model architecture, tokenizer/codec, and inference. Do not add separate application-level ASR/TTS to adapt Liquid, or make a future Hugging Face/LiveKit cascade a prerequisite.
 
-内部 `/v1/realtime` 是 Boubou 与已启动后端之间的接口。当前不要直接把这个临时端口当作稳定对外 API，也不新增公开网卡监听。
+The internal `/v1/realtime` endpoint connects Boubou to its owned backend. Do not present its temporary port as a stable public API or add public-interface binding in this stage.
 
-### 6. A：先完成自然对话与打断
+### 6. Step 1a: validate hands-free conversations and barge-in
 
-**真实入口：**`boubou run liquid --offline`。`--manual` 和文件模式是定位问题的对照，不替代默认路径验收。
+**Real entry point:** `boubou run liquid --offline`. Manual and file modes are diagnostic controls, not substitutes for default-path acceptance.
 
-必须保留或证明的行为：
+Preserve or demonstrate the following:
 
-- 没有人讲话时，不提交空轮次；扬声器回答和尾音不被误当成新的用户讲话。
-- 用户讲完后只提交一次；保留起始语音，不因缓冲或取消等待吃掉前几个字。
-- 回答期间用户插话：先停止当前与待播声音，再取消对应生成；旧响应迟到音频不恢复播放。
-- 取消尚未确认时，后续音频保留原有轮次边界；不得拼接两个完整用户问题，也不得在用户仍说话时开始回答旧问题。
-- 模型已生成完但声音仍在播放时，插话仍须清空播放；这与“正在生成时取消”分开测试。
-- 原生播放 ACK 必须按代次过滤；保持已修复的旧 ACK 不冲垮采集事件队列的约束。
-- `Esc` 停止回答，`Ctrl+C` 退出并回收本次拥有的进程和音频资源。
-- 达到既有输入或队列限制时明确报错，不截掉内容后当正常对话继续。
+- Silence does not submit empty turns; assistant playback and its acoustic tail do not become false user speech.
+- Submit each completed utterance once. Preserve its onset rather than dropping words during buffering or cancellation waits.
+- Human barge-in stops current and queued playback, then cancels the corresponding generation. Late audio from the old response cannot resume playback.
+- While cancellation is pending, retain distinct user-turn boundaries. Do not merge two completed questions or answer an earlier question while the user is still speaking.
+- Interruption flushes buffered playback even if model generation has already finished. Test this separately from cancellation during generation.
+- Filter native playback ACKs by epoch. Preserve the fix preventing obsolete ACKs from overflowing the capture-event queue.
+- Preserve the latest documented Esc pause/Enter resume behavior when reconciling code; paused audio is not submitted. `Ctrl+C` exits and reclaims owned processes/audio resources. The older reviewed snapshot only stopped a reply on Esc; it is not authority to undo later pause/resume work.
+- Reaching existing input/queue limits produces an explicit error, not silent truncation presented as a successful conversation.
 
-首轮只承诺**已验证设备组合**。当前自动检测依赖 HAL 近端语音能力；不支持时解释原因，可提示用户显式尝试已有 `--manual`。不得静默关闭回声处理、改用音量阈值，然后继续标为已支持自动插话。
+Initially support only **tested device combinations**. Automatic detection currently depends on HAL near-end speech support. Explain unsupported devices and optionally suggest explicit manual mode. Do not silently disable echo processing or substitute volume thresholds while claiming verified automatic interruption.
 
-设备变更时“明确退出并提示重新启动”可作为首版合同；无需先实现所有耳机热切换。改自动判断策略前，先用同一个合法测试输入对比文件、手动和自动路径，确认问题属于模型、切句、回声还是播放。
+An explicit exit with restart guidance after a device change is acceptable initially; universal headset hot switching is not required. Before changing automatic detection, compare the same permitted test input through file, manual, and automatic paths to isolate model, endpointing, echo, or playback problems.
 
-### 7. B：补启动、退出与诊断
+### 7. Step 1b: complete startup, shutdown, and diagnostics
 
-以下是本次**静态代码审查发现的缺口**，不是已经复现的线上故障：
+These are **static findings from the original snapshot**, not individually reproduced production failures. Recheck them against later code before implementing changes.
 
-| 缺口 | 定位 | 应实现的行为 |
+| Gap | Historical location | Required behavior |
 | --- | --- | --- |
-| 健康等待不接收退出标记 | `src/backend.rs:19–79` | 用户取消加载后及时停止等待、关闭自己启动的子进程 |
-| 协议初始化等待不能被全局取消 | `src/realtime.rs:45–77,262–277` | 在握手/初始化阶段能结束，不让用户卡在等待状态 |
-| 音频启动读取阻塞；权限可能长期未选择 | `src/audio.rs:98–107`，`native/audio.m:422–433` | 等待授权可以继续，但取消必须可用；helper 卡住不能无期限拖住退出 |
-| doctor 发现缺文件仍返回成功 | `src/assets.rs:105–129` | 输出明确的 readiness 结果和可操作的退出码，不能让脚本把不完整缓存当作准备完成 |
-| 仅检查 OS/架构，没有完整支持范围检查 | `src/assets.rs:55–59`、`build.rs` | 在下载前报告已知不支持的平台/系统；内存与磁盘不足的判断说明依据 |
-| 原始后端输出写入日志 | `src/backend.rs:23–49` | 审核是否包含对话内容；默认诊断不持久化语音、转写或完整响应 |
+| Health waiting lacks the stop flag | `src/backend.rs:19-79` | Stop waiting and clean up the owned child when loading is cancelled |
+| Protocol initialization lacks global cancellation | `src/realtime.rs:45-77,262-277` | Allow cancellation during handshake/initialization |
+| Blocking audio-ready read; permission may stay pending | `src/audio.rs:98-107`, `native/audio.m:422-433` | Permit cancellation without requiring the user to first answer the permission prompt |
+| Doctor returns success with missing files | `src/assets.rs:105-129` | Return accurate readiness and actionable exit status |
+| OS/architecture checks do not establish the support envelope | `src/assets.rs:55-59`, `build.rs` | Reject known unsupported platforms before downloads; explain the basis for disk/memory guidance |
+| Raw backend output is persisted | `src/backend.rs:23-49` | Check for conversation content; default diagnostics must not persist audio, transcripts, or full replies |
 
-优先扩展现有 `run`、`Backend`、`Realtime`、`Audio` 生命周期，不引入后台服务或全新调度器。保持原有有界队列、超时和 owned-child 语义；不能通过杀死所有 `llama-server` 进程来“清理”。
+Extend existing `run`, `Backend`, `Realtime`, and `Audio` lifecycles rather than introducing a daemon or scheduler. Preserve bounded queues, timeouts, and owned-child semantics. Never clean up by killing every `llama-server` process.
 
-建议形成以下可检查合同：
+Proposed observable contracts:
 
-- `doctor` 默认离线、无麦克风录制、无推理、无修复性下载。
-- `doctor` 分开报告平台支持、资产完整性、内存/磁盘事实和未进行的设备检查；“资产完整”不代表真人对话验收通过。
-- 新诊断结果：`0` 表示该命令负责的检查全部通过；`1` 表示不支持或资产/运行条件未满足；保留解析器的参数错误行为。
-- 用户取消应返回约定的取消状态，本文建议 `130`；正常完成 `0`，运行失败 `1`。这是新增 CLI 合同，需在实现 PR 中测试并说明。
-- 授权对话框未选择不是权限拒绝，不应偷偷替用户授权；但用户退出后不遗留 helper 或模型进程。
-- 取消中断下载保留 `.part`；未校验的文件仍不可运行。
-- UI 状态区分准备、下载、校验、加载、等待权限、可讲话、取消和失败；复用实际状态，不为这些文字另造状态框架。
+- Default doctor is offline and performs no recording, inference, or repair downloads.
+- Report platform support, asset integrity, memory/disk facts, and unperformed device checks separately. Complete assets do not certify human-conversation quality.
+- Suggested doctor codes: `0` for all checks within its responsibility passed; `1` for unsupported or unmet asset/runtime conditions. Preserve argument-parser errors.
+- Suggested user-cancellation code: `130`; normal completion `0`; runtime failure `1`. Finalize, document, and test this new CLI contract in implementation.
+- Pending permission is not permission denial. Do not authorize access for the user; cancellation must leave no helper/model process running.
+- Cancelled downloads retain resumable `.part` files. Unverified assets remain unusable.
+- Show preparation, download, verification, loading, permission waiting, ready, cancellation, and failure from real state. Do not build a separate state framework just to display those messages.
 
-### 8. C：把已有固定配置变成模型目录
+### 8. Step 2: turn the pinned configuration into a model catalog
 
-#### 8.1 用户选的是完整运行配置
+#### 8.1 Users select a complete runtime profile
 
-Liquid 配置包含模型、projector、后端版本、语言/任务支持和默认参数。不要显示三个可任意组合的“STT / LLM / TTS”下拉框。未来支持真正的级联引擎时，再为它增加适合的配置类型。
+A Liquid profile includes model, projector, backend version, task/language coverage, and defaults. Do not offer independently interchangeable STT/LLM/TTS selectors. Introduce a cascade-specific profile only when a real cascade engine is implemented.
 
-第一版用**仓库内、随程序发布的一份 JSON 目录**作为 CLI 与网页的共同输入，不做在线 registry 服务，不运行远端配置里的 shell 命令。
+Use **one repository-owned JSON catalog shipped with the CLI** as input to the CLI and website. Do not build an online registry or execute shell commands from remote profile data.
 
-拟议命令：
+Proposed commands:
 
 ```sh
-boubou list                       # 目录里有哪些配置，以及本地缓存状态
-boubou show liquid                # 组成、大小、语言、限制、来源和支持证据
-boubou pull liquid                # 保留现有含义
-boubou run liquid                # 保留现有默认入口
-boubou run liquid:q4km-v1         # 可复现的具体配置 ID；新增后才在网页使用
+boubou list                      # Known profiles and local cache state
+boubou show liquid               # Components, size, languages, limits, evidence
+boubou pull liquid               # Preserve existing behavior
+boubou run liquid                # Preserve the default entry point
+boubou run liquid:q4km-v1         # Concrete reproducible profile, once implemented
 ```
 
-`liquid` 是当前发行版目录内的默认别名；`liquid:q4km-v1` 指向固定模型与后端组合。运行时不通过远端 `main` 或 `latest` 静默更换它。更换文件字节、默认参数或后端时产生新的配置版本，并写清兼容性差异。
+`liquid` is the default alias in a given release's catalog. `liquid:q4km-v1` identifies a pinned model/backend combination. Do not resolve mutable main/latest references to silently replace it. Changes to bytes, defaults, or backend require a new profile version and compatibility notes.
 
-#### 8.2 最小目录字段
+#### 8.2 Minimum catalog fields
 
-| 字段组 | 必须表达的内容 |
+| Group | Required information |
 | --- | --- |
-| 身份 | schema version、配置 ID、展示名、默认别名、模型系列、要求的最低 Boubou 版本 |
-| 模型资源 | repo/revision、每个必要文件的角色/文件名/URL/bytes/SHA-256；包括 projector 与许可证 |
-| 后端 | 引擎名、固定版本、OS/架构、归档与大小/hash、归档内入口；不接受任意启动脚本 |
-| 参数 | 当前真实消费的 context size、输出上限及已有采样设置；用明确字段映射到当前后端 |
-| 产品能力 | 实际提供的任务、任务对应语言、打断状态、历史截断限制、是否离线；不能照抄模型的所有能力 |
-| 支持范围 | 已确认的最低系统、设备约束；未知项为 null/未验证，不填估计值伪装成测量 |
-| 硬件证据 | 参考机器、总内存、整套进程峰值、测试配置/版本、日期和结果；没有测量就不显示“推荐” |
-| 来源与权利 | 上游模型卡、许可名称及链接、是否完成发行前许可审查、已知限制 |
-| 成熟度 | experimental / verified，分别对应未验收与有具体验收记录；禁止下载完成即升为 verified |
+| Identity | Schema version, profile ID, display name, default aliases, model family, minimum Boubou version |
+| Model assets | Repository/revision; required file roles, names, URLs, bytes, SHA-256; projector and license included |
+| Backend | Engine, pinned version, OS/architecture, archive/size/hash, executable entry point; no arbitrary startup script |
+| Settings | Context size, output cap, and sampling settings actually consumed by the current backend |
+| Product capabilities | Implemented tasks, task-specific languages, interruption status, history-truncation limits, offline behavior |
+| Support envelope | Confirmed OS/device constraints; unknowns remain null/unverified, not estimates presented as measurements |
+| Hardware evidence | Reference machine, total RAM, whole-runtime peak usage, tested versions/configuration, date, result; no recommendation badge without evidence |
+| Provenance/rights | Upstream card, license name/link, pre-distribution review status, known restrictions |
+| Maturity | Experimental versus verified, tied to acceptance records; download completion never implies verified |
 
-`list` 不必反复对所有大文件完整 hash；可把状态显示为“已下载、尚未本次校验”。`doctor` 与实际 `run` 保留完整性校验责任。不能仅凭目录存在显示“可运行”。
+`list` need not hash every large file on every call. It may report downloaded/pending verification. Doctor and run retain integrity-check responsibility. Directory presence alone must not imply runnable status.
 
-先把现有 Liquid 配置无损迁入目录，保持缓存路径和已有下载测试。第二个量化配置仅在对应文件、参数和真实对话均验证后列为可运行。没有第二个已验证模型时，页面明确只提供一个；不要为填满 Library 接入未经验证的模型。
+First migrate the existing Liquid profile without behavior changes, preserving cache paths and download tests. Validate a second quantization's files, parameters, and conversations before listing it as runnable. A Library with one genuine profile is preferable to unverified integrations added for appearance.
 
-#### 8.3 语言与参数的展示规则
+#### 8.3 Language and parameter display
 
-- 本配置的 voice chat 仅列英语；不添加一个看起来可选、实际没有合同的 `--language zh`。
-- 多语言 ASR/TTS 可显示为“上游能力，当前 Boubou 尚未提供”，不生成运行命令。
-- 输入/输出采样率、projector、后端兼容关系由配置绑定，不让用户随意混配。
-- 更多声音、提示词、上下文选项各自需有真实后端支持及测试后再开放；先保证选择不会导致不可解释的结果。
-- 2B 参数、下载大小、磁盘安装量与运行峰值内存分开展示。不能把量化文件大小当作最低内存要求。
+- List English for this profile's voice-chat task. Do not expose an unsupported `--language zh` flag.
+- Multilingual ASR/TTS may be labeled upstream capabilities not yet exposed by Boubou, without generating run commands.
+- Bind sample rates, projector, and backend compatibility to the profile; do not allow arbitrary mixing.
+- Additional voices, prompts, and context settings require actual backend support and tests before exposure.
+- Keep 2B parameter count, download size, installed disk usage, and peak runtime memory distinct. Quantized file size is not a minimum-RAM requirement.
 
-当前源码固定的首次下载量为：模型 1,099,626,016 bytes，projector 303,811,840 bytes，许可证 10,574 bytes，后端归档 16,465,074 bytes；合计 **1,419,913,504 bytes（约 1.42 GB，十进制）**。这是源码常量之和，不是安装后磁盘占用或内存测量。网页应从同一份目录计算，不手填另一组数字。
+The reviewed source pins model size 1,099,626,016 bytes, projector 303,811,840 bytes, license 10,574 bytes, and runtime archive 16,465,074 bytes: **1,419,913,504 bytes total, approximately 1.42 GB in decimal units**. This is a sum of source constants, not an installed-size or RAM measurement. Derive the website's total from the same catalog.
 
-### 9. D：提供不需要开发环境的 Mac 安装包
+### 9. Step 3: distribute a Mac installer without development-tool requirements
 
-本项目已经是原生 Rust 运行时，**不需要打包 Python 环境**。
+This is already a native Rust runtime; **there is no Python environment to package**.
 
-先交付一个可复现的 macOS arm64 构建产物，再验证签名、公证和干净机器安装。源代码开发仍可使用 Rust / clang；最终用户不应运行 cargo、安装 Xcode CLT 或自行编译 llama.cpp。
+Produce a reproducible macOS arm64 artifact, then validate signing, notarization, and clean-machine installation. Developers may use Rust/clang; end users should not run cargo, install Xcode Command Line Tools, or compile llama.cpp.
 
-安装方案应处理完整可执行依赖：Boubou、嵌入后再解包执行的音频 helper、首次下载的后端及动态库。不能只签外层 CLI 就假设运行链已通过系统校验。以最终实际下载、安装和执行的字节做验收。
+Validate the complete executable chain: Boubou, its embedded/extracted audio helper, the downloaded backend, and dynamic libraries. Signing only the outer CLI does not establish the entire chain's behavior. Test the exact bytes users download, install, and execute.
 
-如为了分发重签名后端导致字节变化，需使用相应新归档、hash 和配置版本；不把修改后的文件冒充当前固定上游 hash。签名证书或公证权限未提供时，把公开分发标为 blocked，不关闭 Gatekeeper，不要求用户移除 quarantine，也不把 ad-hoc 签名称为正式发布。[S3]
+If re-signing the backend changes bytes, provide the corresponding new archive, hash, and profile version. Do not claim modified files match the pinned upstream hash. Missing signing/notarization credentials block public distribution; do not disable Gatekeeper, require quarantine removal, or call ad-hoc signing a production release. [S3]
 
-交付包含：安装入口、版本号、完整性/来源信息、许可证和 notices、升级及卸载说明。首版可通过重新安装明确版本回退，不需要自动更新 daemon。卸载说明区分程序与模型缓存，删除数据必须由用户选择。
+Deliver an installation entry point, version, integrity/provenance information, licenses/notices, and upgrade/uninstall instructions. Reinstalling an explicit earlier version is sufficient for initial rollback; an automatic updater daemon is unnecessary. Distinguish application removal from cache removal and require the user's choice before deleting data.
 
-`~/Library/Caches/boubou` 是当前原型位置；首版文档明确缓存可能被系统清理，`--offline` 缺失时应报错。不要顺手做未经设计的路径迁移或双缓存；后续需要持久模型目录时另定迁移合同。
+The prototype uses `~/Library/Caches/boubou`. Document that cached data may be removed by the system and offline startup must fail clearly when assets are missing. Do not introduce an incidental path migration or duplicate caches. A persistent-model directory requires a separate migration contract.
 
-### 10. E：最后做静态 Library
+### 10. Step 4: build the static Library last
 
-网页只做四件事：筛选已支持的平台/任务/语言，展示配置详情，解释设备要求，复制能实际运行的命令。
+The website has four jobs: filter supported platforms/tasks/languages, show profile details, explain device requirements, and copy runnable commands.
 
-- 消费第 C 阶段同一份 JSON 数据；无独立手工价格/大小/语言表。
-- 每张卡片显示模型与量化、**总下载量**、已测内存或“未测”、平台、聊天语言、成熟度、许可链接和最低 CLI 版本。
-- 官网不能准确知道访客机器配置；让用户选择参考机型，精确本机检查由 CLI 完成。
-- 实验性、平台不符或尚无实现的任务不能伪装成一键可用；可以展示原因，但不提供误导命令。
-- 配置 ID、参数和安装链接必须在实际 CLI/发行包上验证。仅提供文本复制，不自动执行访客电脑上的命令。
-- 安装产物未发布前，页面可开发预览，但明确为开发版；不生成一个不存在的 `curl | sh` 地址。
-- 不建设账号、支付、模型上传市场、数据库、遥测或网站到 localhost 的自动控制连接。
+- Consume the same JSON catalog from Step 2; do not maintain separate handwritten size/language tables.
+- Show model/quantization, total download, measured memory or unmeasured status, platform, chat languages, maturity, license, and minimum CLI version.
+- Let visitors select a reference machine; accurate local hardware checks belong in the CLI.
+- Experimental, incompatible, or unimplemented tasks must not look one-command ready. Explain limitations without generating misleading commands.
+- Validate profile IDs, flags, and installation links against the actual CLI/distribution. Copy text only; do not execute commands on visitors' machines.
+- Before a distribution exists, label the site as a development preview. Do not invent a `curl | sh` installation URL.
+- Do not add accounts, billing, model uploads, a database, telemetry, or automatic browser-to-localhost control.
 
-网页技术栈可由实现者选择简单的静态站点方式；不为这个需求先建设完整 App 或 API 服务。
+Choose a simple static-site stack. A full app or API service is not a prerequisite.
 
-### 11. 当前代码该在哪里改
+### 11. Where implementation belongs
 
-| 工作 | 优先复用的所有者 | 新增边界只有在实际需要时出现 |
+| Work | Existing owner to extend | Add a boundary only when needed |
 | --- | --- | --- |
-| 会话/插话 | `main.rs`、`voice.rs`、`realtime.rs`、`audio.rs`、`native/audio.m` | 优先加最小回归，不重写会话框架 |
-| 启动取消/诊断 | `main.rs`、`backend.rs`、`realtime.rs`、`audio.rs`、`assets.rs` | 按现有所有权传递取消，避免全局进程扫描 |
-| 配置目录 | `assets.rs` 中资源常量、`main.rs` 中参数及展示、`backend.rs` 中实际参数 | 一份目录数据；一个负责解析/选择的模块仅在消除实际重复时新增 |
-| 分发 | `build.rs`、`native/Info.plist`、Cargo.lock 与打包步骤 | `packaging/` 仅放确实使用的构建/签名脚本和说明 |
-| 网页 | 新的静态页面入口 | `web/` 消费同一目录；不带推理后端 |
+| Conversation/barge-in | `main.rs`, `voice.rs`, `realtime.rs`, `audio.rs`, `native/audio.m` | Focused regressions, not a conversation-framework rewrite |
+| Startup/diagnostics | `main.rs`, `backend.rs`, `realtime.rs`, `audio.rs`, `assets.rs` | Propagate cancellation through current ownership, not global process scanning |
+| Catalog | Asset constants, CLI arguments/descriptions, actual backend settings | One catalog; a parser/resolver module only to remove demonstrated duplication |
+| Distribution | `build.rs`, `native/Info.plist`, Cargo.lock, packaging steps | Only used build/signing scripts and instructions in `packaging/` |
+| Website | New static entry point | `web/` consumes the catalog and has no inference backend |
 
-不得为了文档里的未来目录预先建立空模块、抽象 trait、adapter registry、数据库或 daemon。后续第二种推理引擎接入时，依据两个真实实现再决定抽象。
+Do not pre-create empty modules, abstract traits, adapter registries, databases, or daemons for hypothetical future structure. Reconsider engine abstraction when a second real implementation exists.
 
 ## Project metadata
 
-### 12. 开发顺序与 Issue 拆分
+### 12. Development order and issue ownership
 
-Project: Boubou；本次不自动加入其他 Speech Program，不创建 Release/Milestone，不指派负责人或虚构截止日期。
+Project: Boubou. This plan does not add items to other Speech Programs, create Releases/Milestones, assign contributors, or invent deadlines.
 
-| 阶段 | Issue 范围 | 开工前需要 | 交付与停止条件 |
+| Step | Tracking | Prerequisite | Delivery and stopping condition |
 | --- | --- | --- | --- |
-| A | 自然对话与插话验收 | 代码 Owner 先将当前 WIP 整理为独立代码提交/PR；本规划 PR 不代发布它 | 默认自动路径及已选设备通过，已知限制明确，不继续扩为平台工程 |
-| B | 启动可取消与 doctor | 可引用的代码基线；可与 A 中不重叠工作并行 | 有界退出、真实诊断、离线/隐私合同通过 |
-| C | 配置目录与 list/show | 基线固定；保留现有行为 | 同一配置驱动选择、下载和展示，原 liquid 入口不退化 |
-| D | Mac 发行包 | 可尽早做打包可行性验证；正式验收需要 A/B/C | 干净 Mac 不装开发工具可完成安装、下载、离线重启与对话 |
-| E | 网页 Library | C 的数据结构固定；公开可用标识需要 D 的实际产物 | 页面命令、能力与发行包一致，不扩大为完整应用 |
+| **1: now** | **#2: conversation plus lifecycle/diagnostics; former #3 consolidated here** | Code owner publishes the existing prototype separately; reconcile current work before edits | Default conversations and interruptions pass on selected devices; bounded cleanup, trustworthy doctor, offline/privacy behavior are verified |
+| 2: later | #4 retained as a deferred reference | Stable code baseline; preserve current behavior | One profile source drives selection, downloading, startup, and display without breaking `liquid` |
+| 3: later | #5 retained as a deferred reference | Early feasibility work is allowed; actual delivery requires Steps 1 and 2 | A clean Mac installs, downloads, converses, exits, and restarts offline without development tools |
+| 4: last | #6 retained as a deferred reference | Stable catalog; public readiness requires real distribution artifacts | Website commands/capabilities match the release without expanding into a full app |
 
-每个实现 PR 只负责相应 Issue 的 delta。代码初次入仓、规划文档合并、实际实现、真实设备验收和发布是不同事件；规划 PR 合并不得自动关闭全部实施 Issues。
+Only roadmap #1 and current task #2 remain open. Reopen a later issue when its stage starts, rather than creating duplicates. Consolidated/deferred closures are not feature completion. Multiple focused PRs may implement #2 without creating more active tracking issues.
 
-### 13. 产品决策仍需明确的内容
+Initial source publication, documentation merge, implementation, real-device acceptance, and release are separate events. This documentation PR must not automatically close implementation issues.
 
-不影响先做 A/B 的待定项：第一批支持的系统/设备清单；测得的推荐内存；响应/打断速度的公开指标；正式签名身份及发行方式；Boubou 自身源码许可；第二个已验证模型配置；官网域名与部署位置。
+### 13. Unresolved product decisions
 
-这些项在各自 Issue 内决策并记录，不因为本文出现了示例就视为已批准。不能用模型文件大小、上游某台机器的速度或一次合成测试代替本产品指标。
+The following do not prevent Step 1 work: initial supported OS/device list; measured memory recommendations; public response/interruption performance targets; signing identity and distribution method; Boubou's own source license; a second verified model profile; website domain/hosting.
+
+Resolve each in its owning task. An example in this document is not approval. Model file size, an upstream benchmark on another device, or one synthetic test cannot substitute for product measurements.
 
 ## Acceptance
 
-### 14. 当前已验证与仍未验证
+### 14. Verified and unverified evidence
 
-| 项目 | 本次状态 | 说明 |
+This table describes the original review snapshot, not the state of concurrent development after it.
+
+| Check | Status | Evidence boundary |
 | --- | --- | --- |
-| 本地代码和入口检查 | PASS | 绑定附录指纹；远端主分支仅 README |
-| 普通自动测试 | PASS | `cargo test --locked --offline`，19 通过、4 忽略 |
-| 源文件未被本任务改动 | PASS | 测试前后指纹相同；原 WIP 保留 |
-| 本次真实模型推理 | NOT RUN | 不用历史记录冒充本次新验收 |
-| 真人免提/插话/主观音质 | NOT RUN | 不自动打开音频设备；需用户配合并明确授权 |
-| 干净机器安装、签名与公证 | NOT RUN | 没有发行包证据 |
-| RAM / 延迟 / 长时稳定性 | NOT RUN | 未产生性能承诺 |
-| CLI 模型目录、Library | NOT IMPLEMENTED | 本文的后续工作 |
+| Local source and entry-point inspection | PASS | Bound to appendix fingerprints; remote main contained only README |
+| Ordinary automated tests | PASS | `cargo test --locked --offline`: 19 passed, 4 ignored |
+| Source preservation during the test | PASS | Pre/post-test fingerprints matched; existing work was not edited by this task |
+| Real-model inference in this review | NOT RUN | Historical execution records are not a new validation run |
+| Human hands-free/barge-in/subjective quality | NOT RUN | No automatic device activation; requires consent and participation |
+| Clean-machine install, signing, notarization | NOT RUN | No distribution acceptance evidence |
+| RAM, latency, sustained stability | NOT RUN | No performance commitment established |
+| CLI model catalog and Library | NOT IMPLEMENTED | Later stages of this plan |
 
-### 15. 最小验收流程
+### 15. Minimum acceptance procedure
 
-**普通软件检查**：保留目前下载、离线、取消、过期事件、轮次边界和播放代次测试；新增测试仅对应本阶段改变的行为。标准命令为 `cargo test --locked --offline`；实现 PR 另按实际改动运行格式和 lint 检查。
+**Ordinary software checks:** preserve download, offline, cancellation, stale-event, turn-boundary, and playback-epoch tests. Add tests only for changed behavior. Use `cargo test --locked --offline`; implementation PRs additionally run formatting/lint checks relevant to their changes.
 
-**真实模型对照**：在资产已缓存、执行者明确允许的条件下，运行现有指定的模型测试。只选择目标测试，不笼统执行所有 ignored tests，避免意外打开麦克风。固定同一模型、后端、输入和参数，区分“协议正确”和“回答内容正确”。
+**Real-model controls:** with cached assets and explicit permission for the execution, run the existing targeted model test. Do not run every ignored test indiscriminately and accidentally activate audio devices. Pin model, backend, input, and parameters; distinguish protocol correctness from response-content quality.
 
-**真人会话脚本**：经同意后，在拟支持的内置麦克风/扬声器组合完成一次端到端流程：
+**Human conversation script:** with consent, use a proposed supported microphone/speaker combination:
 
-1. 闲置不触发；问一个英语问题，得到可听且相关的回答。
-2. 追问上轮信息，验证同一会话上下文。
-3. 在回答中开口插话，确认旧音频停止、当前话语未丢、下一轮可回答。
-4. 覆盖生成结束但声音仍排队时的打断，以及连续两次问题的轮次边界。
-5. 只播放助手声音及尾音，保持本人安静，检查误触发；再测 `Esc` 和 `Ctrl+C`。
-6. 权限拒绝、设备不支持/变化和后端异常时，检查提示与清理。无需把所有场景混在一个难以定位的长测试中。
+1. Verify no idle trigger, ask an English question, and hear a relevant reply.
+2. Ask a follow-up referring to the previous turn to test session context.
+3. Speak during the reply; verify old audio stops, the new utterance is preserved, and the next response completes.
+4. Cover interruption after generation ends with playback queued, and boundaries between two successive user questions.
+5. Stay silent during assistant-only playback and its tail to test false triggers; verify the current Esc pause/Enter resume behavior and Ctrl+C exit.
+6. Check messages and cleanup for denied permission, unsupported/changed devices, and backend failures. Keep scenarios separable enough to diagnose failures.
 
-每个结果记录版本、机型、系统、音频设备、步骤、通过/失败和最小诊断。默认不保存原始麦克风音频；确需保存必须单独同意、限定位置和保留时间。
+Record versions, machine, OS, devices, steps, pass/fail, and minimal diagnostics. Do not save raw microphone audio by default. Any recording requires separate consent, a bounded destination, and retention policy.
 
-**持续使用检查**：在首个支持设备上进行一段建议 30 分钟的多轮会话，检查队列、内存趋势、卡顿和退出；这是本计划的验证样本，不是已经证实的稳定时长或普适 SLA。
+**Sustained-use check:** a 30-minute multi-turn session on the first supported device is a recommended sample for queue behavior, memory trend, glitches, and shutdown. It is not an already-proven stability duration or a universal SLA.
 
-**干净机器检查**：另一台拟支持的 Mac，无 Rust、Python 环境和 Xcode CLT；从真实下载产物安装，授权、首次下载、正常问答、退出、断网重启成功。打包环境自己的缓存不算这项证据。
+**Clean-machine check:** on another supported candidate Mac without Rust, a Python development environment, or Xcode Command Line Tools, install the real artifact, authorize, download, converse, exit, disconnect, and restart offline. Build-machine caches are not evidence for this check.
 
-### 16. 性能口径
+### 16. Performance definitions
 
-测量但先不编造“必须 300 ms”一类阈值：
+Measure before inventing a threshold such as a mandatory 300 ms response:
 
-- 模型已缓存时，从命令执行到**设备就绪可以说话**的耗时。
-- 讲话结束 → 系统确认轮次结束 → 首块生成音频 → 客户端播放开始，分别记录。
-- 用户开始插话 → 近端语音检测 → 发出 clear/cancel → 实际停止旧声音，分别记录。
-- CLI、helper、后端整套占用；不能只报 Rust 主进程 RSS，也不把共享页简单相加当物理峰值。
+- Command invocation to audio-device readiness with models already cached.
+- End of human speech, confirmed turn end, first generated audio, and client playback start as separate timestamps.
+- Human-interruption onset, near-end detection, clear/cancel issuance, and actual old-playback stop as separate timestamps.
+- CLI, helper, and backend resource usage together. Do not report only Rust-process RSS or naively sum shared pages as physical peak memory.
 
-当前 native ACK 是 buffer 播完的通知，不是首个可听样本时间。未具备播放开始观测时，准确标为“首块 PCM 延迟”，不能改名“用户听到的延迟”。需要物理音频测量时另取得录制许可。样本足够后才报告 p50/p95，并附样本量和失败数。
+The current native ACK reports that a buffer finished playback, not the first audible sample. Without playback-start observation, report first-PCM latency rather than audible latency. Physical audio measurement requires appropriate recording consent. Report p50/p95 only with adequate samples, including sample and failure counts.
 
-公开性能目标由上述基线支持，在 Issue 中确认后成为发布门槛；不把上游模型的单项 streaming 指标当整机端到端承诺。
+Public targets become release gates only after representative baselines support them and the implementation issue records the decision. An upstream component's streaming metric is not a whole-device end-to-end promise.
 
-### 17. 首版完成清单
+### 17. Initial release checklist
 
-- [ ] 当前本地原型已由代码 Owner 独立提交，审查和测试可绑定到真实 commit。
-- [ ] 默认自动对话、真人插话与下一轮在明确设备范围内通过。
-- [ ] 不支持设备、语言或任务有明确提示，无隐式云端/静音降级。
-- [ ] 启动、权限等待和运行阶段均可退出，无本次拥有的遗留模型/音频进程。
-- [ ] 下载恢复、文件完整性及实际断网重启通过。
-- [ ] `list/show/run/pull/doctor` 使用同一配置事实，保留 `run liquid`。
-- [ ] 正式分发产物在干净 Mac 通过验证；签名/公证和许可审查有实际证据。
-- [ ] 网页显示真实能力、证据和可运行命令；没有未知数值伪装成推荐。
-- [ ] 未运行项目仍明确标记；没有用文档/Issue 创建成功代替实现完成。
+- [ ] The code owner has independently published the local prototype; review/tests reference an actual implementation commit.
+- [ ] Default hands-free conversation, human barge-in, and the next turn pass within a specified device envelope.
+- [ ] Unsupported devices, languages, and tasks produce clear messages, without implicit cloud fallback or silently degraded behavior.
+- [ ] Startup, permission waits, and active sessions can exit without leaving owned model/audio processes running.
+- [ ] Download resumption, integrity checks, and actual disconnected restart pass.
+- [ ] `list/show/run/pull/doctor` use one profile source and preserve `run liquid`.
+- [ ] Distribution artifacts pass clean-Mac validation with evidence for signing/notarization and license review.
+- [ ] The website shows real capabilities, evidence, and commands; unknown values are not invented recommendations.
+- [ ] Unexecuted checks remain explicit. Creating documentation/issues is not implementation completion.
 
 ## Dependencies and boundary
 
-- 本地 WIP 属于当前开发者；本任务既不改源代码，也不替他们提交、rebase、stash 或 reset。
-- 本规划的 GitHub 文档分支以远端现有 main 为基础，只新增本文。实施前重新对照代码基线；附录 hash 不等于源码已上云。
-- A/B 是当前最小可交付改进。C/D/E 是分别可验收的后续阶段，不要求先建完整平台才能修好对话。
-- 用户提供了发布 spec/Issues 的授权；不等于授权自动实施、签名、公证、创建 Release、合并或部署网站。
-- LFM 使用自定义许可；分发前核查模型、后端、Boubou 本身各自许可及 notices。本文不作法律可用性结论，不把“可下载”写成“无限制商用”。
-- 后续 Linux/Windows、MLX/ONNX、其他模型或级联方案应单独选择并验证。当前存在其他可用后端并不是重写现有代码的理由。
+- Existing local work belongs to the current developers. This task does not edit it, submit it on their behalf, rebase, stash, or reset it.
+- The documentation branch starts from the remote main baseline and adds this spec only. Reconcile implementation before coding; appendix hashes do not mean source has been published remotely.
+- Conversation and lifecycle work together form the current Step 1. Catalog, distribution, and website are independently accepted later stages; a full platform is not required before fixing conversations.
+- Authorization to publish a spec/issues does not authorize automatic implementation, credential use, signing/notarization, Releases, merges, or website deployment.
+- LFM uses a custom license. Review model, backend, and Boubou licensing/notices separately before distribution. This document makes no legal-clearance determination and does not equate downloadable weights with unrestricted commercial use.
+- Linux/Windows, MLX/ONNX, other models, and cascade engines need separate selection and validation. Another available backend is not by itself a reason to replace working code.
 
 ## Evidence
 
-### 18. 上游与写作参考
+### 18. Upstream and writing references
 
-- **[S1] Liquid 官方模型卡**：<https://huggingface.co/LiquidAI/LFM3-Audio-2B>，2026-11-02 读取。用于模型结构、英语聊天边界与音频格式；不用于本产品性能承诺。
-- **[S2] Liquid 官方 GGUF 说明**：<https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF>，2026-11-02 读取。用于 GGUF / llama.cpp 路线；本地实际固定资源见下。
-- **[S3] Apple 分发公证参考**：<https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution>。实际发布者仍需验证最终包的签名、公证、权限和动态库行为。
-- **现有固定模型资源**：`LiquidAI/LFM3-Audio-2B-GGUF@02355c1a141e464a064f2ab2c276638dbcb7f38a`，主模型 `Q4_K_M`，音频 projector `Q8_0`。
-- **现有固定后端**：<https://github.com/ggml-org/llama.cpp/releases/tag/b11960>。本文不自动升级这个后端。
-- **Entropy Issue 格式参考**：<https://github.com/entropyai-labs/entropy-speech/issues/35>、<https://github.com/entropyai-labs/entropy-speech/issues/41>。只借用 Classification / Why / Outcome / Scope / Acceptance 等写法，不借用训练架构、负责人、完成状态或其他项目授权。
+- **[S1] Official Liquid model card:** <https://huggingface.co/LiquidAI/LFM3-Audio-2B>. Referenced by the original 2026-11-02 review for architecture, English-chat boundaries, and audio formats, not Boubou performance claims.
+- **[S2] Official Liquid GGUF documentation:** <https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF>. Reference for the GGUF/llama.cpp path; actual pinned assets are identified below.
+- **[S3] Apple notarization documentation:** <https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution>. The publisher must still validate final artifacts, signatures, permissions, and dynamic libraries.
+- **Pinned model assets:** `LiquidAI/LFM3-Audio-2B-GGUF@02355c1a141e464a064f2ab2c276638dbcb7f38a`, Q4_K_M model and Q8_0 audio projector.
+- **Pinned backend:** <https://github.com/ggml-org/llama.cpp/releases/tag/b11960>. This plan does not upgrade it automatically.
+- **Issue-structure references:** <https://github.com/entropyai-labs/entropy-speech/issues/35> and <https://github.com/entropyai-labs/entropy-speech/issues/41>. Only the Classification / Why / Outcome / Scope / Acceptance structure was used; no training architecture, owner, completion state, or cross-project authorization is inherited.
 
-### 19. 本地快照指纹
+### 19. Local review-snapshot fingerprints
 
-这是审查时尚未提交的文件身份。实现入仓后，在实施 Issue 补充可访问 commit 和代码链接；不要虚构这些文件已经存在于初始 main。
+These identify files that were uncommitted at review time. After implementation is published, add a source commit and code links to the owning implementation issue. Do not claim these files existed on the initial main commit or that later work is covered by this snapshot.
 
-| 文件 | SHA-256 |
+| File | SHA-256 |
 | --- | --- |
 | Cargo.toml | `134fb8b35af009637f858f359a2fe3e903c8f618ea7ae9e78733d976beee24e1` |
 | Cargo.lock | `15c4c02d2a9c2533909224dc71507bed95202d27e995e49d9403a18f9b3ec881` |
@@ -344,4 +355,4 @@ Project: Boubou；本次不自动加入其他 Speech Program，不创建 Release
 | native/audio.m | `aeb1e56a04f4b47d9e00512877853ae2387e3aac32243a0253a8d7a7f9e80678` |
 | native/Info.plist | `ccb0711456ce707b1d43f1f337fb1421f2d175fef7aa68c78cfbaea1e581cac9` |
 
-本次普通测试执行记录：`bc3c3d8357e94ab3abf80a7c2037f304`（Mac，2026-11-02，exit 0）。此记录只支持本次列出的检查范围，不支持真人语音、公开发布或性能结论。
+Original ordinary-test execution: `bc3c3d8357e94ab3abf80a7c2037f304` (Mac, 2026-11-02, exit 0). It supports only the checks listed for that snapshot, not human-voice, release-readiness, or performance claims.
