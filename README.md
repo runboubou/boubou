@@ -131,31 +131,16 @@ The helper uses local ad-hoc signing. Rebuilding it may cause macOS to request
 microphone access again. Other operating systems and chips are not supported
 by this profile.
 
-## Contributing and code quality
-
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. Repository-facing
-code, documentation, Issues, and reviews are written in English. Material changes
-use the [Spec template](docs/specs/TEMPLATE.md) and the
-[review standard](docs/development/review.md).
-
-Run the same verification entry point used by CI:
+Run the existing Rust checks before review:
 
 ```sh
-python3 scripts/verify.py
-# When Cargo dependencies are already cached:
-python3 scripts/verify.py --offline
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 ```
-
-The checks cover repository hygiene, formatting, Clippy, the complete ordinary
-Rust test suite, compilation, and a compile-only native test harness on macOS.
-CI checks macOS ARM64 with stable Rust and the declared Rust 1.88 minimum, plus
-portable Rust regressions on Linux. A Linux check does not establish Linux voice
-support. See [Testing](docs/development/testing.md) for commands and evidence limits.
 
 Ordinary tests do not download models or open audio devices. Cached-backend and
 physical audio checks are explicitly ignored and run separately when needed.
-CI success does not establish real conversation quality or release readiness.
-Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## Upstream and licenses
 
