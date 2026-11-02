@@ -119,6 +119,7 @@ dependencies = [
  "flate2",
  "fs2",
  "hound",
+ "libc",
  "reqwest",
  "serde_json",
  "sha2",

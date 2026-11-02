@@ -1,10 +1,11 @@
 use crate::assets::Assets;
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
-    fs::{self, File},
+    fs::{self, OpenOptions},
     net::{Ipv4Addr, TcpListener},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::atomic::AtomicBool,
     thread,
     time::{Duration, Instant},
 };
@@ -19,14 +20,27 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn start(assets: &Assets, cache: &Path) -> Result<Self> {
+    pub fn start(assets: &Assets, cache: &Path, stopped: &AtomicBool) -> Result<Self> {
+        crate::check_cancel(stopped)?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         let address = format!("127.0.0.1:{port}");
         let logs = cache.join("logs");
         fs::create_dir_all(&logs)?;
         let log_path = logs.join(format!("backend-{}.log", std::process::id()));
-        let log = File::create(&log_path)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let log = options.open(&log_path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            log.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
         drop(listener);
 
         let child = Command::new(&assets.server)
@@ -63,6 +77,7 @@ impl Backend {
             .build()?;
         let deadline = Instant::now() + Duration::from_secs(120);
         loop {
+            crate::check_cancel(stopped)?;
             if let Some(status) = backend.child.try_wait()? {
                 bail!(
                     "Liquid backend exited ({status}). See {}",
@@ -121,6 +136,65 @@ impl Drop for Backend {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_reaps_a_backend_that_never_becomes_ready() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::{Arc, atomic::Ordering};
+        let directory = std::env::temp_dir().join(format!(
+            "boubou-start-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let server = directory.join("never-ready");
+        fs::write(
+            &server,
+            "#!/bin/sh\nprintf '%s\\n' \"$$\"\nexec /bin/sleep 30\n",
+        )
+        .unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let signal = stopped.clone();
+        let startup_log = directory.join(format!("logs/backend-{}.log", std::process::id()));
+        let worker = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !fs::read_to_string(&startup_log).is_ok_and(|text| !text.trim().is_empty()) {
+                assert!(Instant::now() < deadline, "Fake backend never started");
+                thread::sleep(Duration::from_millis(10));
+            }
+            signal.store(true, Ordering::SeqCst);
+        });
+        let began = Instant::now();
+        let error = Backend::start(
+            &Assets {
+                server,
+                model: PathBuf::new(),
+                projector: PathBuf::new(),
+            },
+            &directory,
+            &stopped,
+        )
+        .err()
+        .expect("Startup must be cancelled");
+        worker.join().unwrap();
+        assert!(error.is::<crate::Cancelled>());
+        assert!(began.elapsed() < Duration::from_secs(3));
+        let log =
+            fs::read_to_string(directory.join(format!("logs/backend-{}.log", std::process::id())))
+                .unwrap();
+        let pid: i32 = log.trim().parse().unwrap();
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "Owned backend is still alive"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn context_abort_reports_its_cause_and_other_failures_keep_theirs() {

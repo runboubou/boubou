@@ -104,11 +104,14 @@ pub fn prepare(cache_dir: &Path, offline: bool) -> Result<Assets> {
 
 pub fn status(cache_dir: &Path) -> Result<()> {
     let model_dir = cache_dir.join("models/lfm3-audio-2b").join(REVISION);
+    let mut ready = true;
     for spec in [&MODEL, &PROJECTOR, &LICENSE] {
+        let valid = verified(&model_dir.join(spec.name), spec)?;
+        ready &= valid;
         println!(
             "{}: {}",
             spec.name,
-            if verified(&model_dir.join(spec.name), spec)? {
+            if valid {
                 "verified"
             } else {
                 "missing or incomplete"
@@ -116,15 +119,19 @@ pub fn status(cache_dir: &Path) -> Result<()> {
         );
     }
     let archive = cache_dir.join("downloads").join(RUNTIME.name);
-    let ready =
+    let runtime_ready =
         verified(&archive, &RUNTIME)? && runtime_valid(&archive, &cache_dir.join(RUNTIME_DIR))?;
     println!(
         "Speech engine (b11960, macOS arm64): {}",
-        if ready {
+        if runtime_ready {
             "verified"
         } else {
             "missing or incomplete"
         }
+    );
+    ensure!(
+        ready && runtime_ready,
+        "Liquid assets are missing or invalid. Run `boubou pull liquid` while online."
     );
     Ok(())
 }
@@ -431,6 +438,13 @@ mod tests {
         assert!(fetch(&spec, &dir.0, true).is_err());
         fs::write(dir.0.join("weights"), b"abcdef").unwrap();
         assert!(fetch(&spec, &dir.0, true).is_ok());
+    }
+
+    #[test]
+    fn doctor_rejects_an_empty_cache() {
+        let dir = TestDir::new();
+        assert!(status(&dir.0).is_err());
+        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
     }
 
     #[test]

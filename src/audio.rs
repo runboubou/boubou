@@ -7,6 +7,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Mutex,
+        atomic::AtomicBool,
         mpsc::{self, Receiver, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -56,9 +57,14 @@ impl Playback {
 
 impl Audio {
     #[cfg(target_os = "macos")]
-    pub fn start(cache_dir: &Path, detect_voice: bool) -> Result<(Self, Receiver<CaptureFrame>)> {
+    pub fn start(
+        cache_dir: &Path,
+        detect_voice: bool,
+        stopped: &AtomicBool,
+    ) -> Result<(Self, Receiver<CaptureFrame>)> {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+        crate::check_cancel(stopped)?;
         let clock = HostClock::new()?;
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/boubou-audio"));
         let hash = format!("{:x}", Sha256::digest(bytes));
@@ -89,31 +95,50 @@ impl Audio {
         if !detect_voice {
             command.arg("--manual");
         }
-        let mut child = command
+        let child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .context("Could not start native audio")?;
+        Self::from_child(child, clock, stopped)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn from_child(
+        mut child: Child,
+        clock: HostClock,
+        stopped: &AtomicBool,
+    ) -> Result<(Self, Receiver<CaptureFrame>)> {
         let mut output = child.stdout.take().expect("piped stdout");
-        let ready = read_packet(&mut output);
-        if !matches!(&ready, Ok((1, payload)) if payload.is_empty()) {
-            let _ = child.kill();
-            let _ = child.wait();
-            match ready {
-                Ok((4, error)) => bail!("{}", String::from_utf8_lossy(&error)),
-                Ok(_) => bail!("The native audio helper returned an invalid startup event"),
-                Err(error) => return Err(error.context("Native audio exited before starting")),
-            }
-        }
         let input = child.stdin.take().expect("piped stdin");
         let playback = Arc::new(Mutex::new(Playback::default()));
         let error = Arc::new(Mutex::new(None));
         let (sender, receiver) = mpsc::sync_channel(64);
+        let (ready_sender, ready) = mpsc::sync_channel(1);
         let progress = Arc::clone(&playback);
         let failure = Arc::clone(&error);
-        let reader = thread::spawn(move || {
+        let mut audio = Self {
+            child,
+            input,
+            reader: None,
+            playback,
+            error,
+        };
+        audio.reader = Some(thread::spawn(move || {
             let result = (|| -> Result<()> {
+                let (kind, payload) =
+                    read_packet(&mut output).context("Native audio exited before starting")?;
+                if kind == 4 {
+                    bail!("{}", String::from_utf8_lossy(&payload));
+                }
+                ensure!(
+                    kind == 1 && payload.is_empty(),
+                    "The native audio helper returned an invalid startup event"
+                );
+                ready_sender
+                    .send(())
+                    .map_err(|_| anyhow!("Audio startup cancelled"))?;
                 loop {
                     let (kind, payload) = read_packet(&mut output)?;
                     match kind {
@@ -156,21 +181,32 @@ impl Audio {
                 *failure.lock().expect("audio error lock") = Some(message.clone());
                 let _ = sender.try_send(CaptureFrame::Error(message));
             }
-        });
-        Ok((
-            Self {
-                child,
-                input,
-                reader: Some(reader),
-                playback,
-                error,
-            },
-            receiver,
-        ))
+        }));
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            crate::check_cancel(stopped)?;
+            audio.check_error()?;
+            ensure!(
+                Instant::now() < deadline,
+                "Microphone setup timed out. Check microphone permission and the selected audio devices."
+            );
+            match ready.recv_timeout(Duration::from_millis(20)) {
+                Ok(()) => return Ok((audio, receiver)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    audio.check_error()?;
+                    bail!("Native audio exited before starting");
+                }
+            }
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
-    pub fn start(_cache_dir: &Path, _detect_voice: bool) -> Result<(Self, Receiver<CaptureFrame>)> {
+    pub fn start(
+        _cache_dir: &Path,
+        _detect_voice: bool,
+        _stopped: &AtomicBool,
+    ) -> Result<(Self, Receiver<CaptureFrame>)> {
         bail!(
             "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
         );
@@ -237,7 +273,18 @@ impl Audio {
 impl Drop for Audio {
     fn drop(&mut self) {
         // Normal shutdown lets the native process remove its HAL listener.
-        let _ = self.command(3, &[]);
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = self.input.as_raw_fd();
+            // An unhealthy helper may stop reading. Do not block cleanup on a full pipe.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags >= 0
+                && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0
+            {
+                let _ = self.command(3, &[]);
+            }
+        }
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             match self.child.try_wait() {
@@ -320,6 +367,36 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn cancelling_before_audio_ready_reaps_the_owned_helper() {
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let signal = stopped.clone();
+        let worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            signal.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let began = Instant::now();
+        let error = Audio::from_child(child, HostClock::new().unwrap(), &stopped)
+            .err()
+            .expect("Startup must be cancelled");
+        worker.join().unwrap();
+        assert!(error.is::<crate::Cancelled>());
+        assert!(began.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, 0) },
+            -1,
+            "Owned helper is still alive"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     #[ignore = "Uses the real output device with silence; does not open the microphone"]
     fn cancelled_playback_does_not_overflow_capture_events() {
         let executable = std::path::PathBuf::from(env!("OUT_DIR"))
@@ -370,7 +447,7 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         let cache = dirs::cache_dir().unwrap().join("boubou");
-        let (mut audio, captured) = Audio::start(&cache, true).unwrap();
+        let (mut audio, captured) = Audio::start(&cache, true, &AtomicBool::new(false)).unwrap();
         let mut voice = crate::voice::Voice::new();
         let mut frames = 0;
         let mut starts = 0;

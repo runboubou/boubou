@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::{
     io::ErrorKind,
     net::TcpStream,
+    sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket};
@@ -43,13 +44,33 @@ pub struct Realtime {
 }
 
 impl Realtime {
-    pub fn connect(address: &str) -> Result<Self> {
-        let stream =
-            TcpStream::connect(address).context("Cannot connect to the local Liquid backend")?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    pub fn connect(address: &str, stopped: &AtomicBool) -> Result<Self> {
+        crate::check_cancel(stopped)?;
+        let stream = TcpStream::connect_timeout(&address.parse()?, Duration::from_secs(1))
+            .context("Cannot connect to the local Liquid backend")?;
+        stream.set_nonblocking(true)?;
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-        let (socket, _) = tungstenite::client(format!("ws://{address}/v1/realtime"), stream)
-            .context("Liquid backend does not support the realtime protocol")?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut handshake = tungstenite::client(format!("ws://{address}/v1/realtime"), stream);
+        let (socket, _) = loop {
+            crate::check_cancel(stopped)?;
+            ensure!(
+                Instant::now() < deadline,
+                "Liquid WebSocket handshake timed out"
+            );
+            match handshake {
+                Ok(connected) => break connected,
+                Err(tungstenite::HandshakeError::Failure(error)) => {
+                    return Err(error)
+                        .context("Liquid backend does not support the realtime protocol");
+                }
+                Err(tungstenite::HandshakeError::Interrupted(pending)) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    handshake = pending.handshake();
+                }
+            }
+        };
+        socket.get_ref().set_nonblocking(false)?;
         socket
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(10)))?;
@@ -60,7 +81,7 @@ impl Realtime {
             user_samples: 0,
             audio_samples: 0,
         };
-        let created = this.wait_for("session.created")?;
+        let created = this.wait_for("session.created", stopped)?;
         ensure!(
             created["session"]["audio"]["input"]["format"]["rate"] == 16000,
             "This Liquid profile requires 16 kHz input"
@@ -75,7 +96,7 @@ impl Realtime {
             "output_modalities":["text","audio"],
             "max_output_tokens":1024
         }}))?;
-        this.wait_for("session.updated")?;
+        this.wait_for("session.updated", stopped)?;
         Ok(this)
     }
 
@@ -304,9 +325,10 @@ impl Realtime {
         }
     }
 
-    fn wait_for(&mut self, kind: &str) -> Result<Value> {
+    fn wait_for(&mut self, kind: &str, stopped: &AtomicBool) -> Result<Value> {
         let started = Instant::now();
         loop {
+            crate::check_cancel(stopped)?;
             ensure!(
                 started.elapsed() < Duration::from_secs(30),
                 "Timed out waiting for {kind}"
@@ -356,6 +378,50 @@ impl Drop for Realtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_cancellation_covers_handshake_and_session_initialization() {
+        use std::sync::{Arc, atomic::Ordering};
+        for stage in 0..3 {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let stopped = Arc::new(AtomicBool::new(false));
+            let signal = stopped.clone();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                if stage == 0 {
+                    signal.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(100));
+                    return;
+                }
+                let mut socket = tungstenite::accept(stream).unwrap();
+                if stage == 2 {
+                    socket
+                        .send(Message::Text(
+                            json!({"type":"session.created","session":{"audio":{
+                                "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
+                            }}})
+                            .to_string()
+                            .into(),
+                        ))
+                        .unwrap();
+                    let _ = socket.read().unwrap();
+                }
+                signal.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(100));
+            });
+            let began = Instant::now();
+            let error = Realtime::connect(&address, &stopped)
+                .err()
+                .expect("Startup must be cancelled");
+            server.join().unwrap();
+            assert!(error.is::<crate::Cancelled>(), "Stage {stage}: {error:#}");
+            assert!(began.elapsed() < Duration::from_secs(1));
+        }
+    }
     use std::{net::TcpListener, thread};
 
     fn mock_server(work: impl FnOnce(WebSocket<TcpStream>) + Send + 'static) -> String {
@@ -421,7 +487,7 @@ mod tests {
             .unwrap();
             thread::sleep(Duration::from_millis(100));
         });
-        let mut client = Realtime::connect(&addr).unwrap();
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
         client.text_turn("hello").unwrap();
         client.interrupt().unwrap();
         assert!(client.text_turn("too soon").is_err());
@@ -461,7 +527,7 @@ mod tests {
                 if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)));
             done.send(()).unwrap();
         });
-        let mut client = Realtime::connect(&addr).unwrap();
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
         client.append_audio(&[0; 320]).unwrap();
         client.end_input_without_response().unwrap();
         client.end_input_without_response().unwrap();
@@ -473,7 +539,7 @@ mod tests {
     #[test]
     fn odd_pcm_delta_is_rejected() {
         let addr = mock_server(|_| thread::sleep(Duration::from_millis(200)));
-        let mut client = Realtime::connect(&addr).unwrap();
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
         client.phase = Phase::Generating {
             id: Some("x".into()),
             since: Instant::now(),
@@ -488,8 +554,9 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
         let assets = crate::assets::prepare(&cache, true).unwrap();
-        let backend = crate::backend::Backend::start(&assets, &cache).unwrap();
-        let mut client = Realtime::connect(&backend.address).unwrap();
+        let backend =
+            crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
         client
             .text_turn("Count slowly from one to one hundred. Say every number.")
             .unwrap();
@@ -542,14 +609,15 @@ mod tests {
     fn liquid_conversation_exceeds_the_previous_context_limit() {
         let cache = dirs::cache_dir().unwrap().join("boubou");
         let assets = crate::assets::prepare(&cache, true).unwrap();
-        let backend = crate::backend::Backend::start(&assets, &cache).unwrap();
+        let backend =
+            crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
         let http = reqwest::blocking::Client::builder()
             .no_proxy()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
         let prompt = format!(
-            "Remember this code word: mango. The following is padding:{}\nReply only with the code word.",
+            "Remember this code word: mango. Privacy marker: BOUBOU_PRIVACY_SENTINEL. The following is padding:{}\nReply only with the code word.",
             " ocean".repeat(9000)
         );
         let tokens: Value = serde_json::from_str(
@@ -571,7 +639,7 @@ mod tests {
             "The regression must cross the old capacity"
         );
         assert!(token_count + 2048 < crate::backend::CONTEXT_TOKENS as usize);
-        let mut chat = Realtime::connect(&backend.address).unwrap();
+        let mut chat = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
         for text in [
             &prompt,
             "What was the code word? Reply only with that word.",
@@ -609,6 +677,37 @@ mod tests {
             "CONTEXT_REGRESSION input_tokens={token_count} context={} turns=2 backend_alive=true",
             crate::backend::CONTEXT_TOKENS
         );
+        drop(chat);
+        drop(backend);
+        let log = std::fs::read_to_string(
+            cache
+                .join("logs")
+                .join(format!("backend-{}.log", std::process::id())),
+        )
+        .unwrap();
+        assert!(
+            !log.contains("BOUBOU_PRIVACY_SENTINEL"),
+            "Backend log persisted input text"
+        );
+        assert!(
+            !log.to_lowercase().contains("mango"),
+            "Backend log persisted a conversation word"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(
+                cache
+                    .join("logs")
+                    .join(format!("backend-{}.log", std::process::id())),
+            )
+            .unwrap();
+            assert_eq!(
+                metadata.permissions().mode() & 0o077,
+                0,
+                "Backend diagnostics must be private"
+            );
+        }
     }
 
     #[test]
@@ -623,9 +722,10 @@ mod tests {
             .unwrap();
         let cache = dirs::cache_dir().unwrap().join("boubou");
         let assets = crate::assets::prepare(&cache, true).unwrap();
-        let backend = crate::backend::Backend::start(&assets, &cache).unwrap();
+        let backend =
+            crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
         for size in [1600, 320] {
-            let mut client = Realtime::connect(&backend.address).unwrap();
+            let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
             for chunk in pcm.chunks(size) {
                 client.append_audio(chunk).unwrap();
             }

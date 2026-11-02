@@ -65,9 +65,30 @@ enum Action {
 
 fn main() {
     if let Err(error) = run() {
+        if error.is::<Cancelled>() {
+            std::process::exit(130);
+        }
         eprintln!("\nBoubou: {error:#}");
         std::process::exit(1);
     }
+}
+
+#[derive(Debug)]
+struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+fn check_cancel(stopped: &AtomicBool) -> Result<()> {
+    if stopped.load(Ordering::SeqCst) {
+        return Err(Cancelled.into());
+    }
+    Ok(())
 }
 
 // Opt-in control metadata only: never pass speech, transcripts, or PCM here.
@@ -129,17 +150,16 @@ fn run() -> Result<()> {
             let stopped = Arc::new(AtomicBool::new(false));
             let flag = stopped.clone();
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
-            if stopped.load(Ordering::SeqCst) {
-                return Ok(());
-            }
+            check_cancel(&stopped)?;
             eprintln!("Loading Liquid locally…");
-            let backend = backend::Backend::start(&files, &cache)?;
-            let mut connection = Realtime::connect(&backend.address)?;
+            let backend = backend::Backend::start(&files, &cache, &stopped)?;
+            let mut connection = Realtime::connect(&backend.address, &stopped)?;
             let result = if turns.is_empty() {
                 microphone(&cache, &mut connection, &stopped, manual)
             } else {
                 from_files(turns, output.as_deref(), &mut connection, &stopped)
             };
+            check_cancel(&stopped)?;
             result.map_err(|error| backend.explain_failure(error))
         }
     }
@@ -188,6 +208,7 @@ fn from_files(
     for (i, pcm) in turns.iter().enumerate() {
         eprintln!("Turn {}", i + 1);
         for chunk in pcm.chunks(1600) {
+            check_cancel(stopped)?;
             chat.append_audio(chunk)?;
         }
         chat.finish_audio()?;
@@ -242,7 +263,7 @@ impl Drop for Terminal {
 
 fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: bool) -> Result<()> {
     eprintln!("Allow microphone access if macOS asks. Speak English.");
-    let (mut audio, captured) = audio::Audio::start(cache, !manual)?;
+    let (mut audio, captured) = audio::Audio::start(cache, !manual, stopped)?;
     let _terminal = Terminal::enter()?;
     if manual {
         eprint!(
@@ -274,6 +295,7 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
             && let Event::Key(key) = event::read()?
         {
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                stopped.store(true, Ordering::SeqCst);
                 break;
             }
             if key.code == KeyCode::Esc {
