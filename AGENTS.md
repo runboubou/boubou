@@ -22,3 +22,11 @@ Preserve unrelated work and do not silently change technical meaning while trans
 Distinguish current content from issue-title events, edit history, earlier commits, and platform caches. Editing the current text does not prove historical copies were removed. Do not claim the repository is free of historical Chinese content without verifying that scope.
 
 Deleting or recreating issues, deleting discussions, force-pushing, rewriting Git history, or replacing the repository requires explicit authorization for the specific destructive action. Do not perform those operations merely to satisfy a language scan.
+
+## Engineering
+
+- Keep changes small, direct, and specific to this private Rust/macOS project.
+- Use `docs/specs/TEMPLATE.md` for material behavior, interface, asset, or privacy changes; small fixes need no separate Spec.
+- Test behavior and relevant failures with ordinary Rust tests. Never treat simulated tests as real microphone/model acceptance.
+- Before merging, review the final diff and current checks. No independent approval is required unless the repository itself enforces one.
+- Keep secrets, recordings, transcripts, and personal diagnostics out of commits.
