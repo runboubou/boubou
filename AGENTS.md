@@ -23,24 +23,10 @@ Distinguish current content from issue-title events, edit history, earlier commi
 
 Deleting or recreating issues, deleting discussions, force-pushing, rewriting Git history, or replacing the repository requires explicit authorization for the specific destructive action. Do not perform those operations merely to satisfy a language scan.
 
-## Engineering changes and verification
+## Engineering
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md), the [review standard](docs/development/review.md),
-the [testing guide](docs/development/testing.md), and the affected Spec before
-changing code. Define the outcome, allowed scope, non-goals, and acceptance;
-preserve unrelated work and prefer a focused branch or worktree. A draft product
-plan is not approval to implement every future stage.
-
-Keep existing owners and readable, direct implementations. Add abstractions or
-dependencies only for a present need. Test observable behavior and important
-failure paths; do not remove necessary coverage or weaken checks to get a pass.
-Use `python3 scripts/verify.py` for the final candidate. Ordinary verification
-must not download models, start inference, activate audio devices, or run every
-ignored test. Real-model and physical-device acceptance need specific permission
-and evidence as described in the testing guide.
-
-Review the complete diff and report the tested commit, environment, and actual
-`PASS`, `FAIL`, and `NOT RUN` results. Self-review comments do not replace
-independent approval. New code requires current review and check evidence.
-Opening a PR or passing CI does not authorize merge, release, deployment, source
-license selection, or closure of product work whose acceptance remains open.
+- Keep changes small, direct, and specific to this private Rust/macOS project.
+- Use `docs/specs/TEMPLATE.md` for material behavior, interface, asset, or privacy changes; small fixes need no separate Spec.
+- Test behavior and relevant failures with ordinary Rust tests. Never treat simulated tests as real microphone/model acceptance.
+- Before merging, review the final diff and current checks. No independent approval is required unless the repository itself enforces one.
+- Keep secrets, recordings, transcripts, and personal diagnostics out of commits.
