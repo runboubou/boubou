@@ -313,11 +313,14 @@ fn microphone(
 ) -> Result<()> {
     let recording = record_session
         .map(|path| {
-            let recording = recording::Recording::start(path, serde_json::json!({
-                "version":env!("CARGO_PKG_VERSION"), "profile":"liquid",
-                "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
-                "manual":manual, "context_tokens":backend::CONTEXT_TOKENS
-            }))?;
+            let recording = recording::Recording::start(
+                path,
+                serde_json::json!({
+                    "version":env!("CARGO_PKG_VERSION"), "profile":"liquid",
+                    "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
+                    "manual":manual, "context_tokens":backend::CONTEXT_TOKENS
+                }),
+            )?;
             eprintln!(
                 "Recording private conversation content locally to {}. Nothing is uploaded.",
                 path.display()
@@ -443,7 +446,8 @@ fn microphone_loop(
                     let turn = pending.push(voice::Segment::Start(Vec::new()))?;
                     trace("input.start", format_args!("turn={turn} manual=true"));
                     if let Some(recording) = recording {
-                        recording.note(serde_json::json!({"event":"capture.start", "turn":turn}))?;
+                        recording
+                            .note(serde_json::json!({"event":"capture.start", "turn":turn}))?;
                     }
                     recording_since = Some(Instant::now());
                     recording_samples = 0;
@@ -490,7 +494,8 @@ fn microphone_loop(
                         let turn = pending.push(voice::Segment::End(Vec::new()))?;
                         trace("input.end", format_args!("turn={turn} manual=true"));
                         if let Some(recording) = recording {
-                            recording.note(serde_json::json!({"event":"capture.end", "turn":turn}))?;
+                            recording
+                                .note(serde_json::json!({"event":"capture.end", "turn":turn}))?;
                         }
                         recording_since = None;
                     }
@@ -779,16 +784,46 @@ mod tests {
     #[test]
     fn session_recording_is_explicit_and_only_for_microphone_mode() {
         let cli = Cli::try_parse_from(["boubou", "run", "liquid", "--offline"]).unwrap();
-        assert!(matches!(cli.command, Action::Run { record_session: None, .. }));
-        assert!(Cli::try_parse_from([
-            "boubou", "run", "liquid", "--offline", "--record-session", "recording"
-        ]).is_ok());
-        assert!(Cli::try_parse_from([
-            "boubou", "run", "liquid", "--manual", "--record-session", "recording"
-        ]).is_ok());
-        assert!(Cli::try_parse_from([
-            "boubou", "run", "liquid", "--input", "question.wav", "--record-session", "recording"
-        ]).is_err());
+        assert!(matches!(
+            cli.command,
+            Action::Run {
+                record_session: None,
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "boubou",
+                "run",
+                "liquid",
+                "--offline",
+                "--record-session",
+                "recording"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "boubou",
+                "run",
+                "liquid",
+                "--manual",
+                "--record-session",
+                "recording"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "boubou",
+                "run",
+                "liquid",
+                "--input",
+                "question.wav",
+                "--record-session",
+                "recording"
+            ])
+            .is_err()
+        );
     }
-
 }
