@@ -1,6 +1,6 @@
 [package]
 name = "boubou"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2024"
 rust-version = "1.88"
 description = "Local voice conversations, one command away"
@@ -17,7 +17,7 @@ flate2 = "1"
 fs2 = "0.4"
 hound = "3.5"
 libc = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 serde_json = "1"
 sha2 = "0.10"
 tar = "0.4"

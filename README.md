@@ -4,14 +4,13 @@ Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B.
 
 ## Run
 
-Requires Node.js/npm. Install the beta package, then start a conversation:
+Requires Node.js 18+ and npm:
 
 ```sh
-npm install -g boubou@beta
-bobo run LFM3-Audio-2B
+npx --yes boubou@beta run LFM3-Audio-2B
 ```
 
-For a supplied development `.tgz`, use `npm install -g /path/to/package.tgz`.
+For a global `bobo` command, use `npm install -g boubou@beta`.
 
 First use downloads about 1.42 GB of verified assets and asks for microphone
 access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
