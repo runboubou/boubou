@@ -35,7 +35,7 @@ File mode accepts 16 kHz, mono, PCM16 WAV and does not open audio devices:
 boubou run liquid --offline --input question.wav --output reply.wav
 ```
 
-The active context window is 32,768 tokens. Before it fills, Boubou automatically clears the conversation history and opens a fresh session while keeping the model loaded. A short terminal notice marks the change. Capture, pending turns, and keyboard controls continue during renewal; you may need to restate facts from before the clear. This allows continued conversation with bounded memory, not unlimited recall. See [automatic context renewal](spec/0003-automatic-context-renewal.md).
+The active context window is 32,768 tokens. Before it fills, Boubou automatically clears the conversation history and opens a fresh session while keeping the model loaded. A short terminal notice marks the change. Capture, pending turns, and keyboard controls continue during renewal; you may need to restate facts from before the clear. This allows continued conversation with bounded memory, not unlimited recall. See [automatic context renewal](spec/0003-automatic-context-renewal.md). If Liquid gives the same sentence four times in a row, Boubou clears the context the same way, because the model does not recover from such a loop. See [repeated replies](spec/0005-repeated-replies.md).
 
 Interruptions cannot erase already generated model context. Audio is not saved by default. Real microphone, echo, interruption quality, and release readiness require separate device testing.
 

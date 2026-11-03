@@ -11,6 +11,21 @@ use std::{
 };
 
 pub const CONTEXT_TOKENS: u32 = 32_768;
+// Greedy text decoding locks long voice chats into one reply repeated for every turn. b11960
+// realtime penalties only see the reply being generated, so earlier turns can be copied freely;
+// sample text with Liquid's LFM chat defaults instead. Audio frames keep the model's own sampler.
+const TEXT_SAMPLING: [&str; 10] = [
+    "--temp",
+    "0.3",
+    "--min-p",
+    "0.15",
+    "--top-k",
+    "0",
+    "--top-p",
+    "1.0",
+    "--repeat-penalty",
+    "1.05",
+];
 
 /// The backend lives only as long as this CLI invocation.
 pub struct Backend {
@@ -56,11 +71,10 @@ impl Backend {
                 "1",
                 "--n-gpu-layers",
                 "99",
-                "--temp",
-                "0",
                 "--no-webui",
                 "--offline",
             ])
+            .args(TEXT_SAMPLING)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
@@ -193,6 +207,55 @@ mod tests {
             -1,
             "Owned backend is still alive"
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_samples_reply_text_instead_of_decoding_greedily() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!(
+            "boubou-sampling-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let server = directory.join("print-arguments");
+        fs::write(&server, "#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 3\n").unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = Backend::start(
+            &Assets {
+                server,
+                model: PathBuf::new(),
+                projector: PathBuf::new(),
+            },
+            &directory,
+            &AtomicBool::new(false),
+        )
+        .err()
+        .expect("The fake backend exits");
+        assert!(error.to_string().contains("Liquid backend exited"));
+        let log =
+            fs::read_to_string(directory.join(format!("logs/backend-{}.log", std::process::id())))
+                .unwrap();
+        let arguments: Vec<&str> = log.lines().collect();
+        let value = |flag: &str| {
+            let at = arguments.iter().rposition(|argument| *argument == flag)?;
+            arguments.get(at + 1).copied()
+        };
+        assert_eq!(
+            value("--temp"),
+            Some("0.3"),
+            "Greedy decoding loops replies"
+        );
+        assert_eq!(value("--min-p"), Some("0.15"));
+        assert_eq!(value("--top-k"), Some("0"));
+        assert_eq!(value("--top-p"), Some("1.0"));
+        assert_eq!(value("--repeat-penalty"), Some("1.05"));
+        assert_eq!(value("--ctx-size"), Some("32768"));
         fs::remove_dir_all(directory).unwrap();
     }
 
