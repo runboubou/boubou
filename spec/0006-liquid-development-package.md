@@ -1,0 +1,13 @@
+# Spec: One-command Liquid 2B development package
+
+**Problem:** The accepted local runtime still asks users to build/install with Cargo. The current MVP needs a precompiled Mac distribution for the existing Liquid 2B configuration.
+
+**Behavior:** Build one versioned macOS arm64 development archive from a clean, locked source commit. Include the CLI, checksums, provenance, dependency/model/backend notices, a per-user installer and an uninstaller. After extracting the archive, `sh ./install.sh --run` verifies the package, installs the binary and starts `boubou run liquid`. The existing runtime prepares pinned assets on first use and reuses the current cache. Install into `~/.local/bin` by default; `BOUBOU_INSTALL_DIR` permits an explicit different directory without editing shell startup files. Offline operation retains the existing `--offline` command. Same-user upgrades atomically replace only the CLI; removal preserves model caches and saved audio.
+
+**Failure cases:** Reject unsupported host architecture, malformed installer arguments, failed checksums and a symlink at the installation target. Failed validation must not replace an installed binary. Preserve owned temporary files safely and avoid changing system permissions, Gatekeeper settings or quarantine attributes.
+
+**Scope:** Packaging only; runtime source, model/backend bytes, cache paths, voice, sampling and audio controls remain unchanged. Model/configuration selection, extra models, voices and all website work are explicitly deferred. Python/Rust/clang are build-machine tools only; end users run the precompiled CLI and system shell utilities.
+
+**Acceptance:** Ordinary Rust integration tests cover installation, replacement, checksum failure, symlink refusal and cache-preserving removal without opening audio devices. Repository checks pass. Inspect the actual archive and installed Mach-O binary; exercise CLI inspection, cached real-backend file inference, offline restart and process cleanup using the packaged bytes. Record source/tools/checksums and distinguish mocks from real inference. A short packaged microphone startup can verify the real entry point without saving audio or substituting for the prior sustained test.
+
+**Development boundary:** The maintainer has no Developer ID identity or separate clean Mac and requested a development candidate first. Signing, notarization, browser-download Gatekeeper/TCC behavior and another-Mac acceptance remain NOT RUN; this archive is not a qualified public release. Do not bypass security controls or invent a public download URL. The one-command handoff begins in the extracted package; a hosted bootstrap/distribution entry point is later release work.
