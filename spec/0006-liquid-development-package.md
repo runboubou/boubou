@@ -4,8 +4,9 @@
 ID `LFM3-Audio-2B` for run/pull. Bundle the Mac arm64 Rust executable and a small
 Node launcher; inherit terminal I/O, cancel Rust on shutdown, wait for its cleanup
 and preserve exit status/signals.
-No install-time downloader or npm dependencies. npm owns installation/removal;
-existing model caches and inference behavior stay unchanged.
+The documented npx entrypoint selects Boubou's per-user npm cache, without global
+installation, npm login or administrator access. No install-time downloader or
+npm dependencies; existing model caches and inference behavior stay unchanged.
 
 Build from a clean locked commit. Versions in Cargo/npm must match. Use an
 explicit package-file allowlist; include provenance, hashes and verified full
@@ -15,8 +16,9 @@ upstream/dependency licenses. Replace the manual shell installation channel.
 platforms fail npm installation. Missing executables and failed license checks
 produce errors; do not publish partial artifacts.
 
-**Verification:** Run repository checks, CLI/launcher regressions and actual npm
-tarball installation, cached offline inference and cancellation/cleanup checks.
+**Verification:** Run repository checks and CLI/launcher regressions. Test the exact
+documented command outside the checkout, including a damaged global npm cache,
+anonymous installation, real offline inference, microphone startup and cleanup.
 Publish only the reviewed clean-main artifact and read back registry integrity.
 
 Beta candidate only: signing, notarization and another-Mac acceptance remain

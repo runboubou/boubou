@@ -57,7 +57,7 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).starts_with("bobo "));
     let help = package.run(&["run", "--help"]);
-    assert!(help.status.success());
+    assert!(help.status.success(), "{help:?}");
     assert!(String::from_utf8_lossy(&help.stdout).contains("LFM3-Audio-2B"));
     assert_eq!(package.run(&["run", "liquid"]).status.code(), Some(2));
     assert_eq!(package.run(&["run", "other"]).status.code(), Some(2));
@@ -69,7 +69,7 @@ fn npm_launcher_preserves_arguments_with_spaces_and_exit_codes() {
     let package = Package::new();
     package.script("#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); process.exit(7);\n");
     let result = package.run(&["--input", "a question.wav", "--offline"]);
-    assert_eq!(result.status.code(), Some(7));
+    assert_eq!(result.status.code(), Some(7), "{result:?}");
     let arguments: Vec<String> = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(arguments, ["--input", "a question.wav", "--offline"]);
 }
