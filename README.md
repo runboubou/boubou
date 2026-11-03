@@ -35,7 +35,9 @@ File mode accepts 16 kHz, mono, PCM16 WAV and does not open audio devices:
 boubou run liquid --offline --input question.wav --output reply.wav
 ```
 
-Conversation history lasts for the session; interruptions cannot erase already generated model context. Audio is not saved by default. Real microphone, echo, interruption quality, and release readiness require separate device testing.
+The active context window is 32,768 tokens. Before it fills, Boubou automatically clears the conversation history and opens a fresh session while keeping the model loaded. A short terminal notice marks the change. Capture, pending turns, and keyboard controls continue during renewal; you may need to restate facts from before the clear. This allows continued conversation with bounded memory, not unlimited recall. See [automatic context renewal](spec/0003-automatic-context-renewal.md).
+
+Interruptions cannot erase already generated model context. Audio is not saved by default. Real microphone, echo, interruption quality, and release readiness require separate device testing.
 
 ## Development
 

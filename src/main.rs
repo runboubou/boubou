@@ -38,7 +38,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
-    /// Start a local voice conversation (microphone by default).
+    /// Start a local voice conversation with automatic context clearing.
     Run {
         #[arg(default_value = "liquid", value_parser = ["liquid"])]
         model: String,
@@ -126,7 +126,10 @@ fn run() -> Result<()> {
             );
             println!("Profile: Liquid LFM3-Audio-2B · Q4_K_M + Q8_0 audio · llama.cpp b11960");
             println!("Voice chat: English · audio input 16 kHz · audio output 24 kHz");
-            println!("Conversation context: {} tokens", backend::CONTEXT_TOKENS);
+            println!(
+                "Conversation context: {} tokens; automatically cleared before it fills",
+                backend::CONTEXT_TOKENS
+            );
             println!("Cache: {}", cache.display());
             assets::status(&cache)
         }
@@ -211,6 +214,12 @@ fn from_files(
         .transpose()?;
     for (i, pcm) in turns.iter().enumerate() {
         eprintln!("Turn {}", i + 1);
+        while !chat.ready_for_audio()? {
+            check_cancel(stopped)?;
+            if let Some(Output::ContextCleared) = chat.poll()? {
+                eprintln!("[Earlier conversation context cleared.]");
+            }
+        }
         for chunk in pcm.chunks(1600) {
             check_cancel(stopped)?;
             chat.append_audio(chunk)?;
@@ -350,8 +359,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 } else {
                     if chat.busy() || audio.pending_samples() > 0 {
                         audio.clear()?;
-                        chat.interrupt()?;
-                        eprint!("\r\n[Interrupted]\r\n");
+                        if chat.interrupt()? {
+                            eprint!("\r\n[Interrupted]\r\n");
+                        }
                     }
                     let turn = pending.push(voice::Segment::Start(Vec::new()))?;
                     trace("input.start", format_args!("turn={turn} manual=true"));
@@ -429,8 +439,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 );
                 if chat.busy() || audio.pending_samples() > 0 {
                     audio.clear()?;
-                    chat.interrupt()?;
-                    eprint!("\r\n[Interrupted]\r\n");
+                    if chat.interrupt()? {
+                        eprint!("\r\n[Interrupted]\r\n");
+                    }
                 }
                 reply_open = false;
             }
@@ -462,6 +473,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     reply_open = false;
                 }
                 Output::Interrupted => {}
+                Output::ContextCleared => {
+                    eprint!("\r\n[Earlier conversation context cleared.]\r\n");
+                }
             }
         }
         if !chat.busy() && audio.pending_samples() == 0 {
@@ -482,12 +496,15 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn send_pending(
     pending: &mut voice::PendingAudio,
     chat: &mut Realtime,
     allow_finish: bool,
 ) -> Result<()> {
+    if !chat.ready_for_audio()? {
+        return Ok(());
+    }
     if let Some((turn, pcm, end)) = pending.take(allow_finish) {
         chat.append_audio(&pcm)?;
         if end {
