@@ -1570,7 +1570,12 @@ mod tests {
             "Too many repeated replies: {replies:#?}"
         );
         assert!(
-            reqwest::blocking::get(format!("http://{}/health", backend.address))
+            reqwest::blocking::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{}/health", backend.address))
+                .send()
                 .unwrap()
                 .status()
                 .is_success()
