@@ -5,7 +5,7 @@
 
 ## Contract
 
-- Apple Silicon macOS, one fixed Liquid 2B configuration and default voice. Reuse the Rust CLI, native audio helper and owned llama.cpp backend.
+- Apple Silicon macOS, one fixed Liquid 2B configuration and default voice. Reuse the Rust CLI, native audio helper and owned llama.cpp backend on loopback.
 - Download pinned assets with size/SHA-256 checks, resumable transfers and one preparation lock. Reject unsupported hosts before downloads. Never execute unverified bytes.
 - Submit each utterance once; ignore silence and playback echo. Interrupt current or queued playback, cancel generation and reject stale response audio/ACKs. Preserve separate utterances while cancellation is pending.
 - Keep input/playback bounded to 30 seconds and queues bounded; report limits rather than silently losing speech. `Esc` pauses submission, `Enter` resumes, `Ctrl+C` exits.

@@ -2,7 +2,7 @@
 
 - Write repository content and GitHub metadata in English; check authored text before publishing. Model input languages are unrestricted.
 - Keep secrets, recordings, transcripts and personal diagnostics out of commits.
-- Preserve unrelated work. Editing current text does not erase history; deleting issues/repositories or rewriting Git history requires specific authorization.
+- Preserve unrelated work. Editing current text does not erase history; deleting GitHub content/repositories or rewriting Git history requires specific authorization.
 
 ## Writing
 
