@@ -1,5 +1,7 @@
 # Spec: <change>
 
+Follow the [Spec policy](../AGENTS.md#specifications); update an existing Spec when it covers the change.
+
 **Problem:** What needs to change, and why?
 
 **Behavior:** Describe observable inputs, outputs, and essential constraints.

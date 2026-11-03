@@ -1,6 +1,6 @@
 ## Change
 
-Why is this needed, and what changed? Link a Spec only for material behavior or interface work.
+Why is this needed, and what changed? Link an updated or new Spec when required by the [Spec policy](https://github.com/entropyai-labs/boubou/blob/main/AGENTS.md#specifications).
 
 ## Verification
 

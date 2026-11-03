@@ -48,7 +48,7 @@ cargo test --locked --all-targets --all-features
 cargo build --locked
 ```
 
-CI runs these checks on macOS, without downloading models or activating audio devices. Use [the Spec template](spec/TEMPLATE.md) for material behavior or interface changes; small fixes need no process overhead.
+CI runs these checks on macOS, without downloading models or activating audio devices. See [the contribution rules](AGENTS.md#engineering) and [when to update or create a Spec](AGENTS.md#specifications).
 
 ## Licenses
 
