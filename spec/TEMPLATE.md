@@ -1,11 +1,11 @@
-# Spec: <change>
+# <Change>
 
-**Problem:** What needs to change, and why?
+Keep only what the reader needs; omit unused fields.
 
-**Behavior:** Describe observable inputs, outputs, and essential constraints.
+**Problem:** Why change?
 
-**Failure cases:** Define invalid input, cancellation, and recovery where relevant.
+**Behavior:** Observable result, scope and constraints.
 
-**Scope:** Name affected interfaces and what is deliberately excluded.
+**Failures:** Relevant errors and recovery.
 
-**Acceptance:** List the smallest reproducible tests. Mark real-model, audio-device, or release checks separately when applicable.
+**Verification:** Smallest meaningful checks; identify unexecuted acceptance.

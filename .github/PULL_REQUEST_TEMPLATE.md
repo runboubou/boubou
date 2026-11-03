@@ -1,11 +1,7 @@
 ## Change
 
-Why is this needed, and what changed? Link a Spec only for material behavior or interface work.
+What changes, and why? Link a Spec when needed. Mention material risks only.
 
-## Verification
+## Checks
 
-Commands/results for this commit (PASS / FAIL / NOT RUN). Mention any model or device checks not performed.
-
-## Risk
-
-Note compatibility, privacy, audio, or asset-handling risks only when relevant.
+Commands and results; identify relevant model/device checks not run.
