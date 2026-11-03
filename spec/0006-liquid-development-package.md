@@ -1,24 +1,23 @@
-# Liquid 2B development package
+# Native npm package
 
-**Problem:** End users should run the existing runtime without a compiler.
+**Behavior:** Publish `boubou` with the `bobo` command. Require the explicit model
+ID `LFM3-Audio-2B` for run/pull. Bundle the Mac arm64 Rust executable and a small
+Node launcher; inherit terminal I/O, cancel Rust on shutdown, wait for its cleanup
+and preserve exit status/signals.
+No install-time downloader or npm dependencies. npm owns installation/removal;
+existing model caches and inference behavior stay unchanged.
 
-**Behavior:** Build one versioned macOS arm64 archive from a clean, locked commit.
-Include the CLI, install/uninstall scripts, provenance and checksums. Fetch full
-model/backend licenses from pinned upstream URLs, verify SHA-256 and include them
-with dependency notices; keep no maintained license copies in source.
+Build from a clean locked commit. Versions in Cargo/npm must match. Use an
+explicit package-file allowlist; include provenance, hashes and verified full
+upstream/dependency licenses. Replace the manual shell installation channel.
 
-`sh ./install.sh --run` installs into ~/.local/bin and starts Liquid 2B.
-An absolute BOUBOU_INSTALL_DIR overrides the destination. Upgrades atomically
-replace only the CLI; removal keeps model caches and saved audio.
+**Failures:** Reject unknown/missing model IDs before downloads. Unsupported
+platforms fail npm installation. Missing executables and failed license checks
+produce errors; do not publish partial artifacts.
 
-**Failures:** Reject unsupported hosts, invalid arguments, symlink destinations,
-failed downloads and checksum mismatches without publishing partial artifacts or
-replacing installed files.
+**Verification:** Run repository checks, CLI/launcher regressions and actual npm
+tarball installation, cached offline inference and cancellation/cleanup checks.
+Publish only the reviewed clean-main artifact and read back registry integrity.
 
-**Verification:** Run repository checks and installer regressions. Inspect the
-actual archive, license hashes and executable; verify install, cached offline
-inference and owned-process cleanup. Reuse unchanged runtime acceptance.
-
-Development candidate only: signing, notarization, browser-download permissions
-and another-Mac installation are unverified. Runtime behavior, model/voice
-selection and websites are outside this packaging change.
+Beta candidate only: signing, notarization and another-Mac acceptance remain
+unverified. Additional models, voices and websites are deferred.

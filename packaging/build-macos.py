@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Build the single Liquid 2B macOS development archive from a clean commit."""
+"""Build the native macOS npm package from a clean commit."""
 
-import gzip
 import hashlib
 import json
 import os
@@ -9,7 +8,6 @@ import platform
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -65,11 +63,13 @@ def main():
     subprocess.run(["codesign", "--verify", "--strict", str(binary)], check=True)
     version = output(str(binary), "--version").split()[1]
     source = output("git", "rev-parse", "HEAD")
-    epoch = int(output("git", "show", "-s", "--format=%ct", "HEAD"))
-    name = f"boubou-{version}-dev-{source[:7]}-macos-arm64"
-    destination = ROOT / "target/dist"
+    manifest = json.loads((ROOT / "packaging/package.json").read_text())
+    if manifest["version"] != version:
+        raise SystemExit("Cargo and npm package versions must match.")
+    name = f"boubou-{version}"
+    destination = ROOT / "target/dist" / source[:7]
     destination.mkdir(parents=True, exist_ok=True)
-    archive = destination / f"{name}.tar.gz"
+    archive = destination / f"{name}.tgz"
     if archive.exists():
         raise SystemExit(f"Candidate already exists; preserve its receipt: {archive}")
     metadata = json.loads(
@@ -98,8 +98,9 @@ def main():
         folder = Path(temporary) / name
         folder.mkdir()
         shutil.copy2(binary, folder / "boubou")
-        for file in ["install.sh", "uninstall.sh", "README.txt"]:
+        for file in ["cli.cjs", "package.json"]:
             shutil.copy2(ROOT / "packaging" / file, folder / file)
+        shutil.copy2(ROOT / "README.md", folder / "README.md")
         (folder / "licenses").mkdir()
         for filename, url, expected in LICENSES:
             path = folder / "licenses" / filename
@@ -158,11 +159,13 @@ def main():
         build = {
             "version": version,
             "channel": "development",
-            "profile": "liquid",
+            "profile": "LFM3-Audio-2B",
             "source_commit": source,
             "source_url": f"https://github.com/entropyai-labs/boubou/commit/{source}",
             "target": "aarch64-apple-darwin",
             "rustc": output("rustc", "--version"),
+            "node": output("node", "--version"),
+            "npm": output("npm", "--version"),
             "clang": output("xcrun", "clang", "--version").splitlines()[0],
             "sdk": output("xcrun", "--show-sdk-version"),
             "cargo_lock_sha256": sha256(ROOT / "Cargo.lock"),
@@ -187,32 +190,18 @@ def main():
         (folder / "SHA256SUMS").write_text(
             "".join(f"{sha256(p)}  {p.relative_to(folder).as_posix()}\n" for p in files)
         )
-        temporary_archive = Path(temporary) / archive.name
-        with temporary_archive.open("wb") as raw:
-            with gzip.GzipFile(
-                fileobj=raw, mode="wb", filename="", mtime=epoch
-            ) as compressed:
-                with tarfile.open(fileobj=compressed, mode="w") as tar:
-                    for path in [folder, *sorted(folder.rglob("*"))]:
-                        entry = tar.gettarinfo(
-                            str(path),
-                            arcname=path.relative_to(folder.parent).as_posix(),
-                        )
-                        entry.uid = entry.gid = 0
-                        entry.uname = entry.gname = ""
-                        entry.mtime = epoch
-                        entry.mode = (
-                            0o755
-                            if path.is_dir()
-                            or path.name in ["boubou", "install.sh", "uninstall.sh"]
-                            else 0o644
-                        )
-                        if path.is_file():
-                            with path.open("rb") as stream:
-                                tar.addfile(entry, stream)
-                        else:
-                            tar.addfile(entry)
-        os.replace(temporary_archive, archive)
+        packed = json.loads(
+            output(
+                "npm",
+                "pack",
+                str(folder),
+                "--ignore-scripts",
+                "--json",
+                "--pack-destination",
+                str(Path(temporary)),
+            )
+        )
+        os.replace(Path(temporary) / packed[0]["filename"], archive)
     (destination / f"{archive.name}.sha256").write_text(
         f"{sha256(archive)}  {archive.name}\n"
     )

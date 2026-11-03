@@ -1,148 +1,132 @@
 #![cfg(target_os = "macos")]
 
-use sha2::{Digest, Sha256};
 use std::{
     fs,
+    os::unix::{fs::PermissionsExt, process::ExitStatusExt},
     path::PathBuf,
-    process::{Command, Output},
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-struct Package {
-    root: PathBuf,
-    source: PathBuf,
-    bin: PathBuf,
-}
+struct Package(PathBuf);
 
 impl Package {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "boubou-package-test-{}-{}",
+            "bobo package {} {}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let source = root.join("package with spaces");
-        let bin = root.join("bin with spaces");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(
-            source.join("install.sh"),
-            include_str!("../packaging/install.sh"),
-        )
-        .unwrap();
-        fs::write(
-            source.join("uninstall.sh"),
-            include_str!("../packaging/uninstall.sh"),
-        )
-        .unwrap();
-        fs::copy(env!("CARGO_BIN_EXE_boubou"), source.join("boubou")).unwrap();
-        let checksum = format!(
-            "{:x}  boubou\n",
-            Sha256::digest(fs::read(source.join("boubou")).unwrap())
-        );
-        fs::write(source.join("SHA256SUMS"), checksum).unwrap();
-        Self { root, source, bin }
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("cli.cjs"), include_str!("../packaging/cli.cjs")).unwrap();
+        fs::copy(env!("CARGO_BIN_EXE_boubou"), root.join("boubou")).unwrap();
+        Self(root)
     }
 
-    fn command(&self, script: &str, arguments: &[&str]) -> Output {
-        Command::new("/bin/sh")
-            .arg(self.source.join(script))
-            .args(arguments)
-            .env("BOUBOU_INSTALL_DIR", &self.bin)
-            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .output()
-            .unwrap()
+    fn command(&self) -> Command {
+        let mut command = Command::new("node");
+        command.arg(self.0.join("cli.cjs"));
+        command
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.command().args(args).output().unwrap()
+    }
+
+    fn script(&self, text: &str) {
+        let path = self.0.join("boubou");
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 
 impl Drop for Package {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
-#[cfg(target_arch = "aarch64")]
 #[test]
-fn install_upgrade_and_remove_keep_model_data_without_build_tools() {
+fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     let package = Package::new();
-    let models = package.root.join("models");
-    fs::create_dir_all(&models).unwrap();
-    fs::write(models.join("keep"), b"cached model").unwrap();
-    let installed = package.command("install.sh", &[]);
-    assert!(
-        installed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&installed.stderr)
-    );
-    let binary = package.bin.join("boubou");
-    let version = Command::new(&binary)
-        .arg("--version")
-        .env("PATH", "/usr/bin:/bin")
-        .output()
-        .unwrap();
+    let version = package.run(&["--version"]);
     assert!(version.status.success());
-    assert!(String::from_utf8_lossy(&version.stdout).starts_with("boubou "));
-    fs::write(&binary, b"previous candidate").unwrap();
-    assert!(package.command("install.sh", &[]).status.success());
+    assert!(String::from_utf8_lossy(&version.stdout).starts_with("bobo "));
+    let help = package.run(&["run", "--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("LFM3-Audio-2B"));
+    assert_eq!(package.run(&["run", "liquid"]).status.code(), Some(2));
+    assert_eq!(package.run(&["run", "other"]).status.code(), Some(2));
+    assert_eq!(package.run(&["run"]).status.code(), Some(2));
+}
+
+#[test]
+fn npm_launcher_preserves_arguments_with_spaces_and_exit_codes() {
+    let package = Package::new();
+    package.script("#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); process.exit(7);\n");
+    let result = package.run(&["--input", "a question.wav", "--offline"]);
+    assert_eq!(result.status.code(), Some(7));
+    let arguments: Vec<String> = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(arguments, ["--input", "a question.wav", "--offline"]);
+}
+
+#[test]
+fn npm_launcher_reports_a_missing_executable() {
+    let package = Package::new();
+    fs::remove_file(package.0.join("boubou")).unwrap();
+    let result = package.run(&["--version"]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Could not start bobo"));
+}
+
+#[test]
+fn npm_launcher_waits_for_cleanup_before_propagating_termination() {
+    let package = Package::new();
+    package.script(
+        "#!/usr/bin/env node\n\
+        const fs = require('node:fs');\n\
+        process.on('SIGINT', () => { fs.appendFileSync(process.argv[2], ':clean'); process.exit(0); });\n\
+        fs.writeFileSync(process.argv[2], String(process.pid));\n\
+        setTimeout(() => process.exit(99), 5000);\n",
+    );
+    let ready = package.0.join("ready");
+    let mut launcher = package
+        .command()
+        .arg(&ready)
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..100 {
+        if ready.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    if !ready.exists() {
+        let _ = launcher.kill();
+        let _ = launcher.wait();
+        panic!("The fixture child did not become ready");
+    }
+    let child_pid = fs::read_to_string(&ready).unwrap();
     assert!(
-        Command::new(&binary)
-            .arg("--version")
+        Command::new("/bin/kill")
+            .args(["-TERM", &launcher.id().to_string()])
             .status()
             .unwrap()
             .success()
     );
-    assert!(package.command("uninstall.sh", &[]).status.success());
-    assert!(!binary.exists());
-    assert_eq!(fs::read(models.join("keep")).unwrap(), b"cached model");
-}
-
-#[cfg(target_arch = "aarch64")]
-#[test]
-fn failed_integrity_or_unsafe_destination_does_not_replace_files() {
-    use std::os::unix::fs::symlink;
-    let package = Package::new();
-    fs::create_dir_all(&package.bin).unwrap();
-    let installed = package.bin.join("boubou");
-    fs::write(&installed, b"existing candidate").unwrap();
-    fs::write(package.source.join("boubou"), b"damaged archive").unwrap();
-    assert!(!package.command("install.sh", &[]).status.success());
-    assert_eq!(fs::read(&installed).unwrap(), b"existing candidate");
-    fs::remove_file(&installed).unwrap();
-    let unrelated = package.root.join("unrelated");
-    fs::write(&unrelated, b"keep this file").unwrap();
-    symlink(&unrelated, &installed).unwrap();
-    let rejected = package.command("install.sh", &[]);
-    assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("symlink"));
-    assert!(!package.command("uninstall.sh", &[]).status.success());
-    assert_eq!(fs::read(&unrelated).unwrap(), b"keep this file");
-}
-
-#[test]
-fn invalid_installer_arguments_fail_before_installation() {
-    let package = Package::new();
-    assert_eq!(
-        package.command("install.sh", &["--unknown"]).status.code(),
-        Some(2)
+    assert_eq!(launcher.wait().unwrap().signal(), Some(15));
+    assert!(fs::read_to_string(ready).unwrap().ends_with(":clean"));
+    assert!(
+        !Command::new("/bin/kill")
+            .args(["-0", &child_pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
     );
-    assert_eq!(
-        package
-            .command("install.sh", &["--run", "extra"])
-            .status
-            .code(),
-        Some(2)
-    );
-    assert!(!package.bin.exists());
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[test]
-fn unsupported_mac_architecture_is_rejected_before_installation() {
-    let package = Package::new();
-    let result = package.command("install.sh", &[]);
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("Apple Silicon"));
-    assert!(!package.bin.exists());
 }

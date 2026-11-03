@@ -1,0 +1,19 @@
+{
+  "name": "boubou",
+  "version": "0.1.0-beta.1",
+  "description": "Local voice conversations on Apple Silicon Macs",
+  "bin": { "bobo": "cli.cjs" },
+  "engines": { "node": ">=18" },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "license": "UNLICENSED",
+  "repository": "github:entropyai-labs/boubou",
+  "files": [
+    "boubou",
+    "cli.cjs",
+    "licenses",
+    "BUILD.json",
+    "SHA256SUMS",
+    "THIRD_PARTY_NOTICES.txt"
+  ]
+}
