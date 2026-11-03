@@ -63,6 +63,7 @@ impl Drop for Package {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
 #[test]
 fn install_upgrade_and_remove_keep_model_data_without_build_tools() {
     let package = Package::new();
@@ -97,6 +98,7 @@ fn install_upgrade_and_remove_keep_model_data_without_build_tools() {
     assert_eq!(fs::read(models.join("keep")).unwrap(), b"cached model");
 }
 
+#[cfg(target_arch = "aarch64")]
 #[test]
 fn failed_integrity_or_unsafe_destination_does_not_replace_files() {
     use std::os::unix::fs::symlink;
@@ -132,5 +134,15 @@ fn invalid_installer_arguments_fail_before_installation() {
             .code(),
         Some(2)
     );
+    assert!(!package.bin.exists());
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+#[test]
+fn unsupported_mac_architecture_is_rejected_before_installation() {
+    let package = Package::new();
+    let result = package.command("install.sh", &[]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Apple Silicon"));
     assert!(!package.bin.exists());
 }
