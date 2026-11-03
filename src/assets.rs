@@ -189,8 +189,11 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(30 * 60))
-        .user_agent(concat!("boubou/", env!("CARGO_PKG_VERSION")))
-        .build()?;
+        .user_agent(concat!("boubou/", env!("CARGO_PKG_VERSION")));
+    // Unit tests use local HTTP fixtures, independent of the developer's proxy.
+    #[cfg(test)]
+    let client = client.no_proxy();
+    let client = client.build()?;
     let mut request = client
         .get(spec.url)
         .header(header::ACCEPT_ENCODING, "identity");
