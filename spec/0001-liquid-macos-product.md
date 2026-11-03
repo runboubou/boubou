@@ -286,7 +286,7 @@ This table describes the original review snapshot, not the state of concurrent d
 
 Record versions, machine, OS, devices, steps, pass/fail, and minimal diagnostics. Do not save raw microphone audio by default. Any recording requires separate consent, a bounded destination, and retention policy.
 
-**Sustained-use check:** a 30-minute multi-turn session on the first supported device is a recommended sample for queue behavior, memory trend, glitches, and shutdown. It is not an already-proven stability duration or a universal SLA.
+**Sustained-use check:** a 15-20 minute multi-turn session on the first supported device is a recommended sample for queue behavior, memory trend, glitches, and shutdown. It is not an already-proven stability duration or a universal SLA.
 
 **Clean-machine check:** on another supported candidate Mac without Rust, a Python development environment, or Xcode Command Line Tools, install the real artifact, authorize, download, converse, exit, disconnect, and restart offline. Build-machine caches are not evidence for this check.
 

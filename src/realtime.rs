@@ -23,6 +23,13 @@ const SESSION_OVERHEAD_TOKENS: usize = 512;
 const TURN_OVERHEAD_TOKENS: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
+// A looping model gives one sentence whatever the user says and does not recover in that session.
+// Short answers, such as a name, and a reply the user asks to hear again may legitimately repeat.
+const MAX_IDENTICAL_REPLIES: usize = 4;
+const MIN_LOOP_WORDS: usize = 4;
+// Liquid's voice-chat prompt comes first. Without the guidance, long sessions drift into one stock
+// reply, often after brief acknowledgements, and restate replies the user interrupted.
+const INSTRUCTIONS: &str = "Respond with interleaved text and audio.\n\nYou are a friendly voice assistant in a spoken conversation. Answer the user's latest words in one to three short sentences. Do not repeat an earlier reply. If the user only acknowledges you, keep the conversation going naturally.";
 
 #[derive(Debug, PartialEq)]
 pub enum Output {
@@ -59,6 +66,9 @@ pub struct Realtime {
     interrupted: bool,
     user_samples: usize,
     audio_samples: usize,
+    reply: String,
+    last_reply: String,
+    identical_replies: usize,
 }
 
 impl Realtime {
@@ -100,6 +110,9 @@ impl Realtime {
             interrupted: false,
             user_samples: 0,
             audio_samples: 0,
+            reply: String::new(),
+            last_reply: String::new(),
+            identical_replies: 0,
         };
         let created = this.wait_for("session.created", stopped)?;
         ensure!(
@@ -112,7 +125,7 @@ impl Realtime {
         );
         this.send(json!({"type":"session.update","session":{
             "type":"realtime",
-            "instructions":"Respond with interleaved text and audio.",
+            "instructions":INSTRUCTIONS,
             "output_modalities":["text","audio"],
             "max_output_tokens":MAX_OUTPUT_TOKENS
         }}))?;
@@ -139,9 +152,10 @@ impl Realtime {
         self.prepare_turn(MAX_AUDIO_INPUT_TOKENS)
     }
 
-    fn has_capacity(&self, input_tokens: usize) -> bool {
-        self.context_tokens + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
-            < crate::backend::CONTEXT_TOKENS as usize
+    fn can_admit(&self, input_tokens: usize) -> bool {
+        self.identical_replies < MAX_IDENTICAL_REPLIES
+            && self.context_tokens + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                < crate::backend::CONTEXT_TOKENS as usize
     }
 
     fn prepare_turn(&mut self, input_tokens: usize) -> Result<bool> {
@@ -153,7 +167,7 @@ impl Realtime {
                 < crate::backend::CONTEXT_TOKENS as usize,
             "A single turn exceeds Liquid's context capacity"
         );
-        if self.has_capacity(input_tokens) {
+        if self.can_admit(input_tokens) {
             return Ok(true);
         }
         let mut socket = self.socket.take().context("Liquid connection is missing")?;
@@ -173,7 +187,10 @@ impl Realtime {
         self.phase = Phase::Renewing { worker, stopped };
         crate::trace(
             "context.renewing",
-            format_args!("budget_tokens={}", self.context_tokens),
+            format_args!(
+                "budget_tokens={} identical_replies={}",
+                self.context_tokens, self.identical_replies
+            ),
         );
         Ok(false)
     }
@@ -192,7 +209,7 @@ impl Realtime {
         }
         if self.user_samples == 0 {
             ensure!(
-                self.has_capacity(MAX_AUDIO_INPUT_TOKENS),
+                self.can_admit(MAX_AUDIO_INPUT_TOKENS),
                 "Wait for automatic context renewal before sending a new turn"
             );
             self.context_tokens += TURN_OVERHEAD_TOKENS;
@@ -273,6 +290,7 @@ impl Realtime {
         crate::trace("response.create.sent", format_args!(""));
         self.user_samples = 0;
         self.audio_samples = 0;
+        self.reply.clear();
         self.phase = Phase::Generating {
             id: None,
             since: Instant::now(),
@@ -399,11 +417,23 @@ impl Realtime {
             {
                 self.context_tokens -= MAX_OUTPUT_TOKENS - tokens as usize;
             }
+            if !cancelled {
+                // Interrupted text is partial; only finished replies show a loop.
+                let reply = normalized_words(&std::mem::take(&mut self.reply));
+                self.identical_replies = if reply.split(' ').count() < MIN_LOOP_WORDS {
+                    0
+                } else if reply == self.last_reply {
+                    self.identical_replies + 1
+                } else {
+                    1
+                };
+                self.last_reply = reply;
+            }
             crate::trace(
                 "response.done",
                 format_args!(
-                    "id={id:?} status={status} cancelling={cancelled} audio_samples={}",
-                    self.audio_samples
+                    "id={id:?} status={status} cancelling={cancelled} audio_samples={} identical_replies={}",
+                    self.audio_samples, self.identical_replies
                 ),
             );
             self.phase = Phase::Idle;
@@ -417,12 +447,11 @@ impl Realtime {
             return Ok(None);
         }
         match kind {
-            "response.output_text.delta" => Ok(Some(Output::Text(
-                event["delta"]
-                    .as_str()
-                    .context("Invalid text delta")?
-                    .to_owned(),
-            ))),
+            "response.output_text.delta" => {
+                let delta = event["delta"].as_str().context("Invalid text delta")?;
+                self.reply.push_str(delta);
+                Ok(Some(Output::Text(delta.to_owned())))
+            }
             "response.output_audio.delta" => {
                 let bytes =
                     STANDARD.decode(event["delta"].as_str().context("Invalid audio delta")?)?;
@@ -496,6 +525,14 @@ impl Realtime {
             .send(Message::Text(value.to_string().into()))
             .context("Cannot send to Liquid")
     }
+}
+
+fn normalized_words(text: &str) -> String {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl Drop for Realtime {
@@ -713,6 +750,9 @@ mod tests {
         .unwrap();
         let update = context_event(ws, "session.update");
         assert_eq!(update["session"]["max_output_tokens"], MAX_OUTPUT_TOKENS);
+        let instructions = update["session"]["instructions"].as_str().unwrap();
+        assert!(instructions.starts_with("Respond with interleaved text and audio.\n\n"));
+        assert!(instructions.contains("Do not repeat an earlier reply."));
         ws.send(Message::Text(
             json!({"type":"session.updated"}).to_string().into(),
         ))
@@ -1061,6 +1101,156 @@ mod tests {
         }
     }
 
+    // Skips cancellation retries and playback notices, which depend on client timing.
+    fn skip_to(ws: &mut WebSocket<TcpStream>, kind: &str) -> Value {
+        loop {
+            let event: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+            if event["type"] == kind {
+                return event;
+            }
+            assert!(
+                event["type"] == "response.cancel" || event["type"] == "conversation.item.create",
+                "Expected {kind}, got {event}"
+            );
+        }
+    }
+
+    fn text_reply(ws: &mut WebSocket<TcpStream>, id: usize, text: &str, status: &str) {
+        for event in [
+            json!({"type":"response.created","response":{"id":id.to_string()}}),
+            json!({"type":"response.output_text.delta","response_id":id.to_string(),"delta":text}),
+            json!({"type":"response.done","response":{"id":id.to_string(),"status":status,
+                "usage":{"output_tokens":8}}}),
+        ] {
+            ws.send(Message::Text(event.to_string().into())).unwrap();
+        }
+    }
+
+    #[test]
+    fn identical_replies_renew_context_at_the_next_input_boundary() {
+        const REPLIES: [(&str, bool); 8] = [
+            ("Maya!", false),
+            ("Maya.", false),
+            ("maya", false),
+            ("You're very welcome! Have a great day.", false),
+            ("you're VERY welcome, have a great day", false),
+            ("Something else entirely", true),
+            ("You're very welcome! Have a great day!", false),
+            ("You're very welcome. Have a great day.", false),
+        ];
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = thread::spawn(move || {
+            let mut ws = context_session(&listener);
+            for (id, (text, cancelled)) in REPLIES.iter().enumerate() {
+                skip_to(&mut ws, "input_audio_buffer.append");
+                skip_to(&mut ws, "response.create");
+                if *cancelled {
+                    skip_to(&mut ws, "response.cancel");
+                }
+                let status = if *cancelled { "cancelled" } else { "completed" };
+                text_reply(&mut ws, id, text, status);
+            }
+            loop {
+                match ws.read().unwrap() {
+                    Message::Close(_) => break,
+                    Message::Text(text) => assert!(text.contains("response.cancel")),
+                    _ => {}
+                }
+            }
+            let mut ws = context_session(&listener);
+            context_event(&mut ws, "input_audio_buffer.append");
+            context_event(&mut ws, "response.create");
+            text_reply(&mut ws, 0, "You're very welcome!", "completed");
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let finish = |client: &mut Realtime, cancel: bool| {
+            client.append_audio(&[1; 320]).unwrap();
+            client.finish_audio().unwrap();
+            if cancel {
+                assert!(client.interrupt().unwrap());
+            }
+            loop {
+                match next_context_output(client) {
+                    Output::Text(_) => assert!(!cancel, "Cancelled text leaked"),
+                    output => break output,
+                }
+            }
+        };
+        for (turn, (_, cancelled)) in REPLIES.iter().enumerate() {
+            assert!(client.ready_for_audio().unwrap(), "Turn {turn} renewed");
+            let expected = if *cancelled {
+                Output::Interrupted
+            } else {
+                Output::Done
+            };
+            assert_eq!(finish(&mut client, *cancelled), expected);
+        }
+        assert!(
+            !client.ready_for_audio().unwrap(),
+            "A fourth identical reply must renew before the next turn"
+        );
+        assert_eq!(next_context_output(&mut client), Output::ContextCleared);
+        assert!(client.ready_for_audio().unwrap());
+        assert_eq!(finish(&mut client, false), Output::Done);
+        assert!(
+            client.ready_for_audio().unwrap(),
+            "Renewal resets the count"
+        );
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn only_consecutive_finished_identical_replies_count_as_a_loop() {
+        let (addr, server) = mock_server(|mut ws| {
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        for (text, cancelled, count) in [
+            ("Goodbye, take care now.", false, 1),
+            ("goodbye TAKE care now", false, 2),
+            ("Your name is Sam.", false, 1),
+            ("Your name is Sam!", false, 2),
+            ("Your name", true, 2),
+            ("Sam", false, 0),
+            ("", false, 0),
+            ("Your name is Sam.", false, 1),
+            ("Your name is Sam.", false, 2),
+            ("your name is sam", false, 3),
+            ("Your name, is Sam?", false, 4),
+        ] {
+            let now = Instant::now();
+            client.reply.clear();
+            client.phase = if cancelled {
+                Phase::Cancelling {
+                    id: Some("current".into()),
+                    since: now,
+                    last_sent: now,
+                }
+            } else {
+                Phase::Generating {
+                    id: Some("current".into()),
+                    since: now,
+                }
+            };
+            client
+                .process(json!({"type":"response.output_text.delta","response_id":"current","delta":text}))
+                .unwrap();
+            let status = if cancelled { "cancelled" } else { "completed" };
+            client
+                .process(
+                    json!({"type":"response.done","response":{"id":"current","status":status}}),
+                )
+                .unwrap();
+            assert_eq!(client.identical_replies, count, "After {text:?}");
+            assert_eq!(client.can_admit(0), count < MAX_IDENTICAL_REPLIES);
+        }
+        drop(client);
+        server.join().unwrap();
+    }
+
     #[test]
     #[ignore = "Requires cached Liquid assets; uses no microphone or speakers"]
     fn liquid_backend_cancels_and_accepts_the_next_turn() {
@@ -1232,6 +1422,164 @@ mod tests {
                 "Backend diagnostics must be private"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "Requires cached Liquid assets and macOS `say`; uses no microphone or speakers"]
+    fn liquid_sustained_voice_conversation_keeps_replies_varied() {
+        // Greedy decoding answered every turn of such a session with one repeated reply.
+        const TURNS: [&str; 40] = [
+            "Hi there, how are you doing today?",
+            "My name is Sam, and I work as a nurse.",
+            "Do you remember my name?",
+            "What should I cook for dinner tonight?",
+            "I don't really like spicy food.",
+            "Okay.",
+            "Tell me something interesting about octopuses.",
+            "Wow. Tell me more.",
+            "Yeah.",
+            "What's your favorite season, and why?",
+            "I think you keep starting every answer the same way.",
+            "Let's play a game. Give me a riddle.",
+            "Is it a shadow?",
+            "I give up.",
+            "What did I tell you I do for work?",
+            "I'm feeling a bit tired today.",
+            "Thanks.",
+            "Sure.",
+            "Can you recommend a book for the weekend?",
+            "Why that one?",
+            "Tell me a short joke.",
+            "Another one, please.",
+            "I've been thinking about AI and creativity lately.",
+            "When I paint, the messy part is where the ideas come from.",
+            "Yeah, exactly.",
+            "Mm-hmm.",
+            "Be honest with me. Do you have opinions?",
+            "I had a job interview yesterday.",
+            "It went okay, I guess.",
+            "Right.",
+            "My friend Maya is here with me now.",
+            "Tell Maya a fun fact about space.",
+            "Cool.",
+            "She's laughing.",
+            "What should we do this weekend?",
+            "Board games could be fun.",
+            "Can you summarize what we've talked about so far?",
+            "What's my friend's name?",
+            "Okay, I need to go now.",
+            "Bye.",
+        ];
+        let directory = std::env::temp_dir().join(format!(
+            "boubou-sustained-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let speech: Vec<Vec<i16>> = TURNS
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let path = directory.join(format!("{index}.wav"));
+                let status = std::process::Command::new("say")
+                    .args(["--file-format=WAVE", "--data-format=LEI16@16000", "-o"])
+                    .arg(&path)
+                    .arg(text)
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "Cannot synthesize: {text}");
+                hound::WavReader::open(&path)
+                    .unwrap()
+                    .samples()
+                    .collect::<std::result::Result<_, _>>()
+                    .unwrap()
+            })
+            .collect();
+        std::fs::remove_dir_all(&directory).unwrap();
+        let cache = std::env::var_os("BOUBOU_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
+        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let backend =
+            crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
+        // Roughly 15-20 minutes of spoken conversation, enough to cross one context renewal.
+        let turns = 3 * TURNS.len();
+        let began = Instant::now();
+        let (mut renewals, mut interruptions) = (0, 0);
+        let mut replies = Vec::new();
+        for (turn, pcm) in speech.iter().cycle().take(turns).enumerate() {
+            while !client.ready_for_audio().unwrap() {
+                renewals += usize::from(matches!(
+                    client.poll().unwrap(),
+                    Some(Output::ContextCleared)
+                ));
+            }
+            for frame in pcm.chunks(320) {
+                client.append_audio(frame).unwrap();
+            }
+            client.finish_audio().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(120);
+            let (mut text, mut samples, mut cut) = (String::new(), 0, false);
+            while client.busy() {
+                assert!(Instant::now() < deadline, "Turn {turn} timed out");
+                match client.poll().unwrap() {
+                    Some(Output::Text(delta)) => text.push_str(&delta),
+                    Some(Output::Audio(pcm)) => {
+                        samples += pcm.len();
+                        // Barge in on every third reply after about 1.5 s of speech.
+                        if turn % 3 == 2 && samples >= 36_000 && !cut {
+                            cut = client.interrupt().unwrap();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if cut {
+                interruptions += 1;
+                continue;
+            }
+            assert!(samples > 0, "Turn {turn} produced no speech");
+            let words: String = text
+                .to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                .collect();
+            replies.push(words.split_whitespace().collect::<Vec<_>>().join(" "));
+        }
+        let (mut repeated, mut run, mut longest) = (0, 1, 1);
+        for pair in replies.windows(2) {
+            run = if pair[0] == pair[1] { run + 1 } else { 1 };
+            repeated += usize::from(run > 1);
+            longest = longest.max(run);
+        }
+        eprintln!(
+            "SUSTAINED_CONVERSATION turns={} completed={} interruptions={interruptions} renewals={renewals} consecutive_repeats={repeated} longest_identical_run={longest} elapsed={:?}",
+            turns,
+            replies.len(),
+            began.elapsed()
+        );
+        assert!(renewals > 0, "The session never crossed a context renewal");
+        assert!(interruptions > 0, "No reply was interrupted");
+        assert!(longest <= 2, "Replies looped: {replies:#?}");
+        assert!(
+            repeated * 10 < replies.len(),
+            "Too many repeated replies: {replies:#?}"
+        );
+        assert!(
+            reqwest::blocking::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{}/health", backend.address))
+                .send()
+                .unwrap()
+                .status()
+                .is_success()
+        );
     }
 
     #[test]
