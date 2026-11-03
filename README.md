@@ -39,6 +39,18 @@ The active context window is 32,768 tokens. Before it fills, Boubou automaticall
 
 Interruptions cannot erase already generated model context. Audio is not saved by default. Real microphone, echo, interruption quality, and release readiness require separate device testing.
 
+## Optional conversation recording
+
+To investigate repeated replies or incorrect input, explicitly enable local recording:
+
+```sh
+boubou run liquid --offline --record-session ~/Desktop/boubou-session
+```
+
+Choose a **new** directory with an existing parent. This saves private conversation content: submitted user audio, generated assistant audio, reply text, and timed control events. It does not transcribe user speech or record what was physically heard. Nothing is uploaded, and ordinary runs remain unrecorded. `--manual` can be used for a comparison; `--input` cannot be combined with recording.
+
+The directory contains `events.jsonl` and per-turn `user-NNNNNN.wav` / `assistant-NNNNNN.wav`. Recording uses a bounded background writer and a 256 MiB budget; failure is explicit rather than silently dropping data. Ctrl+C finalizes recordings when the writer is healthy. Keep these files outside the repository, inspect them before sharing, and delete them when no longer needed. Do not publish private speech in issues or commits. See [local conversation evidence](spec/0004-local-conversation-evidence.md) for limitations and reproduction steps.
+
 ## Development
 
 ```sh

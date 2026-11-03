@@ -4,6 +4,8 @@ mod audio;
 mod backend;
 mod realtime;
 #[cfg(any(target_os = "macos", test))]
+mod recording;
+#[cfg(any(target_os = "macos", test))]
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -55,6 +57,10 @@ enum Action {
         /// Save spoken replies to a PCM16 mono 24 kHz WAV (requires --input).
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
+        /// Record submitted speech, generated replies, and events in a NEW local directory.
+        /// Disabled by default. Contains private conversation content; nothing is uploaded.
+        #[arg(long, value_name = "DIR", conflicts_with = "input")]
+        record_session: Option<PathBuf>,
     },
     /// Download and verify the Liquid model and its inference backend.
     Pull {
@@ -143,6 +149,7 @@ fn run() -> Result<()> {
             manual,
             input,
             output,
+            record_session,
             ..
         } => {
             if input.is_empty() {
@@ -162,7 +169,13 @@ fn run() -> Result<()> {
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
             let mut connection = Realtime::connect(&backend.address, &stopped)?;
             let result = if turns.is_empty() {
-                microphone(&cache, &mut connection, &stopped, manual)
+                microphone(
+                    &cache,
+                    &mut connection,
+                    &stopped,
+                    manual,
+                    record_session.as_deref(),
+                )
             } else {
                 from_files(turns, output.as_deref(), &mut connection, &stopped)
             };
@@ -283,6 +296,7 @@ fn microphone(
     _chat: &mut Realtime,
     _stopped: &AtomicBool,
     _manual: bool,
+    _record_session: Option<&Path>,
 ) -> Result<()> {
     bail!(
         "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
@@ -290,7 +304,53 @@ fn microphone(
 }
 
 #[cfg(target_os = "macos")]
-fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: bool) -> Result<()> {
+fn microphone(
+    cache: &Path,
+    chat: &mut Realtime,
+    stopped: &AtomicBool,
+    manual: bool,
+    record_session: Option<&Path>,
+) -> Result<()> {
+    let recording = record_session
+        .map(|path| {
+            let recording = recording::Recording::start(path, serde_json::json!({
+                "version":env!("CARGO_PKG_VERSION"), "profile":"liquid",
+                "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
+                "manual":manual, "context_tokens":backend::CONTEXT_TOKENS
+            }))?;
+            eprintln!(
+                "Recording private conversation content locally to {}. Nothing is uploaded.",
+                path.display()
+            );
+            Ok::<_, anyhow::Error>(recording)
+        })
+        .transpose()?;
+    let result = microphone_loop(cache, chat, stopped, manual, recording.as_ref());
+    if let Some(recording) = recording {
+        let status = if result.is_err() {
+            "error"
+        } else if stopped.load(Ordering::SeqCst) {
+            "cancelled"
+        } else {
+            "completed"
+        };
+        let finalized = recording.finish(status);
+        if let Err(error) = &finalized {
+            eprintln!("Session recording could not finish: {error:#}");
+        }
+        return result.and(finalized);
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn microphone_loop(
+    cache: &Path,
+    chat: &mut Realtime,
+    stopped: &AtomicBool,
+    manual: bool,
+    recording: Option<&recording::Recording>,
+) -> Result<()> {
     eprintln!("Allow microphone access if macOS asks. Speak English.");
     let (mut audio, captured) = audio::Audio::start(cache, !manual, stopped)?;
     let _terminal = Terminal::enter()?;
@@ -314,6 +374,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
 
     while !stopped.load(Ordering::SeqCst) {
         audio.check_error()?;
+        if let Some(recording) = recording {
+            recording.check_error()?;
+        }
         if let Some(since) = recording_since {
             ensure!(
                 since.elapsed() < Duration::from_secs(30),
@@ -328,6 +391,11 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                 break;
             }
             if key.code == KeyCode::Esc {
+                if let Some(recording) = recording {
+                    recording.note(serde_json::json!({
+                        "event":"pause", "queued_samples":audio.pending_samples()
+                    }))?;
+                }
                 trace(
                     "pause.key",
                     format_args!("queued_samples={}", audio.pending_samples()),
@@ -348,6 +416,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
             if key.code == KeyCode::Enter && listening_since.is_none() {
                 listening_since = Some(Instant::now());
                 trace("resume.key", format_args!(""));
+                if let Some(recording) = recording {
+                    recording.note(serde_json::json!({"event":"resume"}))?;
+                }
                 if !manual {
                     eprint!("\r\nListening…\r\n");
                 }
@@ -358,6 +429,12 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     submit_at.get_or_insert_with(Instant::now);
                 } else {
                     if chat.busy() || audio.pending_samples() > 0 {
+                        if let Some(recording) = recording {
+                            recording.note(serde_json::json!({
+                                "event":"interrupt.requested", "backend_busy":chat.busy(),
+                                "queued_samples":audio.pending_samples()
+                            }))?;
+                        }
                         audio.clear()?;
                         if chat.interrupt()? {
                             eprint!("\r\n[Interrupted]\r\n");
@@ -365,6 +442,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     }
                     let turn = pending.push(voice::Segment::Start(Vec::new()))?;
                     trace("input.start", format_args!("turn={turn} manual=true"));
+                    if let Some(recording) = recording {
+                        recording.note(serde_json::json!({"event":"capture.start", "turn":turn}))?;
+                    }
                     recording_since = Some(Instant::now());
                     recording_samples = 0;
                     reply_open = false;
@@ -409,6 +489,9 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     } else {
                         let turn = pending.push(voice::Segment::End(Vec::new()))?;
                         trace("input.end", format_args!("turn={turn} manual=true"));
+                        if let Some(recording) = recording {
+                            recording.note(serde_json::json!({"event":"capture.end", "turn":turn}))?;
+                        }
                         recording_since = None;
                     }
                     continue;
@@ -429,6 +512,14 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
             let ending = matches!(segment, voice::Segment::End(_));
             let turn = pending.push(segment)?;
             if starting {
+                if let Some(recording) = recording {
+                    recording.note(serde_json::json!({
+                        "event":"capture.start", "turn":turn,
+                        "capture_age_ms":frame.captured_at.elapsed().as_millis(),
+                        "near_end_speech":frame.near_end_speech,
+                        "backend_busy":chat.busy(), "queued_samples":audio.pending_samples()
+                    }))?;
+                }
                 trace(
                     "input.start",
                     format_args!(
@@ -438,6 +529,12 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
                     ),
                 );
                 if chat.busy() || audio.pending_samples() > 0 {
+                    if let Some(recording) = recording {
+                        recording.note(serde_json::json!({
+                            "event":"interrupt.requested", "backend_busy":chat.busy(),
+                            "queued_samples":audio.pending_samples()
+                        }))?;
+                    }
                     audio.clear()?;
                     if chat.interrupt()? {
                         eprint!("\r\n[Interrupted]\r\n");
@@ -447,16 +544,23 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
             }
             if ending {
                 trace("input.end", format_args!("turn={turn} manual=false"));
+                if let Some(recording) = recording {
+                    recording.note(serde_json::json!({"event":"capture.end", "turn":turn}))?;
+                }
             }
             if !chat.busy() && audio.pending_samples() == 0 {
-                send_pending(
+                send_pending_recorded(
                     &mut pending,
                     chat,
                     !voice.is_active() && recording_since.is_none(),
+                    recording,
                 )?;
             }
         }
         if let Some(output) = chat.poll()? {
+            if let Some(recording) = recording {
+                recording.output(&output)?;
+            }
             last_output = Instant::now();
             match output {
                 Output::Text(text) => {
@@ -479,10 +583,11 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
             }
         }
         if !chat.busy() && audio.pending_samples() == 0 {
-            send_pending(
+            send_pending_recorded(
                 &mut pending,
                 chat,
                 !voice.is_active() && recording_since.is_none(),
+                recording,
             )?;
         }
         // poll() already waits briefly on the local socket. Detect a stalled player
@@ -496,20 +601,36 @@ fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: b
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(test)]
 fn send_pending(
     pending: &mut voice::PendingAudio,
     chat: &mut Realtime,
     allow_finish: bool,
+) -> Result<()> {
+    send_pending_recorded(pending, chat, allow_finish, None)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn send_pending_recorded(
+    pending: &mut voice::PendingAudio,
+    chat: &mut Realtime,
+    allow_finish: bool,
+    recording: Option<&recording::Recording>,
 ) -> Result<()> {
     if !chat.ready_for_audio()? {
         return Ok(());
     }
     if let Some((turn, pcm, end)) = pending.take(allow_finish) {
         chat.append_audio(&pcm)?;
+        if let Some(recording) = recording {
+            recording.input(turn, &pcm, false)?;
+        }
         if end {
             trace("input.submit", format_args!("turn={turn}"));
             chat.finish_audio()?;
+            if let Some(recording) = recording {
+                recording.input(turn, &[], true)?;
+            }
             eprint!("\r\nThinking…\r\n");
         }
     }
@@ -654,4 +775,20 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn session_recording_is_explicit_and_only_for_microphone_mode() {
+        let cli = Cli::try_parse_from(["boubou", "run", "liquid", "--offline"]).unwrap();
+        assert!(matches!(cli.command, Action::Run { record_session: None, .. }));
+        assert!(Cli::try_parse_from([
+            "boubou", "run", "liquid", "--offline", "--record-session", "recording"
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "boubou", "run", "liquid", "--manual", "--record-session", "recording"
+        ]).is_ok());
+        assert!(Cli::try_parse_from([
+            "boubou", "run", "liquid", "--input", "question.wav", "--record-session", "recording"
+        ]).is_err());
+    }
+
 }
