@@ -20,8 +20,8 @@ resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Append `--help` for options.
 
-Development candidate: signing, notarization and installation on another Mac
-remain unverified.
+The [first MVP](spec/0001-liquid-macos-product.md) is accepted.
+Signing and notarization remain deferred.
 
 ## Develop
 

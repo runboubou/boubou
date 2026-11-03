@@ -1,5 +1,7 @@
 # Native npm package
 
+**Status:** [Accepted for MVP 1](0001-liquid-macos-product.md).
+
 **Behavior:** Publish `boubou` with the `bobo` command. Require the explicit model
 ID `LFM3-Audio-2B` for run/pull. Bundle the Mac arm64 Rust executable and a small
 Node launcher; inherit terminal I/O, cancel Rust on shutdown, wait for its cleanup
@@ -20,6 +22,3 @@ produce errors; do not publish partial artifacts.
 documented command outside the checkout, including a damaged global npm cache,
 anonymous installation, real offline inference, microphone startup and cleanup.
 Publish only the reviewed clean-main artifact and read back registry integrity.
-
-Beta candidate only: signing, notarization and another-Mac acceptance remain
-unverified. Additional models, voices and websites are deferred.

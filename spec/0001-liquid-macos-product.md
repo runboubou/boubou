@@ -1,7 +1,11 @@
 # Liquid 2B MVP
 
-**Outcome:** A user installs the native npm package and runs
-`bobo run LFM3-Audio-2B` for local English voice chat without a compiler.
+**Status:** MVP 1 accepted on 2026-11-03. Runtime acceptance is recorded in
+[#2](https://github.com/entropyai-labs/boubou/issues/2); the maintainer also
+reported a successful one-command run on a new Mac.
+
+**Outcome:** [One command](../README.md#run) starts local English voice chat with
+`LFM3-Audio-2B`, without a compiler.
 
 ## Contract
 
@@ -21,9 +25,8 @@ Real-model and microphone checks separately cover multi-turn chat, interruption,
 playback-only silence, pause/resume and owned-process cleanup. Record tested
 versions/devices and distinguish measured results from unexecuted checks.
 
-Runtime acceptance is recorded in [#2](https://github.com/entropyai-labs/boubou/issues/2).
 The [development package contract](0006-liquid-development-package.md) covers delivery.
-Signing, notarization and clean-Mac release qualification remain deferred in
+Signing, notarization and formal release qualification remain deferred in
 [#5](https://github.com/entropyai-labs/boubou/issues/5).
 
 Model/configuration selection, additional voices and all website work are outside this MVP.

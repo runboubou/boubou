@@ -1,5 +1,7 @@
 # Repeated replies
 
+**Status:** [Accepted for MVP 1](0001-liquid-macos-product.md).
+
 **Problem:** Liquid can repeat the same stock answer throughout a long session.
 
 **Behavior:**

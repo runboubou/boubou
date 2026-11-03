@@ -1,5 +1,7 @@
 # Automatic context renewal
 
+**Status:** [Accepted for MVP 1](0001-liquid-macos-product.md).
+
 **Problem:** The pinned backend has a 32,768-token context. Keep long sessions
 running by clearing history before capacity is exhausted.
 
