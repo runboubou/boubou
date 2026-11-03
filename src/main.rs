@@ -26,8 +26,14 @@ use std::{
 #[cfg(target_os = "macos")]
 use std::{sync::mpsc::TryRecvError, time::Duration};
 
+const MODEL_ID: &str = "LFM3-Audio-2B";
+
 #[derive(Parser)]
-#[command(version, about = "Local voice conversations, one command away")]
+#[command(
+    name = "bobo",
+    version,
+    about = "Local voice conversations, one command away"
+)]
 struct Cli {
     /// Storage for pinned models and inference binaries.
     #[arg(long, global = true, env = "BOUBOU_HOME")]
@@ -40,7 +46,7 @@ struct Cli {
 enum Action {
     /// Start a local voice conversation with automatic context clearing.
     Run {
-        #[arg(default_value = "liquid", value_parser = ["liquid"])]
+        #[arg(value_parser = [MODEL_ID])]
         model: String,
         /// Use cached assets only. Never download or check for updates.
         #[arg(long)]
@@ -58,7 +64,7 @@ enum Action {
     },
     /// Download and verify the Liquid model and its inference backend.
     Pull {
-        #[arg(default_value = "liquid", value_parser = ["liquid"])]
+        #[arg(value_parser = [MODEL_ID])]
         model: String,
         #[arg(long)]
         offline: bool,
@@ -72,7 +78,7 @@ fn main() {
         if error.is::<Cancelled>() {
             std::process::exit(130);
         }
-        eprintln!("\nBoubou: {error:#}");
+        eprintln!("\nbobo: {error:#}");
         std::process::exit(1);
     }
 }
@@ -118,13 +124,13 @@ fn run() -> Result<()> {
         .context("Cannot find a cache directory. Set BOUBOU_HOME or --cache-dir.")?;
     match cli.command {
         Action::Doctor => {
-            println!("Boubou {}", env!("CARGO_PKG_VERSION"));
+            println!("bobo {}", env!("CARGO_PKG_VERSION"));
             println!(
                 "Platform: {} / {}",
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
-            println!("Profile: Liquid LFM3-Audio-2B · Q4_K_M + Q8_0 audio · llama.cpp b11960");
+            println!("Profile: Liquid AI {MODEL_ID} · Q4_K_M + Q8_0 audio · llama.cpp b11960");
             println!("Voice chat: English · audio input 16 kHz · audio output 24 kHz");
             println!(
                 "Conversation context: {} tokens; automatically cleared before it fills",
@@ -135,7 +141,7 @@ fn run() -> Result<()> {
         }
         Action::Pull { offline, .. } => {
             assets::prepare(&cache, offline)?;
-            eprintln!("Liquid is ready. Run: boubou run liquid --offline");
+            eprintln!("{MODEL_ID} is ready. Run: bobo run {MODEL_ID} --offline");
             Ok(())
         }
         Action::Run {
@@ -158,7 +164,7 @@ fn run() -> Result<()> {
             let flag = stopped.clone();
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
             check_cancel(&stopped)?;
-            eprintln!("Loading Liquid locally…");
+            eprintln!("Loading {MODEL_ID} locally…");
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
             let mut connection = Realtime::connect(&backend.address, &stopped)?;
             let result = if turns.is_empty() {
@@ -633,20 +639,30 @@ mod tests {
     }
 
     #[test]
+    fn model_name_is_explicit_and_matches_the_upstream_model() {
+        for command in ["run", "pull"] {
+            assert!(Cli::try_parse_from(["bobo", command, MODEL_ID]).is_ok());
+            assert!(Cli::try_parse_from(["bobo", command]).is_err());
+            assert!(Cli::try_parse_from(["bobo", command, "liquid"]).is_err());
+            assert!(Cli::try_parse_from(["bobo", command, "other"]).is_err());
+        }
+    }
+
+    #[test]
     fn output_requires_a_file_input() {
-        assert!(Cli::try_parse_from(["boubou", "run", "liquid", "--output", "reply.wav"]).is_err());
-        assert!(Cli::try_parse_from(["boubou", "run", "liquid", "--offline"]).is_ok());
-        assert!(Cli::try_parse_from(["boubou", "run", "other"]).is_err());
+        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--output", "reply.wav"]).is_err());
+        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--offline"]).is_ok());
+        assert!(Cli::try_parse_from(["bobo", "run", "other"]).is_err());
     }
 
     #[test]
     fn manual_recording_is_available_only_for_the_microphone() {
-        assert!(Cli::try_parse_from(["boubou", "run", "liquid", "--manual", "--offline"]).is_ok());
+        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--manual", "--offline"]).is_ok());
         assert!(
             Cli::try_parse_from([
-                "boubou",
+                "bobo",
                 "run",
-                "liquid",
+                MODEL_ID,
                 "--manual",
                 "--input",
                 "question.wav"

@@ -1,7 +1,7 @@
 # Liquid 2B MVP
 
-**Outcome:** After extracting the Mac development package, a user runs
-`sh ./install.sh --run` to start local English voice chat without developer tools.
+**Outcome:** A user installs the native npm package and runs
+`bobo run LFM3-Audio-2B` for local English voice chat without a compiler.
 
 ## Contract
 

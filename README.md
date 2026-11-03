@@ -1,32 +1,40 @@
 # Boubou
 
-Local English voice chat on Apple Silicon Macs with Liquid LFM3-Audio-2B.
+Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B.
 
 ## Run
 
-Get the development archive from the maintainer, extract it, then run in its directory:
+Requires Node.js/npm. Install the beta package, then start a conversation:
 
 ```sh
-sh ./install.sh --run
+npm install -g boubou@beta
+bobo run LFM3-Audio-2B
 ```
 
-First use downloads about 1.42 GB of verified assets and asks for microphone access. Inference stays local; no developer tools are needed.
+For a supplied development `.tgz`, use `npm install -g /path/to/package.tgz`.
 
-Speak to chat or interrupt a reply. `Esc` pauses, `Enter` resumes, `Ctrl+C` exits.
+First use downloads about 1.42 GB of verified assets and asks for microphone
+access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
+resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
-Later: `"$HOME/.local/bin/boubou" run liquid`. Uninstall: `sh ./uninstall.sh`; models are kept. See [package instructions](packaging/README.txt) for offline use and installation paths.
+Uninstall with `npm uninstall -g boubou`; model caches in
+`~/Library/Caches/boubou` and saved audio are kept. See `bobo run --help` for options.
 
-Development candidate: signing, notarization and installation on another Mac are unverified.
+Development candidate: signing, notarization and installation on another Mac
+remain unverified.
 
 ## Develop
 
-Requires Rust 1.88+ and Xcode Command Line Tools; packaging also uses Python 3.9+.
+Requires Rust 1.88+, Xcode Command Line Tools, Python 3.9+ and Node.js/npm.
+Build from a clean commit:
 
 ```sh
 cargo build --locked
 python3 packaging/build-macos.py
 ```
 
-Build packages from a clean commit; packaging fetches verified upstream licenses. See [checks](.github/workflows/quality.yml), [contribution rules](AGENTS.md) and the [MVP contract](spec/0001-liquid-macos-product.md).
-
-Model: [LFM Open License](https://www.liquid.ai/lfm-license). Backend: [llama.cpp MIT](https://github.com/ggml-org/llama.cpp/blob/b11960/LICENSE). Full license texts are included in the package.
+The npm tarball, checksum and provenance are under `target/dist/<commit>/`.
+See [checks](.github/workflows/quality.yml) and [contribution rules](AGENTS.md).
+Model: [LFM Open License](https://www.liquid.ai/lfm-license).
+Backend: [llama.cpp MIT](https://github.com/ggml-org/llama.cpp/blob/b11960/LICENSE).
+Full upstream license texts are verified during packaging and included in the package.
