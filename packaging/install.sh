@@ -24,7 +24,10 @@ fi
 (cd "$package_dir" && /usr/bin/shasum -a 256 -c SHA256SUMS > /dev/null)
 mkdir -p "$install_dir"
 temporary=$(/usr/bin/mktemp "$install_dir/.boubou-install.XXXXXX")
-trap 'rm -f "$temporary"' 0 HUP INT TERM
+trap 'rm -f "$temporary"' 0
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 /bin/cp "$package_dir/boubou" "$temporary"
 /bin/chmod 755 "$temporary"
 /bin/mv -f "$temporary" "$install_dir/boubou"

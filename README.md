@@ -44,7 +44,7 @@ Interruptions cannot erase already generated model context. Audio is not saved b
 
 ## Development
 
-Building requires Rust 1.88+, Python 3.11+ for package assembly, and Xcode Command Line Tools. From a clean committed tree:
+Building requires Rust 1.88+, Python 3.9+ for package assembly, and Xcode Command Line Tools. From a clean committed tree:
 
 ```sh
 python3 packaging/build-macos.py        # Precompiled archive, checksums and notices in target/dist

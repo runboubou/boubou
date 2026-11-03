@@ -20,8 +20,11 @@ def output(*argv):
 
 
 def sha256(path):
+    digest = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main():
@@ -31,7 +34,7 @@ def main():
         raise SystemExit("Commit the reviewed packaging candidate before building its archive.")
     subprocess.run(["cargo", "build", "--release", "--locked", "--offline", "--target-dir", str(ROOT / "target")], cwd=ROOT, check=True)
     binary = ROOT / "target/release/boubou"
-    subprocess.run(["lipo", "-verify_arch", "arm64", str(binary)], check=True)
+    subprocess.run(["lipo", str(binary), "-verify_arch", "arm64"], check=True)
     subprocess.run(["codesign", "--verify", "--strict", str(binary)], check=True)
     version = output(str(binary), "--version").split()[1]
     source = output("git", "rev-parse", "HEAD")
