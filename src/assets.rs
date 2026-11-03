@@ -1,3 +1,4 @@
+use crate::MODEL_ID;
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
 use fs2::FileExt;
@@ -131,7 +132,7 @@ pub fn status(cache_dir: &Path) -> Result<()> {
     );
     ensure!(
         ready && runtime_ready,
-        "Liquid assets are missing or invalid. Run `boubou pull liquid` while online."
+        "Liquid assets are missing or invalid. Run `bobo pull {MODEL_ID}` while online."
     );
     Ok(())
 }
@@ -177,7 +178,7 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     }
     ensure!(
         !offline,
-        "{} is missing or corrupted. Run `boubou pull liquid` while online first.",
+        "{} is missing or corrupted. Run `bobo pull {MODEL_ID}` while online first.",
         spec.name
     );
 
@@ -188,8 +189,11 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(30 * 60))
-        .user_agent(concat!("boubou/", env!("CARGO_PKG_VERSION")))
-        .build()?;
+        .user_agent(concat!("boubou/", env!("CARGO_PKG_VERSION")));
+    // Unit tests use local HTTP fixtures, independent of the developer's proxy.
+    #[cfg(test)]
+    let client = client.no_proxy();
+    let client = client.build()?;
     let mut request = client
         .get(spec.url)
         .header(header::ACCEPT_ENCODING, "identity");
@@ -433,9 +437,19 @@ mod tests {
         let dir = TestDir::new();
         let hash = sha256(&b"abcdef"[..]).unwrap();
         let spec = spec("http://127.0.0.1:1/must-not-connect", &hash);
-        assert!(fetch(&spec, &dir.0, true).is_err());
+        assert!(
+            fetch(&spec, &dir.0, true)
+                .unwrap_err()
+                .to_string()
+                .contains("bobo pull LFM3-Audio-2B")
+        );
         fs::write(dir.0.join("weights"), b"badbad").unwrap();
-        assert!(fetch(&spec, &dir.0, true).is_err());
+        assert!(
+            fetch(&spec, &dir.0, true)
+                .unwrap_err()
+                .to_string()
+                .contains("bobo pull LFM3-Audio-2B")
+        );
         fs::write(dir.0.join("weights"), b"abcdef").unwrap();
         assert!(fetch(&spec, &dir.0, true).is_ok());
     }
@@ -443,7 +457,12 @@ mod tests {
     #[test]
     fn doctor_rejects_an_empty_cache() {
         let dir = TestDir::new();
-        assert!(status(&dir.0).is_err());
+        assert!(
+            status(&dir.0)
+                .unwrap_err()
+                .to_string()
+                .contains("bobo pull LFM3-Audio-2B")
+        );
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
     }
 

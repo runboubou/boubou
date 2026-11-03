@@ -1,4 +1,4 @@
-use crate::assets::Assets;
+use crate::{MODEL_ID, assets::Assets};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     fs::{self, OpenOptions},
@@ -125,7 +125,7 @@ impl Backend {
             })
         }) {
             return anyhow!(
-                "This conversation reached Liquid's context capacity ({CONTEXT_TOKENS} tokens). Start a new conversation with `boubou run liquid --offline`. Backend log: {}",
+                "This conversation reached Liquid's context capacity ({CONTEXT_TOKENS} tokens). Start a new conversation with `bobo run {MODEL_ID} --offline`. Backend log: {}",
                 self.log_path.display()
             );
         }
@@ -290,7 +290,11 @@ mod tests {
                 .to_string()
                 .contains("context capacity (32768 tokens)")
         );
-        assert!(error.to_string().contains("Start a new conversation"));
+        assert!(
+            error
+                .to_string()
+                .contains("bobo run LFM3-Audio-2B --offline")
+        );
         fs::write(
             &log_path,
             "normal startup; unrelated text: the conversation does not fit in the context",

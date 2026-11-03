@@ -1,13 +1,11 @@
-# Spec: <change>
+# <Change>
 
-Follow the [Spec policy](../AGENTS.md#specifications); update an existing Spec when it covers the change.
+Keep only what the reader needs; omit unused fields.
 
-**Problem:** What needs to change, and why?
+**Problem:** Why change?
 
-**Behavior:** Describe observable inputs, outputs, and essential constraints.
+**Behavior:** Observable result, scope and constraints.
 
-**Failure cases:** Define invalid input, cancellation, and recovery where relevant.
+**Failures:** Relevant errors and recovery.
 
-**Scope:** Name affected interfaces and what is deliberately excluded.
-
-**Acceptance:** List the smallest reproducible tests. Mark real-model, audio-device, or release checks separately when applicable.
+**Verification:** Smallest meaningful checks; identify unexecuted acceptance.

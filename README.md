@@ -1,55 +1,40 @@
 # Boubou
 
-Local English voice conversations on Apple Silicon Macs, powered by Liquid AI LFM3-Audio-2B. This is a development prototype, not a signed installer or a device-quality guarantee.
+Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B.
 
-## Install
+## Run
 
-Requires Rust 1.88+ and Xcode Command Line Tools.
+Requires macOS 13.3+, Apple Silicon, Node.js 18+ and npm:
 
 ```sh
-cargo install --path . --locked
-boubou run liquid
+npx --yes --cache "$HOME/Library/Caches/boubou/npm" boubou@beta run LFM3-Audio-2B
 ```
 
-First use downloads and verifies approximately 1.42 GB of model weights plus a local inference backend. Allow microphone access when macOS asks. Inference stays local; there is no cloud fallback.
+The command keeps npm downloads in Boubou's user cache; no global installation,
+npm login or administrator access is needed.
 
-## Commands
+First use downloads about 1.42 GB of verified assets and asks for microphone
+access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
+resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
-```sh
-boubou pull liquid                     # Prepare and verify assets
-boubou run liquid --offline            # Use cached assets only
-boubou doctor                          # Check cached assets
-boubou run liquid --offline --manual   # Record/submit turns manually
-boubou --cache-dir /path/to/cache run liquid
-```
+Models and runtime downloads are kept in `~/Library/Caches/boubou`.
+Append `--help` for options.
 
-The default cache is `~/Library/Caches/boubou`; `BOUBOU_HOME` also overrides it. Downloads resume and are checked for size and SHA-256.
+The [first MVP](spec/0001-liquid-macos-product.md) is accepted.
+Signing and notarization remain deferred.
 
-## Controls
+## Develop
 
-Speak English; a short pause submits a turn. Speaking during a reply interrupts playback. `Esc` pauses input submission, `Enter` resumes it, and `Ctrl+C` exits. Each input and queued playback segment is limited to 30 seconds.
-
-File mode accepts 16 kHz, mono, PCM16 WAV and does not open audio devices:
+Requires Rust 1.88+, Xcode Command Line Tools, Python 3.9+ and Node.js/npm.
+Build from a clean commit:
 
 ```sh
-boubou run liquid --offline --input question.wav --output reply.wav
-```
-
-The active context window is 32,768 tokens. Before it fills, Boubou automatically clears the conversation history and opens a fresh session while keeping the model loaded. A short terminal notice marks the change. Capture, pending turns, and keyboard controls continue during renewal; you may need to restate facts from before the clear. This allows continued conversation with bounded memory, not unlimited recall. See [automatic context renewal](spec/0003-automatic-context-renewal.md). If Liquid gives the same sentence four times in a row, Boubou clears the context the same way, because the model does not recover from such a loop. See [repeated replies](spec/0005-repeated-replies.md).
-
-Interruptions cannot erase already generated model context. Audio is not saved by default. Real microphone, echo, interruption quality, and release readiness require separate device testing.
-
-## Development
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-targets --all-features
 cargo build --locked
+python3 packaging/build-macos.py
 ```
 
-CI runs these checks on macOS, without downloading models or activating audio devices. See [the contribution rules](AGENTS.md#engineering) and [when to update or create a Spec](AGENTS.md#specifications).
-
-## Licenses
-
-The model uses the [LFM Open License v1.0](https://huggingface.co/LiquidAI/LFM3-Audio-2B); the [pinned backend](https://github.com/ggml-org/llama.cpp/releases/tag/b11960) uses MIT. Model redistribution and commercial-use terms still apply.
+The npm tarball, checksum and provenance are under `target/dist/<commit>/`.
+See [checks](.github/workflows/quality.yml) and [contribution rules](AGENTS.md).
+Model: [LFM Open License](https://www.liquid.ai/lfm-license).
+Backend: [llama.cpp MIT](https://github.com/ggml-org/llama.cpp/blob/b11960/LICENSE).
+Full upstream license texts are verified during packaging and included in the package.
