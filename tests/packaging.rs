@@ -5,6 +5,7 @@ use std::{
     os::unix::{fs::PermissionsExt, process::ExitStatusExt},
     path::PathBuf,
     process::{Command, Output, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -13,15 +14,17 @@ struct Package(PathBuf);
 
 impl Package {
     fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "bobo package {} {}",
+            "bobo package {} {} {}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir_all(&root).unwrap();
+        fs::create_dir(&root).unwrap();
         fs::write(root.join("cli.cjs"), include_str!("../packaging/cli.cjs")).unwrap();
         fs::copy(env!("CARGO_BIN_EXE_boubou"), root.join("boubou")).unwrap();
         Self(root)
