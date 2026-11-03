@@ -1,15 +1,26 @@
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
     io::ErrorKind,
     net::TcpStream,
-    sync::atomic::AtomicBool,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket};
 
 const MAX_TURN_SAMPLES: usize = 16_000 * 30;
+const MAX_OUTPUT_TOKENS: usize = 1024;
+// Pinned LFM3 audio uses one context position per eight 160-sample mel frames.
+const AUDIO_SAMPLES_PER_TOKEN: usize = 1280;
+const MAX_AUDIO_INPUT_TOKENS: usize = MAX_TURN_SAMPLES.div_ceil(AUDIO_SAMPLES_PER_TOKEN);
+// Conservative allowances for the fixed prompt, turn delimiters and playback notice.
+const SESSION_OVERHEAD_TOKENS: usize = 512;
+const TURN_OVERHEAD_TOKENS: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -19,11 +30,16 @@ pub enum Output {
     Audio(Vec<i16>),
     Done,
     Interrupted,
+    ContextCleared,
 }
 
 #[derive(Debug)]
 enum Phase {
     Idle,
+    Renewing {
+        worker: JoinHandle<Result<Realtime>>,
+        stopped: Arc<AtomicBool>,
+    },
     Generating {
         id: Option<String>,
         since: Instant,
@@ -36,8 +52,10 @@ enum Phase {
 }
 
 pub struct Realtime {
-    socket: WebSocket<TcpStream>,
+    socket: Option<WebSocket<TcpStream>>,
+    address: String,
     phase: Phase,
+    context_tokens: usize,
     interrupted: bool,
     user_samples: usize,
     audio_samples: usize,
@@ -75,8 +93,10 @@ impl Realtime {
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(10)))?;
         let mut this = Self {
-            socket,
+            socket: Some(socket),
+            address: address.to_owned(),
             phase: Phase::Idle,
+            context_tokens: SESSION_OVERHEAD_TOKENS,
             interrupted: false,
             user_samples: 0,
             audio_samples: 0,
@@ -94,7 +114,7 @@ impl Realtime {
             "type":"realtime",
             "instructions":"Respond with interleaved text and audio.",
             "output_modalities":["text","audio"],
-            "max_output_tokens":1024
+            "max_output_tokens":MAX_OUTPUT_TOKENS
         }}))?;
         this.wait_for("session.updated", stopped)?;
         Ok(this)
@@ -106,6 +126,56 @@ impl Realtime {
 
     pub fn cancelling(&self) -> bool {
         matches!(self.phase, Phase::Cancelling { .. })
+    }
+
+    /// Check before taking queued audio: renewal must not consume or split a turn.
+    pub fn ready_for_audio(&mut self) -> Result<bool> {
+        if self.busy() {
+            return Ok(false);
+        }
+        if self.user_samples > 0 {
+            return Ok(true);
+        }
+        self.prepare_turn(MAX_AUDIO_INPUT_TOKENS)
+    }
+
+    fn has_capacity(&self, input_tokens: usize) -> bool {
+        self.context_tokens + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+            < crate::backend::CONTEXT_TOKENS as usize
+    }
+
+    fn prepare_turn(&mut self, input_tokens: usize) -> Result<bool> {
+        if self.busy() {
+            return Ok(false);
+        }
+        ensure!(
+            SESSION_OVERHEAD_TOKENS + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                < crate::backend::CONTEXT_TOKENS as usize,
+            "A single turn exceeds Liquid's context capacity"
+        );
+        if self.has_capacity(input_tokens) {
+            return Ok(true);
+        }
+        let mut socket = self.socket.take().context("Liquid connection is missing")?;
+        let address = self.address.clone();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let signal = stopped.clone();
+        // b11960 has no history-delete event. Closing releases its sole slot;
+        // waiting for a fresh session must not block microphone capture or keys.
+        let worker = thread::Builder::new()
+            .name("boubou-context-renewal".into())
+            .spawn(move || {
+                let _ = socket.close(None);
+                drop(socket);
+                Self::connect(&address, &signal).context("Cannot renew Liquid context")
+            })
+            .context("Cannot start Liquid context renewal")?;
+        self.phase = Phase::Renewing { worker, stopped };
+        crate::trace(
+            "context.renewing",
+            format_args!("budget_tokens={}", self.context_tokens),
+        );
+        Ok(false)
     }
 
     pub fn append_audio(&mut self, samples: &[i16]) -> Result<()> {
@@ -120,10 +190,20 @@ impl Realtime {
         if samples.is_empty() {
             return Ok(());
         }
+        if self.user_samples == 0 {
+            ensure!(
+                self.has_capacity(MAX_AUDIO_INPUT_TOKENS),
+                "Wait for automatic context renewal before sending a new turn"
+            );
+            self.context_tokens += TURN_OVERHEAD_TOKENS;
+        }
         self.begin_user()?;
         let bytes: Vec<u8> = samples.iter().flat_map(|x| x.to_le_bytes()).collect();
         self.send(json!({"type":"input_audio_buffer.append","audio":STANDARD.encode(bytes)}))?;
-        self.user_samples += samples.len();
+        let next_samples = self.user_samples + samples.len();
+        self.context_tokens += next_samples.div_ceil(AUDIO_SAMPLES_PER_TOKEN)
+            - self.user_samples.div_ceil(AUDIO_SAMPLES_PER_TOKEN);
+        self.user_samples = next_samples;
         Ok(())
     }
 
@@ -162,12 +242,24 @@ impl Realtime {
 
     #[cfg(test)]
     fn text_turn(&mut self, text: &str) -> Result<()> {
+        // Tests use a byte upper bound; production input is always audio.
+        self.text_turn_with_tokens(text, text.len()).map(|_| ())
+    }
+
+    #[cfg(test)]
+    fn text_turn_with_tokens(&mut self, text: &str, input_tokens: usize) -> Result<bool> {
         ensure!(!self.busy(), "The previous turn is still running");
+        let mut renewed = false;
+        while !self.prepare_turn(input_tokens)? {
+            renewed |= matches!(self.poll()?, Some(Output::ContextCleared));
+        }
+        self.context_tokens += input_tokens + TURN_OVERHEAD_TOKENS;
         self.begin_user()?;
         self.send(json!({"type":"conversation.item.create","item":{
             "type":"message","role":"user","content":[{"type":"input_text","text":text}]
         }}))?;
-        self.request_response()
+        self.request_response()?;
+        Ok(renewed)
     }
 
     fn request_response(&mut self) -> Result<()> {
@@ -177,6 +269,7 @@ impl Realtime {
             format_args!("samples={}", self.user_samples),
         );
         self.send(json!({"type":"response.create"}))?;
+        self.context_tokens += MAX_OUTPUT_TOKENS;
         crate::trace("response.create.sent", format_args!(""));
         self.user_samples = 0;
         self.audio_samples = 0;
@@ -188,7 +281,10 @@ impl Realtime {
     }
 
     /// Call even if generation has ended but buffered audio is still playing.
-    pub fn interrupt(&mut self) -> Result<()> {
+    pub fn interrupt(&mut self) -> Result<bool> {
+        if matches!(self.phase, Phase::Renewing { .. }) {
+            return Ok(false);
+        }
         self.interrupted = true;
         if let Phase::Generating { id, .. } = &self.phase {
             let id = id.clone();
@@ -202,10 +298,25 @@ impl Realtime {
                 last_sent: now,
             };
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn poll(&mut self) -> Result<Option<Output>> {
+        if let Phase::Renewing { worker, .. } = &self.phase {
+            if !worker.is_finished() {
+                thread::sleep(Duration::from_millis(10));
+                return Ok(None);
+            }
+            let Phase::Renewing { worker, .. } = std::mem::replace(&mut self.phase, Phase::Idle)
+            else {
+                unreachable!();
+            };
+            *self = worker
+                .join()
+                .map_err(|_| anyhow!("Liquid context renewal worker failed"))??;
+            crate::trace("context.renewed", format_args!(""));
+            return Ok(Some(Output::ContextCleared));
+        }
         match &self.phase {
             Phase::Generating { since, .. } => ensure!(
                 since.elapsed() < REQUEST_TIMEOUT,
@@ -227,7 +338,7 @@ impl Realtime {
                     }
                 }
             }
-            Phase::Idle => {}
+            Phase::Idle | Phase::Renewing { .. } => {}
         }
         let Some(event) = self.read()? else {
             return Ok(None);
@@ -253,7 +364,9 @@ impl Realtime {
                     ensure!(id.is_none(), "Unexpected overlapping Liquid responses");
                     *id = Some(new_id.to_owned());
                 }
-                Phase::Idle => bail!("Received an unsolicited Liquid response"),
+                Phase::Idle | Phase::Renewing { .. } => {
+                    bail!("Received an unsolicited Liquid response");
+                }
             }
             return Ok(None);
         }
@@ -262,7 +375,7 @@ impl Realtime {
             .or_else(|| event["response"]["id"].as_str());
         let expected = match &self.phase {
             Phase::Generating { id, .. } | Phase::Cancelling { id, .. } => id.as_deref(),
-            Phase::Idle => None,
+            Phase::Idle | Phase::Renewing { .. } => None,
         };
         if expected.is_none() || id != expected {
             if kind == "response.done" {
@@ -280,6 +393,12 @@ impl Realtime {
                 status == "completed" || status == "cancelled",
                 "Liquid response failed (status: {status})"
             );
+            if let Some(tokens) = event["response"]["usage"]["output_tokens"]
+                .as_u64()
+                .filter(|&tokens| tokens <= MAX_OUTPUT_TOKENS as u64)
+            {
+                self.context_tokens -= MAX_OUTPUT_TOKENS - tokens as usize;
+            }
             crate::trace(
                 "response.done",
                 format_args!(
@@ -349,10 +468,14 @@ impl Realtime {
     }
 
     fn read(&mut self) -> Result<Option<Value>> {
-        match self.socket.read() {
+        let socket = self
+            .socket
+            .as_mut()
+            .context("Liquid connection is missing")?;
+        match socket.read() {
             Ok(Message::Text(text)) => Ok(Some(serde_json::from_str(&text)?)),
             Ok(Message::Ping(_)) => {
-                self.socket.flush()?;
+                socket.flush()?;
                 Ok(None)
             }
             Ok(Message::Close(_)) => bail!("The Liquid backend closed the conversation"),
@@ -368,6 +491,8 @@ impl Realtime {
 
     fn send(&mut self, value: Value) -> Result<()> {
         self.socket
+            .as_mut()
+            .context("Liquid connection is missing")?
             .send(Message::Text(value.to_string().into()))
             .context("Cannot send to Liquid")
     }
@@ -375,7 +500,14 @@ impl Realtime {
 
 impl Drop for Realtime {
     fn drop(&mut self) {
-        let _ = self.socket.close(None);
+        if let Phase::Renewing { worker, stopped } = std::mem::replace(&mut self.phase, Phase::Idle)
+        {
+            stopped.store(true, Ordering::SeqCst);
+            let _ = worker.join();
+        }
+        if let Some(socket) = &mut self.socket {
+            let _ = socket.close(None);
+        }
     }
 }
 
@@ -459,19 +591,7 @@ mod tests {
         let worker = thread::spawn(move || {
             let stream = accept_mock(listener);
             let mut ws = tungstenite::accept(stream).unwrap();
-            ws.send(Message::Text(
-                json!({"type":"session.created","session":{"audio":{
-                    "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
-                }}})
-                .to_string()
-                .into(),
-            ))
-            .unwrap();
-            let _ = ws.read().unwrap();
-            ws.send(Message::Text(
-                json!({"type":"session.updated"}).to_string().into(),
-            ))
-            .unwrap();
+            context_session_ready(&mut ws);
             work(ws);
         });
         (address, worker)
@@ -576,6 +696,371 @@ mod tests {
         server.join().expect("Mock server assertions failed");
     }
 
+    fn context_event(ws: &mut WebSocket<TcpStream>, kind: &str) -> Value {
+        let event: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(event["type"], kind);
+        event
+    }
+
+    fn context_session_ready(ws: &mut WebSocket<TcpStream>) {
+        ws.send(Message::Text(
+            json!({"type":"session.created","session":{"audio":{
+                "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
+            }}})
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
+        let update = context_event(ws, "session.update");
+        assert_eq!(update["session"]["max_output_tokens"], MAX_OUTPUT_TOKENS);
+        ws.send(Message::Text(
+            json!({"type":"session.updated"}).to_string().into(),
+        ))
+        .unwrap();
+    }
+
+    fn context_session(listener: &TcpListener) -> WebSocket<TcpStream> {
+        let mut ws = tungstenite::accept(accept_mock(listener.try_clone().unwrap())).unwrap();
+        context_session_ready(&mut ws);
+        ws
+    }
+
+    fn context_reply(ws: &mut WebSocket<TcpStream>, id: usize) {
+        for event in [
+            json!({"type":"response.created","response":{"id":id.to_string()}}),
+            json!({"type":"response.done","response":{"id":id.to_string(),"status":"completed",
+                "usage":{"output_tokens":MAX_OUTPUT_TOKENS}}}),
+        ] {
+            ws.send(Message::Text(event.to_string().into())).unwrap();
+        }
+    }
+
+    fn next_context_output(client: &mut Realtime) -> Output {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "No response from the mock session"
+            );
+            if let Some(output) = client.poll().unwrap() {
+                return output;
+            }
+        }
+    }
+
+    #[test]
+    fn audio_budget_rounds_each_committed_stream_and_keeps_paused_input() {
+        let (addr, server) = mock_server(|mut ws| {
+            for kind in [
+                "input_audio_buffer.append",
+                "input_audio_buffer.append",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit",
+            ] {
+                context_event(&mut ws, kind);
+            }
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        assert!(client.ready_for_audio().unwrap());
+        client.append_audio(&[]).unwrap();
+        assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS);
+        client.append_audio(&[1]).unwrap();
+        client
+            .append_audio(&vec![2; AUDIO_SAMPLES_PER_TOKEN - 1])
+            .unwrap();
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 1
+        );
+        client.append_audio(&[3]).unwrap();
+        client.end_input_without_response().unwrap();
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 2
+        );
+        assert!(client.ready_for_audio().unwrap());
+        client.append_audio(&[4]).unwrap();
+        client.end_input_without_response().unwrap();
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + 2 * TURN_OVERHEAD_TOKENS + 3
+        );
+        assert!(!client.busy());
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn admission_reserves_a_whole_turn_before_its_first_sample() {
+        let (addr, server) = mock_server(|mut ws| {
+            context_event(&mut ws, "input_audio_buffer.append");
+            context_event(&mut ws, "input_audio_buffer.append");
+            context_event(&mut ws, "response.create");
+            context_reply(&mut ws, 1);
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let reserve = MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
+        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve - 1;
+        assert!(client.ready_for_audio().unwrap());
+        client.append_audio(&[1]).unwrap();
+        assert!(
+            client.ready_for_audio().unwrap(),
+            "Do not renew halfway through input"
+        );
+        client.append_audio(&vec![2; MAX_TURN_SAMPLES - 1]).unwrap();
+        client.finish_audio().unwrap();
+        assert_eq!(
+            client.context_tokens,
+            crate::backend::CONTEXT_TOKENS as usize - 1
+        );
+        assert!(!client.ready_for_audio().unwrap());
+        assert_eq!(next_context_output(&mut client), Output::Done);
+        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve;
+        assert!(
+            client.append_audio(&[3]).is_err(),
+            "Reject input until renewal is admitted"
+        );
+        assert!(
+            !client.ready_for_audio().unwrap(),
+            "Exact capacity must renew before input"
+        );
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn only_matching_valid_usage_releases_the_reserved_response_budget() {
+        let (addr, server) = mock_server(|mut ws| {
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        for (usage, retained) in [
+            (Value::Null, MAX_OUTPUT_TOKENS),
+            (json!({}), MAX_OUTPUT_TOKENS),
+            (json!({"output_tokens":-1}), MAX_OUTPUT_TOKENS),
+            (json!({"output_tokens":"12"}), MAX_OUTPUT_TOKENS),
+            (
+                json!({"output_tokens":MAX_OUTPUT_TOKENS + 1}),
+                MAX_OUTPUT_TOKENS,
+            ),
+            (json!({"output_tokens":0}), 0),
+            (json!({"output_tokens":17}), 17),
+            (
+                json!({"output_tokens":MAX_OUTPUT_TOKENS}),
+                MAX_OUTPUT_TOKENS,
+            ),
+        ] {
+            for cancelled in [false, true] {
+                let now = Instant::now();
+                client.context_tokens = SESSION_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
+                client.phase = if cancelled {
+                    Phase::Cancelling {
+                        id: Some("current".into()),
+                        since: now,
+                        last_sent: now,
+                    }
+                } else {
+                    Phase::Generating {
+                        id: Some("current".into()),
+                        since: now,
+                    }
+                };
+                let stale = json!({"type":"response.done","response":{"id":"old","status":"completed",
+                    "usage":{"output_tokens":0}}});
+                assert_eq!(client.process(stale).unwrap(), None);
+                assert_eq!(
+                    client.context_tokens,
+                    SESSION_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                );
+                let event = json!({"type":"response.done","response":{"id":"current",
+                    "status":if cancelled { "cancelled" } else { "completed" },"usage":usage}});
+                assert_eq!(
+                    client.process(event.clone()).unwrap(),
+                    Some(if cancelled {
+                        Output::Interrupted
+                    } else {
+                        Output::Done
+                    })
+                );
+                assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + retained);
+                assert_eq!(client.process(event).unwrap(), None);
+                assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + retained);
+            }
+        }
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn repeated_turns_renew_sessions_beyond_the_context_window() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = thread::spawn(move || {
+            let mut completed = 0;
+            let mut sessions = 0;
+            while completed < 60 {
+                let mut ws = context_session(&listener);
+                let mut used = SESSION_OVERHEAD_TOKENS;
+                sessions += 1;
+                loop {
+                    let message = ws.read().unwrap();
+                    if matches!(message, Message::Close(_)) {
+                        break;
+                    }
+                    let event: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                    assert_eq!(event["type"], "input_audio_buffer.append");
+                    assert!(
+                        used + MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                            < crate::backend::CONTEXT_TOKENS as usize
+                    );
+                    let pcm = STANDARD.decode(event["audio"].as_str().unwrap()).unwrap();
+                    assert_eq!(pcm.len(), 640);
+                    used += TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS;
+                    context_event(&mut ws, "response.create");
+                    completed += 1;
+                    context_reply(&mut ws, completed);
+                }
+            }
+            sessions
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut renewals = 0;
+        for _ in 0..60 {
+            if !client.ready_for_audio().unwrap() {
+                assert_eq!(next_context_output(&mut client), Output::ContextCleared);
+                renewals += 1;
+                assert!(client.ready_for_audio().unwrap());
+            }
+            client.append_audio(&[1; 320]).unwrap();
+            client.finish_audio().unwrap();
+            assert_eq!(next_context_output(&mut client), Output::Done);
+        }
+        drop(client);
+        assert!(renewals >= 2);
+        assert_eq!(server.join().unwrap(), renewals + 1);
+        assert!(
+            60 * (TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS)
+                > 2 * crate::backend::CONTEXT_TOKENS as usize
+        );
+    }
+
+    #[test]
+    fn delayed_renewal_keeps_capture_responsive_and_queued_turns_separate() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (arrived, waiting) = std::sync::mpsc::channel();
+        let (resume, resumed) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut old = context_session(&listener);
+            assert!(matches!(old.read().unwrap(), Message::Close(_)));
+            let mut ws = tungstenite::accept(accept_mock(listener)).unwrap();
+            arrived.send(()).unwrap();
+            resumed.recv_timeout(Duration::from_secs(3)).unwrap();
+            context_session_ready(&mut ws);
+            for (id, expected) in [(1, vec![1_i16, 2]), (2, vec![3_i16, 4])] {
+                let input = context_event(&mut ws, "input_audio_buffer.append");
+                let bytes: Vec<u8> = expected
+                    .iter()
+                    .flat_map(|sample| sample.to_le_bytes())
+                    .collect();
+                assert_eq!(
+                    STANDARD.decode(input["audio"].as_str().unwrap()).unwrap(),
+                    bytes
+                );
+                context_event(&mut ws, "response.create");
+                context_reply(&mut ws, id);
+            }
+            assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut pending = crate::voice::PendingAudio::default();
+        pending.push(crate::voice::Segment::Start(vec![1])).unwrap();
+        pending.push(crate::voice::Segment::End(vec![2])).unwrap();
+        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize;
+        crate::send_pending(&mut pending, &mut client, true).unwrap();
+        assert!(client.busy());
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        pending.push(crate::voice::Segment::Start(vec![3])).unwrap();
+        assert!(!client.interrupt().unwrap());
+        assert!(!client.interrupted, "Renewal is not an interrupted reply");
+        assert!(!client.ready_for_audio().unwrap());
+        crate::send_pending(&mut pending, &mut client, false).unwrap();
+        // The server cannot initialize until this call has returned to capture processing.
+        assert_eq!(client.poll().unwrap(), None);
+        resume.send(()).unwrap();
+        assert_eq!(next_context_output(&mut client), Output::ContextCleared);
+        crate::send_pending(&mut pending, &mut client, false).unwrap();
+        assert!(
+            !client.busy(),
+            "Do not reply while the next utterance is active"
+        );
+        pending.push(crate::voice::Segment::End(vec![4])).unwrap();
+        for _ in 0..2 {
+            crate::send_pending(&mut pending, &mut client, true).unwrap();
+            assert!(client.busy());
+            assert_eq!(next_context_output(&mut client), Output::Done);
+        }
+        assert!(pending.take(true).is_none());
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn renewal_failure_is_reported_and_drop_cancels_its_initialization() {
+        for fail in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let (arrived, waiting) = std::sync::mpsc::channel();
+            let server = thread::spawn(move || {
+                let mut old = context_session(&listener);
+                assert!(matches!(old.read().unwrap(), Message::Close(_)));
+                let mut ws = tungstenite::accept(accept_mock(listener)).unwrap();
+                // Prove the client finished the upgrade before requiring a Close frame.
+                ws.send(Message::Ping(vec![1].into())).unwrap();
+                assert!(matches!(ws.read().unwrap(), Message::Pong(_)));
+                if fail {
+                    ws.send(Message::Text(
+                        json!({"type":"error","error":{"message":"Renewal rejected"}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap();
+                }
+                arrived.send(()).unwrap();
+                assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+            });
+            let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+            client.context_tokens = crate::backend::CONTEXT_TOKENS as usize;
+            assert!(!client.ready_for_audio().unwrap());
+            waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+            if fail {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let error = loop {
+                    assert!(
+                        Instant::now() < deadline,
+                        "Renewal failure was not reported"
+                    );
+                    match client.poll() {
+                        Err(error) => break error,
+                        Ok(output) => assert_eq!(output, None),
+                    }
+                };
+                assert!(format!("{error:#}").contains("Renewal rejected"));
+            }
+            let began = Instant::now();
+            drop(client);
+            assert!(
+                began.elapsed() < Duration::from_secs(1),
+                "Drop waited for the session timeout"
+            );
+            server.join().unwrap();
+        }
+    }
+
     #[test]
     #[ignore = "Requires cached Liquid assets; uses no microphone or speakers"]
     fn liquid_backend_cancels_and_accepts_the_next_turn() {
@@ -634,9 +1119,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Checks real Liquid context beyond the former limit; no audio devices"]
-    fn liquid_conversation_exceeds_the_previous_context_limit() {
-        let cache = dirs::cache_dir().unwrap().join("boubou");
+    #[ignore = "Checks real Liquid context renewal beyond 32K tokens; no audio devices"]
+    fn liquid_conversation_renews_beyond_context_capacity() {
+        let cache = std::env::var_os("BOUBOU_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
         let assets = crate::assets::prepare(&cache, true).unwrap();
         let backend =
             crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
@@ -669,32 +1156,39 @@ mod tests {
         );
         assert!(token_count + 2048 < crate::backend::CONTEXT_TOKENS as usize);
         let mut chat = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
-        for text in [
-            &prompt,
-            "What was the code word? Reply only with that word.",
-        ] {
-            chat.text_turn(text).unwrap();
-            let deadline = Instant::now() + Duration::from_secs(120);
-            let mut reply = String::new();
-            let mut audio_samples = 0;
-            while chat.busy() {
-                assert!(Instant::now() < deadline, "Context regression timed out");
-                match chat.poll().unwrap() {
-                    Some(Output::Text(text)) => reply.push_str(&text),
-                    Some(Output::Audio(pcm)) => audio_samples += pcm.len(),
-                    _ => {}
-                }
+        let rounds = crate::backend::CONTEXT_TOKENS as usize / token_count + 2;
+        let mut renewals = 0;
+        for _ in 0..rounds {
+            let follow_up = "What was the code word? Reply only with that word.";
+            // Keep each recall check within one session, even at the output cap.
+            let pair_tokens =
+                token_count + follow_up.len() + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
+            while !chat.prepare_turn(pair_tokens).unwrap() {
+                renewals +=
+                    usize::from(matches!(chat.poll().unwrap(), Some(Output::ContextCleared)));
             }
-            assert!(
-                reply.to_lowercase().contains("mango"),
-                "Lost conversation context: {reply}"
-            );
-            assert!(
-                audio_samples > 0,
-                "No speech after crossing the old context limit"
-            );
-            eprintln!("CONTEXT_REPLY text={reply:?} audio_samples={audio_samples}");
+            for (text, tokens) in [(prompt.as_str(), token_count), (follow_up, follow_up.len())] {
+                assert!(!chat.text_turn_with_tokens(text, tokens).unwrap());
+                let deadline = Instant::now() + Duration::from_secs(120);
+                let mut reply = String::new();
+                let mut audio_samples = 0;
+                while chat.busy() {
+                    assert!(Instant::now() < deadline, "Context regression timed out");
+                    match chat.poll().unwrap() {
+                        Some(Output::Text(text)) => reply.push_str(&text),
+                        Some(Output::Audio(pcm)) => audio_samples += pcm.len(),
+                        _ => {}
+                    }
+                }
+                assert!(
+                    reply.to_lowercase().contains("mango"),
+                    "Lost conversation context: {reply}"
+                );
+                assert!(audio_samples > 0, "No speech across context renewal");
+            }
         }
+        assert!(renewals > 0, "No context renewal occurred");
+        assert!(rounds * token_count > crate::backend::CONTEXT_TOKENS as usize);
         assert!(
             http.get(format!("http://{}/health", backend.address))
                 .send()
@@ -703,7 +1197,8 @@ mod tests {
                 .is_success()
         );
         eprintln!(
-            "CONTEXT_REGRESSION input_tokens={token_count} context={} turns=2 backend_alive=true",
+            "CONTEXT_REGRESSION input_tokens={} context={} renewals={renewals} backend_alive=true",
+            rounds * token_count,
             crate::backend::CONTEXT_TOKENS
         );
         drop(chat);
