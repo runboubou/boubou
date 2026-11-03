@@ -2,16 +2,19 @@
 
 Local English voice conversations on Apple Silicon Macs, powered by Liquid AI LFM3-Audio-2B. This is a development prototype, not a signed installer or a device-quality guarantee.
 
-## Install
+## Development package
 
-Requires Rust 1.88+ and Xcode Command Line Tools.
+Obtain the precompiled macOS arm64 development archive from the maintainer and extract it. In Terminal, from the extracted directory, run:
 
 ```sh
-cargo install --path . --locked
-boubou run liquid
+sh ./install.sh --run
 ```
 
-First use downloads and verifies approximately 1.42 GB of model weights plus a local inference backend. Allow microphone access when macOS asks. Inference stays local; there is no cloud fallback.
+This verifies the package, installs Boubou into `~/.local/bin` and starts the existing Liquid 2B profile. End users do not compile code or install Rust, Python, Xcode Command Line Tools, or a separate inference backend. First use downloads and verifies approximately 1.42 GB of pinned assets; allow microphone access when macOS asks. Inference stays local.
+
+Later, run `"$HOME/.local/bin/boubou" run liquid` or add that directory to PATH to use `boubou run liquid`. `sh ./uninstall.sh` removes only the CLI and keeps model caches and saved audio. See [package instructions](packaging/README.txt) for offline use, installation directories, upgrades and removal.
+
+These are development candidates. Developer ID signing, notarization, browser-download Gatekeeper/TCC behavior and another-Mac installation have not been qualified. No public download/bootstrap URL is advertised before a distribution entry point exists. Model/voice selection and a website are outside this MVP.
 
 ## Commands
 
@@ -41,7 +44,12 @@ Interruptions cannot erase already generated model context. Audio is not saved b
 
 ## Development
 
+Building requires Rust 1.88+, Python 3.11+ for package assembly, and Xcode Command Line Tools. From a clean committed tree:
+
 ```sh
+python3 packaging/build-macos.py        # Precompiled archive, checksums and notices in target/dist
+cargo install --path . --locked         # Optional developer installation
+
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features
