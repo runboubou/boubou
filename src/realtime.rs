@@ -1019,6 +1019,9 @@ mod tests {
                 let mut old = context_session(&listener);
                 assert!(matches!(old.read().unwrap(), Message::Close(_)));
                 let mut ws = tungstenite::accept(accept_mock(listener)).unwrap();
+                // Prove the client finished the upgrade before requiring a Close frame.
+                ws.send(Message::Ping(vec![1].into())).unwrap();
+                assert!(matches!(ws.read().unwrap(), Message::Pong(_)));
                 if fail {
                     ws.send(Message::Text(
                         json!({"type":"error","error":{"message":"Renewal rejected"}})
