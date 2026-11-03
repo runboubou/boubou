@@ -307,8 +307,7 @@ impl Realtime {
                 thread::sleep(Duration::from_millis(10));
                 return Ok(None);
             }
-            let Phase::Renewing { worker, .. } =
-                std::mem::replace(&mut self.phase, Phase::Idle)
+            let Phase::Renewing { worker, .. } = std::mem::replace(&mut self.phase, Phase::Idle)
             else {
                 unreachable!();
             };
@@ -469,7 +468,10 @@ impl Realtime {
     }
 
     fn read(&mut self) -> Result<Option<Value>> {
-        let socket = self.socket.as_mut().context("Liquid connection is missing")?;
+        let socket = self
+            .socket
+            .as_mut()
+            .context("Liquid connection is missing")?;
         match socket.read() {
             Ok(Message::Text(text)) => Ok(Some(serde_json::from_str(&text)?)),
             Ok(Message::Ping(_)) => {
@@ -498,8 +500,7 @@ impl Realtime {
 
 impl Drop for Realtime {
     fn drop(&mut self) {
-        if let Phase::Renewing { worker, stopped } =
-            std::mem::replace(&mut self.phase, Phase::Idle)
+        if let Phase::Renewing { worker, stopped } = std::mem::replace(&mut self.phase, Phase::Idle)
         {
             stopped.store(true, Ordering::SeqCst);
             let _ = worker.join();
@@ -702,12 +703,20 @@ mod tests {
     }
 
     fn context_session_ready(ws: &mut WebSocket<TcpStream>) {
-        ws.send(Message::Text(json!({"type":"session.created","session":{"audio":{
-            "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
-        }}}).to_string().into())).unwrap();
+        ws.send(Message::Text(
+            json!({"type":"session.created","session":{"audio":{
+                "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
+            }}})
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
         let update = context_event(ws, "session.update");
         assert_eq!(update["session"]["max_output_tokens"], MAX_OUTPUT_TOKENS);
-        ws.send(Message::Text(json!({"type":"session.updated"}).to_string().into())).unwrap();
+        ws.send(Message::Text(
+            json!({"type":"session.updated"}).to_string().into(),
+        ))
+        .unwrap();
     }
 
     fn context_session(listener: &TcpListener) -> WebSocket<TcpStream> {
@@ -729,7 +738,10 @@ mod tests {
     fn next_context_output(client: &mut Realtime) -> Output {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            assert!(Instant::now() < deadline, "No response from the mock session");
+            assert!(
+                Instant::now() < deadline,
+                "No response from the mock session"
+            );
             if let Some(output) = client.poll().unwrap() {
                 return output;
             }
@@ -740,9 +752,12 @@ mod tests {
     fn audio_budget_rounds_each_committed_stream_and_keeps_paused_input() {
         let (addr, server) = mock_server(|mut ws| {
             for kind in [
-                "input_audio_buffer.append", "input_audio_buffer.append",
-                "input_audio_buffer.append", "input_audio_buffer.commit",
-                "input_audio_buffer.append", "input_audio_buffer.commit",
+                "input_audio_buffer.append",
+                "input_audio_buffer.append",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit",
             ] {
                 context_event(&mut ws, kind);
             }
@@ -753,15 +768,26 @@ mod tests {
         client.append_audio(&[]).unwrap();
         assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS);
         client.append_audio(&[1]).unwrap();
-        client.append_audio(&vec![2; AUDIO_SAMPLES_PER_TOKEN - 1]).unwrap();
-        assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 1);
+        client
+            .append_audio(&vec![2; AUDIO_SAMPLES_PER_TOKEN - 1])
+            .unwrap();
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 1
+        );
         client.append_audio(&[3]).unwrap();
         client.end_input_without_response().unwrap();
-        assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 2);
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 2
+        );
         assert!(client.ready_for_audio().unwrap());
         client.append_audio(&[4]).unwrap();
         client.end_input_without_response().unwrap();
-        assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + 2 * TURN_OVERHEAD_TOKENS + 3);
+        assert_eq!(
+            client.context_tokens,
+            SESSION_OVERHEAD_TOKENS + 2 * TURN_OVERHEAD_TOKENS + 3
+        );
         assert!(!client.busy());
         drop(client);
         server.join().unwrap();
@@ -781,15 +807,27 @@ mod tests {
         client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve - 1;
         assert!(client.ready_for_audio().unwrap());
         client.append_audio(&[1]).unwrap();
-        assert!(client.ready_for_audio().unwrap(), "Do not renew halfway through input");
+        assert!(
+            client.ready_for_audio().unwrap(),
+            "Do not renew halfway through input"
+        );
         client.append_audio(&vec![2; MAX_TURN_SAMPLES - 1]).unwrap();
         client.finish_audio().unwrap();
-        assert_eq!(client.context_tokens, crate::backend::CONTEXT_TOKENS as usize - 1);
+        assert_eq!(
+            client.context_tokens,
+            crate::backend::CONTEXT_TOKENS as usize - 1
+        );
         assert!(!client.ready_for_audio().unwrap());
         assert_eq!(next_context_output(&mut client), Output::Done);
         client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve;
-        assert!(client.append_audio(&[3]).is_err(), "Reject input until renewal is admitted");
-        assert!(!client.ready_for_audio().unwrap(), "Exact capacity must renew before input");
+        assert!(
+            client.append_audio(&[3]).is_err(),
+            "Reject input until renewal is admitted"
+        );
+        assert!(
+            !client.ready_for_audio().unwrap(),
+            "Exact capacity must renew before input"
+        );
         drop(client);
         server.join().unwrap();
     }
@@ -805,26 +843,49 @@ mod tests {
             (json!({}), MAX_OUTPUT_TOKENS),
             (json!({"output_tokens":-1}), MAX_OUTPUT_TOKENS),
             (json!({"output_tokens":"12"}), MAX_OUTPUT_TOKENS),
-            (json!({"output_tokens":MAX_OUTPUT_TOKENS + 1}), MAX_OUTPUT_TOKENS),
+            (
+                json!({"output_tokens":MAX_OUTPUT_TOKENS + 1}),
+                MAX_OUTPUT_TOKENS,
+            ),
             (json!({"output_tokens":0}), 0),
             (json!({"output_tokens":17}), 17),
-            (json!({"output_tokens":MAX_OUTPUT_TOKENS}), MAX_OUTPUT_TOKENS),
+            (
+                json!({"output_tokens":MAX_OUTPUT_TOKENS}),
+                MAX_OUTPUT_TOKENS,
+            ),
         ] {
             for cancelled in [false, true] {
                 let now = Instant::now();
                 client.context_tokens = SESSION_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
                 client.phase = if cancelled {
-                    Phase::Cancelling { id: Some("current".into()), since: now, last_sent: now }
+                    Phase::Cancelling {
+                        id: Some("current".into()),
+                        since: now,
+                        last_sent: now,
+                    }
                 } else {
-                    Phase::Generating { id: Some("current".into()), since: now }
+                    Phase::Generating {
+                        id: Some("current".into()),
+                        since: now,
+                    }
                 };
                 let stale = json!({"type":"response.done","response":{"id":"old","status":"completed",
                     "usage":{"output_tokens":0}}});
                 assert_eq!(client.process(stale).unwrap(), None);
-                assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS);
+                assert_eq!(
+                    client.context_tokens,
+                    SESSION_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                );
                 let event = json!({"type":"response.done","response":{"id":"current",
                     "status":if cancelled { "cancelled" } else { "completed" },"usage":usage}});
-                assert_eq!(client.process(event.clone()).unwrap(), Some(if cancelled { Output::Interrupted } else { Output::Done }));
+                assert_eq!(
+                    client.process(event.clone()).unwrap(),
+                    Some(if cancelled {
+                        Output::Interrupted
+                    } else {
+                        Output::Done
+                    })
+                );
                 assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + retained);
                 assert_eq!(client.process(event).unwrap(), None);
                 assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS + retained);
@@ -847,10 +908,15 @@ mod tests {
                 sessions += 1;
                 loop {
                     let message = ws.read().unwrap();
-                    if matches!(message, Message::Close(_)) { break; }
+                    if matches!(message, Message::Close(_)) {
+                        break;
+                    }
                     let event: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
                     assert_eq!(event["type"], "input_audio_buffer.append");
-                    assert!(used + MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS < crate::backend::CONTEXT_TOKENS as usize);
+                    assert!(
+                        used + MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
+                            < crate::backend::CONTEXT_TOKENS as usize
+                    );
                     let pcm = STANDARD.decode(event["audio"].as_str().unwrap()).unwrap();
                     assert_eq!(pcm.len(), 640);
                     used += TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS;
@@ -876,7 +942,10 @@ mod tests {
         drop(client);
         assert!(renewals >= 2);
         assert_eq!(server.join().unwrap(), renewals + 1);
-        assert!(60 * (TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS) > 2 * crate::backend::CONTEXT_TOKENS as usize);
+        assert!(
+            60 * (TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS)
+                > 2 * crate::backend::CONTEXT_TOKENS as usize
+        );
     }
 
     #[test]
@@ -894,8 +963,14 @@ mod tests {
             context_session_ready(&mut ws);
             for (id, expected) in [(1, vec![1_i16, 2]), (2, vec![3_i16, 4])] {
                 let input = context_event(&mut ws, "input_audio_buffer.append");
-                let bytes: Vec<u8> = expected.iter().flat_map(|sample| sample.to_le_bytes()).collect();
-                assert_eq!(STANDARD.decode(input["audio"].as_str().unwrap()).unwrap(), bytes);
+                let bytes: Vec<u8> = expected
+                    .iter()
+                    .flat_map(|sample| sample.to_le_bytes())
+                    .collect();
+                assert_eq!(
+                    STANDARD.decode(input["audio"].as_str().unwrap()).unwrap(),
+                    bytes
+                );
                 context_event(&mut ws, "response.create");
                 context_reply(&mut ws, id);
             }
@@ -919,7 +994,10 @@ mod tests {
         resume.send(()).unwrap();
         assert_eq!(next_context_output(&mut client), Output::ContextCleared);
         crate::send_pending(&mut pending, &mut client, false).unwrap();
-        assert!(!client.busy(), "Do not reply while the next utterance is active");
+        assert!(
+            !client.busy(),
+            "Do not reply while the next utterance is active"
+        );
         pending.push(crate::voice::Segment::End(vec![4])).unwrap();
         for _ in 0..2 {
             crate::send_pending(&mut pending, &mut client, true).unwrap();
@@ -942,7 +1020,12 @@ mod tests {
                 assert!(matches!(old.read().unwrap(), Message::Close(_)));
                 let mut ws = tungstenite::accept(accept_mock(listener)).unwrap();
                 if fail {
-                    ws.send(Message::Text(json!({"type":"error","error":{"message":"Renewal rejected"}}).to_string().into())).unwrap();
+                    ws.send(Message::Text(
+                        json!({"type":"error","error":{"message":"Renewal rejected"}})
+                            .to_string()
+                            .into(),
+                    ))
+                    .unwrap();
                 }
                 arrived.send(()).unwrap();
                 assert!(matches!(ws.read().unwrap(), Message::Close(_)));
@@ -954,7 +1037,10 @@ mod tests {
             if fail {
                 let deadline = Instant::now() + Duration::from_secs(3);
                 let error = loop {
-                    assert!(Instant::now() < deadline, "Renewal failure was not reported");
+                    assert!(
+                        Instant::now() < deadline,
+                        "Renewal failure was not reported"
+                    );
                     match client.poll() {
                         Err(error) => break error,
                         Ok(output) => assert_eq!(output, None),
@@ -964,7 +1050,10 @@ mod tests {
             }
             let began = Instant::now();
             drop(client);
-            assert!(began.elapsed() < Duration::from_secs(1), "Drop waited for the session timeout");
+            assert!(
+                began.elapsed() < Duration::from_secs(1),
+                "Drop waited for the session timeout"
+            );
             server.join().unwrap();
         }
     }
@@ -1069,9 +1158,11 @@ mod tests {
         for _ in 0..rounds {
             let follow_up = "What was the code word? Reply only with that word.";
             // Keep each recall check within one session, even at the output cap.
-            let pair_tokens = token_count + follow_up.len() + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
+            let pair_tokens =
+                token_count + follow_up.len() + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
             while !chat.prepare_turn(pair_tokens).unwrap() {
-                renewals += usize::from(matches!(chat.poll().unwrap(), Some(Output::ContextCleared)));
+                renewals +=
+                    usize::from(matches!(chat.poll().unwrap(), Some(Output::ContextCleared)));
             }
             for (text, tokens) in [(prompt.as_str(), token_count), (follow_up, follow_up.len())] {
                 assert!(!chat.text_turn_with_tokens(text, tokens).unwrap());
