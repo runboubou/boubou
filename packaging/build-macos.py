@@ -14,6 +14,18 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LICENSES = [
+    (
+        "LFM-Open-License.txt",
+        "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/02355c1a141e464a064f2ab2c276638dbcb7f38a/LICENSE",
+        "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+    ),
+    (
+        "llama.cpp-MIT.txt",
+        "https://raw.githubusercontent.com/ggml-org/llama.cpp/8642541b255bfb5dc39cd351a178be09013a55d6/LICENSE",
+        "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    ),
+]
 
 
 def output(*argv):
@@ -88,7 +100,25 @@ def main():
         shutil.copy2(binary, folder / "boubou")
         for file in ["install.sh", "uninstall.sh", "README.txt"]:
             shutil.copy2(ROOT / "packaging" / file, folder / file)
-        shutil.copytree(ROOT / "packaging/licenses", folder / "licenses")
+        (folder / "licenses").mkdir()
+        for filename, url, expected in LICENSES:
+            path = folder / "licenses" / filename
+            subprocess.run(
+                [
+                    "curl",
+                    "-fsSL",
+                    "--connect-timeout",
+                    "10",
+                    "--max-time",
+                    "40",
+                    "--output",
+                    str(path),
+                    url,
+                ],
+                check=True,
+            )
+            if sha256(path) != expected:
+                raise SystemExit(f"Upstream license checksum mismatch: {filename}")
         dependencies = []
         for package in metadata["packages"]:
             if package["id"] not in reachable or package["name"] == "boubou":
@@ -141,6 +171,10 @@ def main():
             "notarization": "NOT RUN",
             "another_mac_acceptance": "NOT RUN",
             "public_distribution_review": "pending",
+            "license_sources": [
+                {"name": filename, "url": url, "sha256": checksum}
+                for filename, url, checksum in LICENSES
+            ],
             "dependencies": sorted(
                 dependencies, key=lambda p: (p["name"], p["version"])
             ),
