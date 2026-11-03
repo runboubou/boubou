@@ -1,6 +1,6 @@
 {
   "name": "boubou",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "description": "Local voice conversations on Apple Silicon Macs",
   "bin": { "bobo": "cli.cjs" },
   "engines": { "node": ">=18" },

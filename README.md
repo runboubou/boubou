@@ -4,20 +4,21 @@ Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B.
 
 ## Run
 
-Requires Node.js 18+ and npm:
+Requires macOS 13.3+, Apple Silicon, Node.js 18+ and npm:
 
 ```sh
-npx --yes boubou@beta run LFM3-Audio-2B
+npx --yes --cache "$HOME/Library/Caches/boubou/npm" boubou@beta run LFM3-Audio-2B
 ```
 
-For a global `bobo` command, use `npm install -g boubou@beta`.
+The command keeps npm downloads in Boubou's user cache; no global installation,
+npm login or administrator access is needed.
 
 First use downloads about 1.42 GB of verified assets and asks for microphone
 access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
 resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
-Uninstall with `npm uninstall -g boubou`; model caches in
-`~/Library/Caches/boubou` and saved audio are kept. See `bobo run --help` for options.
+Models and runtime downloads are kept in `~/Library/Caches/boubou`.
+Append `--help` for options.
 
 Development candidate: signing, notarization and installation on another Mac
 remain unverified.
