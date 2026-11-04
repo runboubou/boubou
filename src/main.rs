@@ -215,6 +215,7 @@ fn run() -> Result<()> {
             let stopped = Arc::new(AtomicBool::new(false));
             let flag = stopped.clone();
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
+            let _progress = progress::Progress::new("Answering the media question locally", None);
             input.answer(&files, &cache, &question, &stopped)
         }
         Action::Run {

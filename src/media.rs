@@ -281,6 +281,7 @@ fn tool_output(command: &mut Command, stopped: &AtomicBool, timeout: Duration) -
         .join()
         .map_err(|_| anyhow!("Cannot read media tool output"))??;
     result?;
+    crate::check_cancel(stopped)?;
     ensure!(
         output.len() as u64 <= MAX_OUTPUT,
         "Media tool output exceeded 64 KiB"
@@ -421,7 +422,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn cancellation_reaps_the_owned_media_process() {
+    fn cancellation_stops_the_owned_runner_and_decoder() {
         use std::sync::{Arc, atomic::Ordering};
         let path = std::env::temp_dir().join(format!("boubou-media-pid-{}", std::process::id()));
         let stopped = Arc::new(AtomicBool::new(false));
@@ -429,17 +430,21 @@ mod tests {
         let marker = path.clone();
         let worker = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(2);
-            while !fs::read_to_string(&marker).is_ok_and(|s| s.trim().parse::<i32>().is_ok()) {
+            while !fs::read_to_string(&marker).is_ok_and(|s| {
+                s.split_whitespace().count() == 2
+                    && s.split_whitespace().all(|pid| pid.parse::<i32>().is_ok())
+            }) {
                 assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(10));
             }
             signal.store(true, Ordering::SeqCst);
         });
+        let began = Instant::now();
         let error = tool_output(
             Command::new("sh")
                 .args([
                     "-c",
-                    "printf '%s\\n' \"$$\" > \"$1\"; exec sleep 30",
+                    "sleep 30 & printf '%s %s\\n' \"$$\" \"$!\" > \"$1\"; wait",
                     "boubou-media-test",
                 ])
                 .arg(&path),
@@ -449,7 +454,15 @@ mod tests {
         .unwrap_err();
         worker.join().unwrap();
         assert!(error.is::<crate::Cancelled>());
-        let pid: i32 = fs::read_to_string(&path).unwrap().trim().parse().unwrap();
+        // The decoder inherits stdout; joining promptly proves it was stopped too.
+        assert!(began.elapsed() < Duration::from_secs(2));
+        let pid: i32 = fs::read_to_string(&path)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
         fs::remove_file(path).unwrap();
     }
