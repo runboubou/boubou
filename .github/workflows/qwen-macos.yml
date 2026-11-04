@@ -54,10 +54,6 @@ jobs:
           "$cli" pull qwen3-tts:0.6b-customvoice
           find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > after
           test -z "$(LC_ALL=C comm -23 before after)"
-          for size in 1.7b 0.6b; do
-            "$cli" pull "qwen3-tts:$size-customvoice" --offline
-            "$cli" doctor "qwen3-tts:$size-customvoice"
-          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qwen-mac-candidate
@@ -70,13 +66,19 @@ jobs:
       - name: Check offline speech inference through the loopback service
         run: |
           set -euo pipefail
-          root="$RUNNER_TEMP/qwen-cache/qwen"
+          export BOUBOU_HOME="$RUNNER_TEMP/qwen-cache"
+          root="$BOUBOU_HOME/qwen"
+          cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
           manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou/qwen/models.json"
           sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
           python="$root/runtimes/$sha/installed/bin/python3"
           sw_vers -productVersion
           sysctl hw.model hw.memsize
+          status=0
           for size in 1.7b 0.6b; do
-            "$python" -I -B packaging/qwen/smoke.py "qwen3-tts:$size-customvoice" "$root" "$manifest"
-            BOUBOU_HOME="$RUNNER_TEMP/qwen-cache" "$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou" doctor "qwen3-tts:$size-customvoice"
+            id="qwen3-tts:$size-customvoice"
+            "$cli" pull "$id" --offline || { status=1; continue; }
+            "$python" -I -B packaging/qwen/smoke.py "$id" "$root" "$manifest" || status=1
+            "$cli" doctor "$id" || status=1
           done
+          exit "$status"

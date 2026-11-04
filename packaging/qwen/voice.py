@@ -27,7 +27,6 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_OFFLINE": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "NLTK_DATA": str(bundle / "nltk_data"),
-        "TORCH_HOME": str(bundle / "torch"),
     })
     return [
         "--mac-optimal-settings",
@@ -43,8 +42,18 @@ def run(command, model, cache, manifest, *extra):
     # Keep model-name aliases and compiled caches outside the verified package.
     with TemporaryDirectory(prefix="boubou-qwen-") as work:
         work = Path(work)
+        hub = work / "torch/hub"
+        hub.mkdir(parents=True)
+        silero = "snakers4_silero-vad_master"
+        (hub / silero).symlink_to(Path(__file__).resolve().parent / "silero", target_is_directory=True)
+        (hub / "trusted_list").write_text("snakers4_silero-vad\n")
+        os.environ.update(
+            TORCH_HOME=str(hub.parent), XDG_CACHE_HOME=str(work / "cache"),
+            NUMBA_CACHE_DIR=str(work / "numba"), PYTHONDONTWRITEBYTECODE="1",
+            PYTHONPYCACHEPREFIX=str(work / "bytecode"),
+        )
+        sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
         sys.argv = ["speech-to-speech", command, *arguments(model, cache, manifest, work), *extra]
-        os.environ["NUMBA_CACHE_DIR"] = str(work / "numba")
         from speech_to_speech.cli import main
         main()
 

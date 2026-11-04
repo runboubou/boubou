@@ -35,8 +35,7 @@ def install(root):
         for name in ["hubconf.py", "LICENSE", *names]:
             if name.startswith("src/silero_vad/data/") and not name.endswith((".py", "silero_vad.jit")):
                 continue
-            path = root / "torch/hub/snakers4_silero-vad_master" / name
+            path = root / "silero" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(git("show", f"{revision}:{name}"))
-        (root / "torch/hub/trusted_list").write_text("snakers4_silero-vad\n")
     return {"nltk_data_revision": nltk, "silero_revision": revision}

@@ -79,6 +79,10 @@ fn tree_matches(root: &Path, expected: &HashSet<PathBuf>, allow_links: bool) -> 
             let entry = entry?;
             let path = entry.path();
             if !expected.contains(path.strip_prefix(&root)?) {
+                eprintln!(
+                    "Unexpected entry in the verified Qwen cache: {}",
+                    path.display()
+                );
                 return Ok(false);
             }
             count += 1;
