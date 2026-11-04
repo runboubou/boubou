@@ -13,6 +13,7 @@
     "cli.cjs",
     "qwen/runtime.json",
     "qwen/models.json",
+    "qwen/runner.tar.gz",
     "licenses",
     "BUILD.json",
     "SHA256SUMS",

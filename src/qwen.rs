@@ -11,7 +11,7 @@ use std::{
 
 #[derive(Deserialize)]
 struct Runner {
-    url: String,
+    url: Option<String>,
     size: u64,
     sha256: String,
     min_macos: String,
@@ -21,7 +21,7 @@ impl Runner {
     fn archive(&self) -> Download<'_> {
         Download {
             name: "runner.tar.gz",
-            url: &self.url,
+            url: self.url.as_deref().unwrap_or_default(),
             size: self.size,
             sha256: &self.sha256,
         }
@@ -46,7 +46,7 @@ fn runner(dir: &Path) -> Result<Runner> {
     )?;
     let runner: Runner = serde_json::from_slice(&bytes)?;
     ensure!(
-        runner.url.starts_with("https://")
+        runner.url.as_ref().is_none_or(|url| url.starts_with("https://"))
             && runner.sha256.len() == 64
             && runner.sha256.bytes().all(|c| c.is_ascii_hexdigit())
             && runner.size > 0,
@@ -97,7 +97,13 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     integrity::safe_destination(cache, Path::new("qwen/install.lock"))?;
     let _lock = assets::preparation_lock(&root)?;
     let engine = runtime_dir(&root, &runner)?;
-    let archive = assets::fetch(&runner.archive(), &engine, offline)?;
+    let archive = if runner.url.is_some() {
+        assets::fetch(&runner.archive(), &engine, offline)?
+    } else {
+        let archive = dir.join("runner.tar.gz");
+        ensure!(assets::verified(&archive, &runner.archive())?, "The bundled Qwen interpreter failed verification. Reinstall the package.");
+        archive
+    };
     let installed = engine.join("installed");
     let refresh = !integrity::runtime_tree(&archive, &installed)?;
     assets::install_runtime(&archive, &installed, "bin/python3", refresh)?;
@@ -118,7 +124,7 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     check_host(&runner)?;
     let root = cache.join("qwen");
     let engine = runtime_dir(&root, &runner)?;
-    let archive = engine.join("runner.tar.gz");
+    let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
     let ready = assets::verified(&archive, &runner.archive())?
         && integrity::runtime_tree(&archive, &engine.join("installed"))?
         && assets::runtime_valid(&archive, &engine.join("installed"), "bin/python3")?;

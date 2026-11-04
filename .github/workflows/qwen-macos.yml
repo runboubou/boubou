@@ -34,8 +34,7 @@ jobs:
           target="$RUNNER_TEMP/qwen"
           mkdir -p "$target"
           python -B packaging/qwen/lock_models.py "$target/models.json"
-          # The CI archive is seeded locally. A release requires a reviewed public URL.
-          python -B packaging/qwen/build_runner.py "$target" --url https://example.invalid/qwen-ci/runner.tar.gz
+          python -B packaging/qwen/build_runner.py "$target"
       - name: Build and install the npm candidate outside the checkout
         env:
           BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
@@ -50,9 +49,6 @@ jobs:
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
           "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
-          sha=$(shasum -a 256 qwen/runner.tar.gz | cut -d' ' -f1)
-          mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
-          ln qwen/runner.tar.gz "$BOUBOU_HOME/qwen/runtimes/$sha/runner.tar.gz"
           "$cli" pull qwen3-tts:1.7b-customvoice
           "$cli" pull qwen3-tts:0.6b-customvoice
           for size in 1.7b 0.6b; do
@@ -65,7 +61,6 @@ jobs:
           retention-days: 3
           compression-level: 0
           path: |
-            ${{ runner.temp }}/qwen/runner.tar.gz
             ${{ runner.temp }}/qwen/runtime.json
             ${{ runner.temp }}/qwen/models.json
             target/dist/**/*.tgz

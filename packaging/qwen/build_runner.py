@@ -27,10 +27,12 @@ def digest(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--url", required=True, help="immutable public HTTPS distribution URL of the resulting archive")
+    parser.add_argument("--url", help="immutable public HTTPS URL for a thin npm package; otherwise bundle the archive")
     args = parser.parse_args()
-    if (platform.system(), platform.machine()) != ("Darwin", "arm64") or not args.url.startswith("https://"):
-        parser.error("build on an Apple Silicon Mac and supply an HTTPS archive URL")
+    if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
+        parser.error("build on an Apple Silicon Mac")
+    if args.url and not args.url.startswith("https://"):
+        parser.error("supply an HTTPS archive URL")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     # The metadata is written last and must describe a completed build.

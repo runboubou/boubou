@@ -111,6 +111,12 @@ def main():
             (folder / "qwen").mkdir()
             for file in ["runtime.json", "models.json"]:
                 shutil.copyfile(args.qwen / file, folder / "qwen" / file)
+            runtime = json.loads((folder / "qwen/runtime.json").read_text())
+            if not runtime.get("url"):
+                runner = args.qwen / "runner.tar.gz"
+                if runner.stat().st_size != runtime["size"] or sha256(runner) != runtime["sha256"]:
+                    raise SystemExit("Qwen archive does not match its release manifest")
+                shutil.copyfile(runner, folder / "qwen/runner.tar.gz")
         shutil.copy2(ROOT / "README.md", folder / "README.md")
         (folder / "licenses").mkdir()
         for filename, url, expected in LICENSES:
