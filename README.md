@@ -24,7 +24,17 @@ uses arrow keys and Enter; Esc goes back and Ctrl+C exits. Recommendations
 estimate memory and disk fit; speed varies by chip and other apps. Set
 `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb` print help.
 Source builds also support `boubou run LFM3-Omni-2B` for English voice chat
-(about 1.62 GB on first use). Image and video questions are separate follow-up work.
+(about 1.62 GB on first use). Ask a local image or short video a text question:
+
+```sh
+boubou ask LFM3-Omni-2B photo.png "What is in this picture?"
+boubou ask LFM3-Omni-2B clip.mp4 "What happens, and what can you hear?" --offline
+```
+
+Images: PNG/JPEG, up to 2048 × 2048 pixels. Videos: MP4/MOV with constant frame
+rate, up to 10 seconds, 512 × 512 pixels and 60 fps; install `ffmpeg` and `ffprobe`
+for video. Files are limited to 64 MiB. This mode returns text and does not open
+the microphone. See [media limits and errors](spec/0009-omni-media-questions.md).
 Omni, the menu and the unified `boubou` command will ship in the next npm release;
 the published beta still supports only Audio through the explicit command above.
 
