@@ -1,0 +1,84 @@
+name: Qwen Mac runtime
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/qwen/**'
+      - 'packaging/build-macos.py'
+      - 'src/qwen*'
+      - 'src/qwen/**'
+      - '.github/workflows/qwen-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qwen-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Build the relocatable arm64 runtime and lock the model files
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/qwen"
+          mkdir -p "$target"
+          python -B packaging/qwen/lock_models.py "$target/models.json"
+          python -B packaging/qwen/build_runner.py "$target"
+      - name: Build and install the npm candidate outside the checkout
+        env:
+          BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
+        run: |
+          set -euo pipefail
+          cargo fetch --locked
+          python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen"
+          tarball=$(find "$PWD/target/dist" -name 'boubou-*.tgz')
+          cd "$RUNNER_TEMP"
+          mkdir -p qwen-npm
+          npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts "$tarball"
+          cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
+          "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
+          "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
+          "$cli" pull qwen3-tts:1.7b-customvoice
+          find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > before
+          "$cli" pull qwen3-tts:0.6b-customvoice
+          find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > after
+          test -z "$(LC_ALL=C comm -23 before after)"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qwen-mac-candidate
+          retention-days: 3
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/qwen/runtime.json
+            ${{ runner.temp }}/qwen/models.json
+            target/dist/**/*.tgz
+      - name: Check offline speech inference through the loopback service
+        run: |
+          set -euo pipefail
+          export BOUBOU_HOME="$RUNNER_TEMP/qwen-cache"
+          root="$BOUBOU_HOME/qwen"
+          cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
+          manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou/qwen/models.json"
+          sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
+          python="$root/runtimes/$sha/installed/bin/python3"
+          sw_vers -productVersion
+          sysctl hw.model hw.memsize
+          status=0
+          for size in 1.7b 0.6b; do
+            id="qwen3-tts:$size-customvoice"
+            "$cli" pull "$id" --offline || { status=1; continue; }
+            "$python" -I -B packaging/qwen/smoke.py "$id" "$root" "$manifest" || status=1
+            "$cli" doctor "$id" || status=1
+          done
+          exit "$status"

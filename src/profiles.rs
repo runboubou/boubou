@@ -209,12 +209,42 @@ pub static LFM25: Profile = Profile {
 
 pub static PROFILES: &[&Profile] = &[&DEFAULT, &OMNI, &LFM25];
 
-pub fn value_parser() -> impl TypedValueParser<Value = &'static Profile> {
-    PossibleValuesParser::new(PROFILES.iter().map(|profile| profile.id)).map(|id| {
+/// A packaged voice pipeline and a Liquid server have different launch contracts.
+#[derive(Clone, Copy, Debug)]
+pub enum Model {
+    Liquid(&'static Profile),
+    Qwen(&'static str),
+}
+
+pub const QWEN_IDS: [&str; 2] = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+
+impl Model {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Liquid(profile) => profile.id,
+            Self::Qwen(id) => id,
+        }
+    }
+
+    pub fn all() -> impl Iterator<Item = Self> {
+        let qwen = if crate::qwen::packaged() {
+            &QWEN_IDS[..]
+        } else {
+            &[]
+        };
         PROFILES
             .iter()
             .copied()
-            .find(|profile| profile.id == id)
-            .expect("the model ID was validated against the registry")
-    })
+            .map(Self::Liquid)
+            .chain(qwen.iter().copied().map(Self::Qwen))
+    }
+
+    pub fn find(id: &str) -> Option<Self> {
+        Self::all().find(|model| model.id() == id)
+    }
+}
+
+pub fn value_parser() -> impl TypedValueParser<Value = Model> {
+    PossibleValuesParser::new(Model::all().map(Model::id))
+        .map(|id| Model::find(&id).expect("validated model ID"))
 }

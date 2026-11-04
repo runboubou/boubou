@@ -1,6 +1,6 @@
 use crate::{
     Cancelled,
-    profiles::{self, Profile},
+    profiles::{self, Model, Profile},
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -33,7 +33,7 @@ unsafe extern "C" {
 }
 
 pub struct Selection {
-    pub model: &'static Profile,
+    pub model: Model,
     pub offline: bool,
 }
 
@@ -188,11 +188,8 @@ fn parse_selection(text: &str) -> Result<Selection> {
         args.len() == 1 || (args.len() == 2 && args[1] == "--offline"),
         "Use a model name or boubou run MODEL [--offline]."
     );
-    let model = profiles::PROFILES
-        .iter()
-        .copied()
-        .find(|p| p.id == args[0])
-        .context("Model not supported. Check the name or update Boubou.")?;
+    let model =
+        Model::find(&args[0]).context("Model not supported. Check the name or update Boubou.")?;
     Ok(Selection {
         model,
         offline: args.len() == 2,
@@ -276,7 +273,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 &rows,
             )? {
                 return Ok(Selection {
-                    model: models[index],
+                    model: Model::Liquid(models[index]),
                     offline: false,
                 });
             }
@@ -510,7 +507,7 @@ mod tests {
             "npx --yes --cache \"$HOME/a cache\" boubou@beta run LFM3-Audio-2B",
         ] {
             let selection = parse_selection(command).unwrap();
-            assert_eq!(selection.model.id, DEFAULT.id);
+            assert_eq!(selection.model.id(), DEFAULT.id);
             assert!(!selection.offline);
         }
         assert!(

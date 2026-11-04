@@ -8,6 +8,7 @@ mod media;
 mod onboarding;
 mod profiles;
 mod progress;
+mod qwen;
 mod realtime;
 #[cfg(any(target_os = "macos", test))]
 mod voice;
@@ -53,7 +54,7 @@ enum Action {
     /// Start a local voice conversation with automatic context clearing.
     Run {
         #[arg(value_parser = profiles::value_parser())]
-        model: &'static profiles::Profile,
+        model: profiles::Model,
         /// Use cached assets only. Never download or check for updates.
         #[arg(long)]
         offline: bool,
@@ -68,17 +69,17 @@ enum Action {
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
     },
-    /// Download and verify the Liquid model and its inference backend.
+    /// Download and verify the selected model and its inference backend.
     Pull {
         #[arg(value_parser = profiles::value_parser())]
-        model: &'static profiles::Profile,
+        model: profiles::Model,
         #[arg(long)]
         offline: bool,
     },
     /// Ask a text question about one local PNG/JPEG image or short MP4/MOV video.
     Ask {
         #[arg(value_parser = profiles::value_parser())]
-        model: &'static profiles::Profile,
+        model: profiles::Model,
         file: PathBuf,
         question: String,
         #[arg(long)]
@@ -87,7 +88,7 @@ enum Action {
     /// Show the selected profile and verify cached assets without networking.
     Doctor {
         #[arg(value_parser = profiles::value_parser(), default_value = profiles::DEFAULT.id)]
-        model: &'static profiles::Profile,
+        model: profiles::Model,
     },
 }
 
@@ -206,12 +207,17 @@ fn run() -> Result<()> {
     };
     match command {
         Action::List => {
-            for model in profiles::PROFILES {
-                println!("{}", model.id);
+            for model in profiles::Model::all() {
+                println!("{}", model.id());
             }
             Ok(())
         }
-        Action::Doctor { model } => {
+        Action::Doctor {
+            model: profiles::Model::Qwen(id),
+        } => qwen::doctor(id, &cache),
+        Action::Doctor {
+            model: profiles::Model::Liquid(model),
+        } => {
             println!("boubou {}", env!("CARGO_PKG_VERSION"));
             println!(
                 "Platform: {} / {}",
@@ -234,11 +240,15 @@ fn run() -> Result<()> {
             assets::status(model, &cache)
         }
         Action::Pull { model, offline } => {
-            assets::prepare(model, &cache, offline)?;
-            eprintln!(
-                "{} is ready. Run: boubou run {} --offline",
-                model.id, model.id
-            );
+            match model {
+                profiles::Model::Liquid(profile) => {
+                    assets::prepare(profile, &cache, offline)?;
+                }
+                profiles::Model::Qwen(id) => {
+                    qwen::prepare(id, &cache, offline)?;
+                }
+            }
+            eprintln!("{0} is ready. Run: boubou run {0} --offline", model.id());
             Ok(())
         }
         Action::Ask {
@@ -247,6 +257,9 @@ fn run() -> Result<()> {
             question,
             offline,
         } => {
+            let profiles::Model::Liquid(model) = model else {
+                bail!("This model supports voice chat only.");
+            };
             let input = media::Input::new(model, &file, &question)?;
             let files = assets::prepare(model, &cache, offline)?;
             let stopped = Arc::new(AtomicBool::new(false));
@@ -262,6 +275,20 @@ fn run() -> Result<()> {
             input,
             output,
         } => {
+            let model = match model {
+                profiles::Model::Liquid(profile) => profile,
+                profiles::Model::Qwen(id) => {
+                    ensure!(
+                        !manual && input.is_empty() && output.is_none(),
+                        "Qwen voice chat uses its own microphone and playback controls."
+                    );
+                    ensure!(
+                        io::stdin().is_terminal(),
+                        "Qwen voice chat needs a terminal."
+                    );
+                    return qwen::run(id, &cache, offline);
+                }
+            };
             if input.is_empty() {
                 ensure!(
                     io::stdin().is_terminal(),
@@ -881,7 +908,9 @@ mod tests {
                     Action::Run { model, .. } | Action::Pull { model, .. } => model,
                     _ => unreachable!(),
                 };
-                assert!(std::ptr::eq(selected, *profile));
+                assert!(
+                    matches!(selected, profiles::Model::Liquid(p) if std::ptr::eq(p, *profile))
+                );
             }
             assert!(Cli::try_parse_from(["boubou", command]).is_err());
             assert!(Cli::try_parse_from(["boubou", command, "liquid"]).is_err());

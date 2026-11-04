@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the native macOS npm package from a clean commit."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -39,6 +40,12 @@ def sha256(path):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--qwen", type=Path, metavar="DIR",
+        help="include reviewed runtime.json and models.json from a Qwen candidate build",
+    )
+    args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise SystemExit("Build this candidate on an Apple Silicon Mac.")
     if output("git", "status", "--porcelain"):
@@ -100,6 +107,16 @@ def main():
         shutil.copy2(binary, folder / "boubou")
         for file in ["cli.cjs", "package.json"]:
             shutil.copy2(ROOT / "packaging" / file, folder / file)
+        if args.qwen:
+            (folder / "qwen").mkdir()
+            for file in ["runtime.json", "models.json"]:
+                shutil.copyfile(args.qwen / file, folder / "qwen" / file)
+            runtime = json.loads((folder / "qwen/runtime.json").read_text())
+            if not runtime.get("url"):
+                runner = args.qwen / "runner.tar.gz"
+                if runner.stat().st_size != runtime["size"] or sha256(runner) != runtime["sha256"]:
+                    raise SystemExit("Qwen archive does not match its release manifest")
+                shutil.copyfile(runner, folder / "qwen/runner.tar.gz")
         shutil.copy2(ROOT / "README.md", folder / "README.md")
         (folder / "licenses").mkdir()
         for filename, url, expected in LICENSES:
@@ -159,7 +176,7 @@ def main():
         build = {
             "version": version,
             "channel": "development",
-            "profiles": output(str(binary), "list").splitlines(),
+            "profiles": output(str(folder / "boubou"), "list").splitlines(),
             "source_commit": source,
             "source_url": f"https://github.com/entropyai-labs/boubou/commit/{source}",
             "target": "aarch64-apple-darwin",

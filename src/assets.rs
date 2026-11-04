@@ -27,15 +27,7 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
         cfg!(all(target_os = "macos", target_arch = "aarch64")),
         "This first release supports Apple Silicon Macs."
     );
-    fs::create_dir_all(cache_dir).context("Cannot create the Boubou cache")?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(cache_dir.join("install.lock"))?;
-    FileExt::try_lock_exclusive(&lock)
-        .context("Another Boubou process is preparing models; wait for it to finish")?;
+    let _lock = preparation_lock(cache_dir)?;
 
     let download = |spec: &Download<'_>, directory: &Path| {
         fetch(spec, directory, offline).with_context(|| {
@@ -48,37 +40,7 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let model_dir = cache_dir.join(profile.model_directory);
     let archive = download(&profile.runtime.archive, &cache_dir.join("downloads"))?;
     let installed = cache_dir.join(profile.runtime.directory);
-    if !runtime_valid(&archive, &installed, profile.runtime.server)? {
-        let staging = installed.with_extension("partial");
-        if staging.exists() {
-            fs::remove_dir_all(&staging)?;
-        }
-        fs::create_dir_all(&staging)?;
-        {
-            let _progress = Progress::new("Installing the local speech engine", None);
-            if archive
-                .extension()
-                .is_some_and(|extension| extension == "zip")
-            {
-                zip::ZipArchive::new(File::open(&archive)?)?
-                    .extract(&staging)
-                    .context("Cannot unpack the speech engine")?;
-            } else {
-                tar::Archive::new(GzDecoder::new(File::open(&archive)?))
-                    .unpack(&staging)
-                    .context("Cannot unpack the speech engine")?;
-            }
-        }
-        ensure!(
-            runtime_valid(&archive, &staging, profile.runtime.server)?,
-            "The unpacked speech engine failed verification"
-        );
-        if installed.exists() {
-            fs::remove_dir_all(&installed)?;
-        }
-        fs::rename(&staging, &installed)?;
-        sync_parent(&installed)?;
-    }
+    install_runtime(&archive, &installed, profile.runtime.server, false)?;
 
     // Cache the model's license alongside its weights before making it runnable.
     for spec in profile.model_assets() {
@@ -90,6 +52,59 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
         model: model_dir.join(profile.model.name),
         projector: model_dir.join(profile.projector.name),
     })
+}
+
+pub(crate) fn preparation_lock(cache_dir: &Path) -> Result<File> {
+    fs::create_dir_all(cache_dir).context("Cannot create the Boubou cache")?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cache_dir.join("install.lock"))?;
+    FileExt::try_lock_exclusive(&lock)
+        .context("Another Boubou process is preparing models; wait for it to finish")?;
+    Ok(lock)
+}
+
+pub(crate) fn install_runtime(
+    archive: &Path,
+    installed: &Path,
+    server: &str,
+    refresh: bool,
+) -> Result<()> {
+    if refresh || !runtime_valid(archive, installed, server)? {
+        let staging = installed.with_extension("partial");
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        fs::create_dir_all(&staging)?;
+        {
+            let _progress = Progress::new("Installing the local speech engine", None);
+            if archive
+                .extension()
+                .is_some_and(|extension| extension == "zip")
+            {
+                zip::ZipArchive::new(File::open(archive)?)?
+                    .extract(&staging)
+                    .context("Cannot unpack the speech engine")?;
+            } else {
+                tar::Archive::new(GzDecoder::new(File::open(archive)?))
+                    .unpack(&staging)
+                    .context("Cannot unpack the speech engine")?;
+            }
+        }
+        ensure!(
+            runtime_valid(archive, &staging, server)?,
+            "The unpacked speech engine failed verification"
+        );
+        if installed.exists() {
+            fs::remove_dir_all(installed)?;
+        }
+        fs::rename(&staging, installed)?;
+        sync_parent(installed)?;
+    }
+    Ok(())
 }
 
 pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
@@ -150,7 +165,7 @@ fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> 
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn verified(path: &Path, spec: &Download<'_>) -> Result<bool> {
+pub(crate) fn verified(path: &Path, spec: &Download<'_>) -> Result<bool> {
     let file = match File::open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -169,7 +184,7 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
+pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     let destination = dir.join(spec.name);
     if verified(&destination, spec)? {
         return Ok(destination);
@@ -283,7 +298,7 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool> {
+pub(crate) fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool> {
     if !installed.is_dir() {
         return Ok(false);
     }

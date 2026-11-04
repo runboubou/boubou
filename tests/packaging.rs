@@ -279,6 +279,122 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 }
 
 #[test]
+fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
+    use flate2::{Compression, write::GzEncoder};
+    use sha2::{Digest, Sha256};
+
+    if !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    let cache = package.0.join("menu-cache/qwen");
+    fs::create_dir(&release).unwrap();
+    let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+    let script = b"#!/bin/sh\nprintf 'selected: %s\\n' \"$@\"\n";
+    let mut header = tar::Header::new_gnu();
+    header.set_size(script.len() as u64);
+    header.set_mode(0o755);
+    archive
+        .append_data(&mut header, "bin/python3", &script[..])
+        .unwrap();
+    let bytes = archive.into_inner().unwrap().finish().unwrap();
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let engine = cache.join("runtimes").join(&digest);
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join("runner.tar.gz"), &bytes).unwrap();
+    fs::write(
+        release.join("runtime.json"),
+        serde_json::json!({
+            "url": "https://example.invalid/runner.tar.gz",
+            "sha256": digest, "size": bytes.len(), "min_macos": "13.3"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let id = "qwen3-tts:1.7b-customvoice";
+    let asset = b"pinned fixture";
+    let snapshot = "hub/models--fixture--qwen/snapshots/abc";
+    let files = serde_json::json!([{
+        "profile": id, "path": format!("{snapshot}/tts.bin"), "size": asset.len(),
+        "sha256": format!("{:x}", Sha256::digest(asset)), "url": "https://example.invalid/tts.bin"
+    }]);
+    fs::write(release.join("models.json"), files.to_string()).unwrap();
+    let snapshot = cache.join(snapshot);
+    fs::create_dir_all(&snapshot).unwrap();
+    fs::write(snapshot.join("tts.bin.part"), asset).unwrap();
+    let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
+    prompt.expect(&["selected: qwen3-tts:1.7b-customvoice"]);
+    assert!(prompt.finish().success());
+    assert_eq!(fs::read(snapshot.join("tts.bin")).unwrap(), asset);
+    assert!(!snapshot.join("tts.bin.part").exists());
+}
+
+#[test]
+fn qwen_package_lists_both_models_and_doctor_is_read_only() {
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(
+        release.join("runtime.json"),
+        serde_json::json!({
+            "url": "https://example.invalid/runner.tar.gz",
+            "sha256": "a".repeat(64), "size": 1, "min_macos": "13.3"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let ids = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+    let files: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "profile": id, "path": format!("models/{id}/config.json"), "size": 7,
+                "url": "https://example.invalid/config.json", "sha256": "b".repeat(64)
+            })
+        })
+        .collect();
+    fs::write(
+        release.join("models.json"),
+        serde_json::to_vec(&files).unwrap(),
+    )
+    .unwrap();
+    let models = package.run(&["list"]);
+    let model_list = String::from_utf8(models.stdout).unwrap();
+    let cache = package.0.join("unused-cache");
+    for id in ids {
+        assert!(model_list.lines().any(|line| line == id));
+        let doctor = package.run(&["--cache-dir", cache.to_str().unwrap(), "doctor", id]);
+        assert_eq!(doctor.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&doctor.stdout).contains(id));
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
+fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(release.join("runtime.json"), "{}").unwrap();
+    fs::write(release.join("models.json"), "[]").unwrap();
+    let cache = package.0.join("qwen-cache");
+    for id in ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"] {
+        let output = package.run(&[
+            "--cache-dir",
+            cache.to_str().unwrap(),
+            "run",
+            id,
+            "--input",
+            "missing.wav",
+        ]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Qwen voice chat"));
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
 fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     let package = Package::new();
     let version = package.run(&["--version"]);
@@ -454,5 +570,77 @@ fn npm_launcher_waits_for_cleanup_before_propagating_termination() {
             .status()
             .unwrap()
             .success()
+    );
+}
+
+#[test]
+fn qwen_runner_reaches_loopback_with_a_proxy_and_preserves_bypasses() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, os, runpy, sys, types, urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Thread
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy"):
+    os.environ[key] = "http://127.0.0.1:1"
+os.environ["NO_PROXY"] = os.environ["no_proxy"] = "kept.invalid"
+
+with HTTPServer(("127.0.0.1", 0), Handler) as server:
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def run_pipeline(command, argv):
+            assert command == "local"
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/v1/realtime", timeout=2
+            ) as response:
+                assert response.status == 204
+            for host in ("localhost", "::1", "kept.invalid"):
+                assert urllib.request.proxy_bypass(host), host
+
+        package = types.ModuleType("speech_to_speech")
+        package.__path__ = []
+        pipeline = types.ModuleType("speech_to_speech.s2s_pipeline")
+        pipeline.run_pipeline_command = run_pipeline
+        sys.modules["speech_to_speech"] = package
+        sys.modules["speech_to_speech.s2s_pipeline"] = pipeline
+        with TemporaryDirectory() as folder:
+            cache = Path(folder)
+            manifest = cache / "models.json"
+            manifest.write_text(json.dumps([
+                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
+                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit",
+                             "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
+            ]))
+            runpy.run_path(sys.argv[1])["run"](
+                "local", "qwen3-tts:1.7b-customvoice", cache, manifest
+            )
+    finally:
+        server.shutdown()
+        thread.join()
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
