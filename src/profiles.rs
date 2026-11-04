@@ -32,7 +32,7 @@ pub struct Profile {
     pub max_output_tokens: usize,
     pub audio_samples_per_token: usize,
     pub instructions: &'static str,
-    pub text_sampling: &'static [&'static str],
+    pub backend_args: &'static [&'static str],
 }
 
 pub static DEFAULT: Profile = Profile {
@@ -79,7 +79,7 @@ pub static DEFAULT: Profile = Profile {
     // Keep Liquid's voice-chat prompt first, followed by the accepted long-session guidance.
     instructions: "Respond with interleaved text and audio.\n\nYou are a friendly voice assistant in a spoken conversation. Answer the user's latest words in one to three short sentences. Do not repeat an earlier reply. If the user only acknowledges you, keep the conversation going naturally.",
     // Greedy text decoding loops long replies; audio frames retain the model's own sampler.
-    text_sampling: &[
+    backend_args: &[
         "--temp",
         "0.3",
         "--min-p",
@@ -93,7 +93,32 @@ pub static DEFAULT: Profile = Profile {
     ],
 };
 
-pub static PROFILES: &[&Profile] = &[&DEFAULT];
+pub static OMNI: Profile = Profile {
+    id: "LFM3-Omni-2B",
+    model_directory: "models/lfm3-omni-2b/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72",
+    model: Download {
+        name: "LFM3-Omni-2B-Q4_K_M.gguf",
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LFM3-Omni-2B-Q4_K_M.gguf",
+        size: 1_099_630_080,
+        sha256: "9f8d30e9d4fd7a9349d586e077988229b3ca0a0e4ad730897563d1eccc9893e2",
+    },
+    projector: Download {
+        name: "mmproj-LFM3-Omni-2B-Q8_0.gguf",
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/mmproj-LFM3-Omni-2B-Q8_0.gguf",
+        size: 506_842_528,
+        sha256: "8a25f9d1931244429de404fccacfb7fb933970a36aa5688d2f5069f29c6b27b1",
+    },
+    license: Download {
+        url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE",
+        ..DEFAULT.license
+    },
+    // Omni is non-reasoning; audio sampling defaults are embedded in its GGUF.
+    backend_args: &["--reasoning", "off", "--temp", "0"],
+    // Both LFM3 profiles use the same Realtime codec, context and voice-chat prompt.
+    ..DEFAULT
+};
+
+pub static PROFILES: &[&Profile] = &[&DEFAULT, &OMNI];
 
 pub fn value_parser() -> impl TypedValueParser<Value = &'static Profile> {
     PossibleValuesParser::new(PROFILES.iter().map(|profile| profile.id)).map(|id| {

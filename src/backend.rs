@@ -59,7 +59,7 @@ impl Backend {
                 "--no-webui",
                 "--offline",
             ])
-            .args(profile.text_sampling)
+            .args(profile.backend_args)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
@@ -253,11 +253,7 @@ mod tests {
     #[test]
     fn selected_profile_controls_backend_arguments() {
         use std::os::unix::fs::PermissionsExt;
-        static PROFILE: Profile = Profile {
-            context_tokens: 4096,
-            text_sampling: &["--temp", "0.7"],
-            ..crate::profiles::DEFAULT
-        };
+        let profile = &crate::profiles::OMNI;
         let directory = std::env::temp_dir().join(format!("boubou-profile-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let server = directory.join("print-arguments");
@@ -265,10 +261,14 @@ mod tests {
         fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
         let result = Backend::start(
             &Assets {
-                profile: &PROFILE,
+                profile,
                 server,
-                model: directory.join("selected-model"),
-                projector: directory.join("selected-projector"),
+                model: directory
+                    .join(profile.model_directory)
+                    .join(profile.model.name),
+                projector: directory
+                    .join(profile.model_directory)
+                    .join(profile.projector.name),
             },
             &directory,
             &AtomicBool::new(false),
@@ -277,9 +277,12 @@ mod tests {
         let arguments =
             fs::read_to_string(directory.join(format!("logs/backend-{}.log", std::process::id())))
                 .unwrap();
-        assert!(arguments.contains("--ctx-size\n4096\n"));
-        assert!(arguments.contains("--temp\n0.7\n"));
-        assert!(arguments.contains("selected-model\n--mmproj\n"));
+        assert!(arguments.contains("--ctx-size\n32768\n"));
+        assert!(arguments.contains("--temp\n0\n"));
+        assert!(arguments.contains("--reasoning\noff\n"));
+        assert!(arguments.contains(profile.model.name));
+        assert!(arguments.contains(profile.projector.name));
+        assert!(!arguments.contains(crate::profiles::DEFAULT.model.name));
         assert!(!arguments.contains("--min-p"));
         fs::remove_dir_all(directory).unwrap();
     }

@@ -262,7 +262,7 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert!(String::from_utf8_lossy(&help.stdout).contains("LFM3-Audio-2B"));
     let models = package.run(&["list"]);
     assert!(models.status.success());
-    assert_eq!(models.stdout, b"LFM3-Audio-2B\n");
+    assert_eq!(models.stdout, b"LFM3-Audio-2B\nLFM3-Omni-2B\n");
     let cache = package.0.join("unused-cache");
     let cache_arg = cache.to_str().unwrap();
     for command in ["run", "pull", "doctor"] {
@@ -280,6 +280,14 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert_eq!(doctor.status.code(), Some(1));
     assert_eq!(doctor.stdout, explicit.stdout);
     assert_eq!(doctor.stderr, explicit.stderr);
+    let omni = package.run(&["--cache-dir", cache_arg, "doctor", "LFM3-Omni-2B"]);
+    assert_eq!(omni.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&omni.stdout);
+    assert!(text.contains("Profile: Liquid AI LFM3-Omni-2B"));
+    assert!(text.contains("mmproj-LFM3-Omni-2B-Q8_0.gguf"));
+    assert!(!text.contains("mmproj-LFM3-Audio"));
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("LFM3-Omni-2B"));
     assert!(!cache.exists(), "Doctor mutated the cache");
     let help = package.run(&["--cache-dir", cache_arg]);
     assert!(help.status.success());
@@ -287,6 +295,28 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert!(text.contains("Usage: boubou"));
     assert!(!text.contains('\u{1b}'));
     assert!(!cache.exists(), "Headless startup mutated the cache");
+    for command in ["run", "pull"] {
+        let result = package.run(&[
+            "--cache-dir",
+            cache_arg,
+            command,
+            "LFM3-Omni-2B",
+            "--offline",
+        ]);
+        assert_eq!(result.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            error.contains(if command == "run" {
+                "needs a terminal"
+            } else {
+                "offline mode is enabled"
+            }),
+            "{error}"
+        );
+    }
+    assert!(!cache.join("models").exists());
+    assert!(!cache.join("native").exists());
+    assert!(!cache.join("runtimes").exists());
     assert_eq!(package.run(&["run", "liquid"]).status.code(), Some(2));
     assert_eq!(package.run(&["run", "other"]).status.code(), Some(2));
     assert_eq!(package.run(&["run"]).status.code(), Some(2));

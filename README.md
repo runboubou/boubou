@@ -1,6 +1,7 @@
 # Boubou
 
-Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B.
+Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B
+and LFM3-Omni-2B.
 
 ## Run
 
@@ -22,8 +23,10 @@ choose a recommended model or paste a model name/run command. The English menu
 uses arrow keys and Enter; Esc goes back and Ctrl+C exits. Recommendations
 estimate memory and disk fit; speed varies by chip and other apps. Set
 `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb` print help.
-This menu and the unified `boubou` command will ship in the next npm release;
-the published beta still uses the explicit-model command above.
+Source builds also support `boubou run LFM3-Omni-2B` for English voice chat
+(about 1.62 GB on first use). Image and video questions are separate follow-up work.
+Omni, the menu and the unified `boubou` command will ship in the next npm release;
+the published beta still supports only Audio through the explicit command above.
 
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.
