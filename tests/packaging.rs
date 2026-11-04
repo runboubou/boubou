@@ -279,6 +279,49 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 }
 
 #[test]
+fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
+    use flate2::{Compression, write::GzEncoder};
+    use sha2::{Digest, Sha256};
+
+    if !cfg!(target_arch = "aarch64") {
+        return;
+    }
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    let cache = package.0.join("menu-cache/qwen");
+    fs::create_dir(&release).unwrap();
+    let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+    let script = b"#!/bin/sh\nprintf 'selected: %s\\n' \"$@\"\n";
+    let mut header = tar::Header::new_gnu();
+    header.set_size(script.len() as u64);
+    header.set_mode(0o755);
+    archive.append_data(&mut header, "bin/python3", &script[..]).unwrap();
+    let bytes = archive.into_inner().unwrap().finish().unwrap();
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let engine = cache.join("runtimes").join(&digest);
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join("runner.tar.gz"), &bytes).unwrap();
+    fs::write(release.join("runtime.json"), serde_json::json!({
+        "url": "https://example.invalid/runner.tar.gz",
+        "sha256": digest, "size": bytes.len(), "min_macos": "13.3"
+    }).to_string()).unwrap();
+    let id = "qwen3-tts:1.7b-customvoice";
+    let asset = b"pinned fixture";
+    let files = serde_json::json!([{
+        "profile": id, "path": "models/tts.bin", "size": asset.len(),
+        "sha256": format!("{:x}", Sha256::digest(asset)), "url": "https://example.invalid/tts.bin"
+    }]);
+    fs::write(release.join("models.json"), files.to_string()).unwrap();
+    fs::create_dir(cache.join("models")).unwrap();
+    fs::write(cache.join("models/tts.bin.part"), asset).unwrap();
+    let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
+    prompt.expect(&["selected: qwen3-tts:1.7b-customvoice"]);
+    assert!(prompt.finish().success());
+    assert_eq!(fs::read(cache.join("models/tts.bin")).unwrap(), asset);
+    assert!(!cache.join("models/tts.bin.part").exists());
+}
+
+#[test]
 fn qwen_package_lists_both_models_and_doctor_is_read_only() {
     let package = Package::new();
     let release = package.0.join("qwen");
