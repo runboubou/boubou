@@ -121,12 +121,12 @@ impl Device {
 fn space_needed(model: &Profile, cache: &Path) -> u64 {
     let folder = cache.join(model.model_directory);
     let mut bytes = 0;
-    for (asset, directory) in [
-        (&model.model, folder.as_path()),
-        (&model.projector, folder.as_path()),
-        (&model.license, folder.as_path()),
-        (&model.runtime.archive, &cache.join("downloads")),
-    ] {
+    let downloads = cache.join("downloads");
+    for (asset, directory) in model
+        .model_assets()
+        .map(|asset| (asset, folder.as_path()))
+        .chain([(&model.runtime.archive, downloads.as_path())])
+    {
         if !directory
             .join(asset.name)
             .metadata()

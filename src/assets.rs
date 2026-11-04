@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Assets {
     pub profile: &'static Profile,
     pub server: PathBuf,
@@ -56,9 +56,18 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
         fs::create_dir_all(&staging)?;
         {
             let _progress = Progress::new("Installing the local speech engine", None);
-            tar::Archive::new(GzDecoder::new(File::open(&archive)?))
-                .unpack(&staging)
-                .context("Cannot unpack the speech engine")?;
+            if archive
+                .extension()
+                .is_some_and(|extension| extension == "zip")
+            {
+                zip::ZipArchive::new(File::open(&archive)?)?
+                    .extract(&staging)
+                    .context("Cannot unpack the speech engine")?;
+            } else {
+                tar::Archive::new(GzDecoder::new(File::open(&archive)?))
+                    .unpack(&staging)
+                    .context("Cannot unpack the speech engine")?;
+            }
         }
         ensure!(
             runtime_valid(&archive, &staging, profile.runtime.server)?,
@@ -72,21 +81,21 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     }
 
     // Cache the model's license alongside its weights before making it runnable.
-    download(&profile.license, &model_dir)?;
-    let model = download(&profile.model, &model_dir)?;
-    let projector = download(&profile.projector, &model_dir)?;
+    for spec in profile.model_assets() {
+        download(spec, &model_dir)?;
+    }
     Ok(Assets {
         profile,
         server: installed.join(profile.runtime.server),
-        model,
-        projector,
+        model: model_dir.join(profile.model.name),
+        projector: model_dir.join(profile.projector.name),
     })
 }
 
 pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
     let model_dir = cache_dir.join(profile.model_directory);
     let mut ready = true;
-    for spec in [&profile.model, &profile.projector, &profile.license] {
+    for spec in profile.model_assets() {
         let valid = verified(&model_dir.join(spec.name), spec)?;
         ready &= valid;
         println!(
@@ -279,6 +288,36 @@ fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool>
         return Ok(false);
     }
     let _progress = Progress::new("Verifying the installed speech engine", None);
+    if archive
+        .extension()
+        .is_some_and(|extension| extension == "zip")
+    {
+        let mut zip = zip::ZipArchive::new(File::open(archive)?)?;
+        for index in 0..zip.len() {
+            let mut entry = zip.by_index(index)?;
+            let path = installed.join(
+                entry
+                    .enclosed_name()
+                    .context("Invalid speech engine path")?,
+            );
+            let metadata = match fs::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(error.into()),
+            };
+            if entry.is_dir() {
+                if !metadata.is_dir() {
+                    return Ok(false);
+                }
+            } else if !metadata.file_type().is_file()
+                || metadata.len() != entry.size()
+                || sha256(File::open(&path)?, None)? != sha256(&mut entry, None)?
+            {
+                return Ok(false);
+            }
+        }
+        return executable_valid(&installed.join(server));
+    }
     let mut tar = tar::Archive::new(GzDecoder::new(File::open(archive)?));
     for entry in tar.entries()? {
         let mut entry = entry?;
@@ -310,11 +349,17 @@ fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool>
             bail!("Unsupported entry in the pinned speech engine archive");
         }
     }
-    let server = installed.join(server);
+    executable_valid(&installed.join(server))
+}
+
+fn executable_valid(server: &Path) -> Result<bool> {
+    if !server.is_file() {
+        return Ok(false);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(&server)?.permissions().mode() & 0o111 == 0 {
+        if fs::metadata(server)?.permissions().mode() & 0o111 == 0 {
             return Ok(false);
         }
     }
@@ -520,5 +565,32 @@ mod tests {
         assert!(runtime_valid(&archive, &installed, server).unwrap());
         fs::write(installed.join(server), b"broken").unwrap();
         assert!(!runtime_valid(&archive, &installed, server).unwrap());
+    }
+
+    #[test]
+    fn zip_engine_checks_executable_and_library_contents() {
+        let dir = TestDir::new();
+        let archive = dir.0.join("engine.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+        for name in ["runner/server", "runner/lib.dylib"] {
+            zip.start_file(
+                name,
+                zip::write::SimpleFileOptions::default().unix_permissions(0o755),
+            )
+            .unwrap();
+            zip.write_all(b"engine").unwrap();
+        }
+        zip.finish().unwrap();
+        let installed = dir.0.join("installed");
+        zip::ZipArchive::new(File::open(&archive).unwrap())
+            .unwrap()
+            .extract(&installed)
+            .unwrap();
+        assert!(runtime_valid(&archive, &installed, "runner/server").unwrap());
+        fs::write(installed.join("runner/lib.dylib"), b"broken").unwrap();
+        assert!(!runtime_valid(&archive, &installed, "runner/server").unwrap());
+        fs::write(installed.join("runner/lib.dylib"), b"engine").unwrap();
+        fs::remove_file(installed.join("runner/server")).unwrap();
+        assert!(!runtime_valid(&archive, &installed, "runner/server").unwrap());
     }
 }
