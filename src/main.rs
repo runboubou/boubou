@@ -342,6 +342,7 @@ fn from_files(
             )
         })
         .transpose()?;
+    let mut missing_speech = false;
     for (i, pcm) in turns.iter().enumerate() {
         eprintln!("Turn {}", i + 1);
         while !chat.ready_for_audio()? {
@@ -356,9 +357,11 @@ fn from_files(
         }
         chat.finish_audio()?;
         let mut audio_samples = 0;
+        let mut has_text = false;
         while chat.busy() && !stopped.load(Ordering::SeqCst) {
             match chat.poll()? {
                 Some(Output::Text(text)) => {
+                    has_text |= !text.trim().is_empty();
                     print!("{text}");
                     io::stdout().flush()?;
                 }
@@ -378,15 +381,27 @@ fn from_files(
             chat.interrupt()?;
             break;
         }
-        ensure!(audio_samples > 0, "Liquid returned no speech for this turn");
-        eprintln!(
-            "Generated {:.2} s of speech locally.",
-            audio_samples as f64 / 24_000.0
-        );
+        if audio_samples == 0 {
+            ensure!(
+                has_text,
+                "Liquid returned neither text nor speech for this turn"
+            );
+            missing_speech = true;
+            eprintln!("Turn {} returned text without speech; continuing.", i + 1);
+        } else {
+            eprintln!(
+                "Generated {:.2} s of speech locally.",
+                audio_samples as f64 / 24_000.0
+            );
+        }
     }
     if let Some(writer) = writer {
         writer.finalize()?;
     }
+    ensure!(
+        !missing_speech,
+        "Liquid returned text without speech for one or more turns"
+    );
     Ok(())
 }
 
@@ -660,7 +675,38 @@ fn send_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, sync::atomic::AtomicU64};
+    use std::{collections::VecDeque, fs, sync::atomic::AtomicU64};
+
+    struct ScriptedChat {
+        responses: VecDeque<Vec<Output>>,
+        current: std::vec::IntoIter<Output>,
+    }
+
+    impl Conversation for ScriptedChat {
+        fn busy(&self) -> bool {
+            !self.current.as_slice().is_empty()
+        }
+        fn ready_for_audio(&mut self) -> Result<bool> {
+            Ok(!self.busy())
+        }
+        fn append_audio(&mut self, _: &[i16]) -> Result<()> {
+            Ok(())
+        }
+        fn finish_audio(&mut self) -> Result<()> {
+            self.current = self.responses.pop_front().unwrap().into_iter();
+            Ok(())
+        }
+        fn interrupt(&mut self) -> Result<bool> {
+            self.current = Vec::new().into_iter();
+            Ok(true)
+        }
+        fn poll(&mut self) -> Result<Option<Output>> {
+            Ok(self.current.next())
+        }
+        fn end_input_without_response(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
 
     struct TestWav {
         path: PathBuf,
@@ -702,6 +748,59 @@ mod tests {
             sample_rate: 16_000,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
+        }
+    }
+
+    #[test]
+    fn file_batch_keeps_later_audio_but_reports_missing_speech() {
+        for (first, remaining, expected_pcm, expected_error) in [
+            (
+                vec![Output::Text("Okay.".into()), Output::Done],
+                0,
+                vec![123, -456],
+                Some("text without speech"),
+            ),
+            (
+                vec![Output::Done],
+                1,
+                vec![],
+                Some("neither text nor speech"),
+            ),
+            (
+                vec![Output::Audio(vec![321]), Output::Done],
+                0,
+                vec![321, 123, -456],
+                None,
+            ),
+        ] {
+            let fixture = TestWav::new(input_wav_spec(), 320);
+            let output = fixture.path.with_file_name("output.wav");
+            let mut chat = ScriptedChat {
+                responses: VecDeque::from([
+                    first,
+                    vec![Output::Audio(vec![123, -456]), Output::Done],
+                ]),
+                current: Vec::new().into_iter(),
+            };
+            let result = from_files(
+                vec![vec![0; 320]; 2],
+                Some(&output),
+                &mut chat,
+                &AtomicBool::new(false),
+            );
+            match expected_error {
+                Some(message) => assert!(result.unwrap_err().to_string().contains(message)),
+                None => result.unwrap(),
+            }
+            assert_eq!(chat.responses.len(), remaining);
+            let mut wav = hound::WavReader::open(output).unwrap();
+            assert_eq!(wav.spec().sample_rate, 24_000);
+            assert_eq!(
+                wav.samples::<i16>()
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .unwrap(),
+                expected_pcm
+            );
         }
     }
 

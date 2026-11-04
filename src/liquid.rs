@@ -413,7 +413,7 @@ fn read_stream(mut reader: impl BufRead, mut emit: impl FnMut(Output) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profiles::{LFM25, LFM25_JP};
+    use crate::profiles::LFM25;
     use std::{fs, io, time::Instant};
 
     const END: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
@@ -498,7 +498,12 @@ mod tests {
 
     #[test]
     fn requests_keep_the_matching_prompt_only_on_reset_and_encode_real_wav() {
-        for profile in [&LFM25, &LFM25_JP] {
+        for profile in crate::profiles::PROFILES.iter().copied().filter(|profile| {
+            matches!(
+                profile.protocol,
+                crate::profiles::Protocol::LiquidAudio { .. }
+            )
+        }) {
             assert_eq!(
                 profile.instructions,
                 "Respond with interleaved text and audio."
@@ -702,7 +707,7 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
 
     #[cfg(target_os = "macos")]
     #[test]
-    #[ignore = "Requires cached English/JP assets and macOS say; no microphone or speakers"]
+    #[ignore = "Requires cached English assets and macOS say; no microphone or speakers"]
     fn official_models_handle_multiturn_cancellation_and_offline_restart() {
         use std::{net::TcpStream, process::Command};
         let fixture = Fixture::new();
@@ -710,26 +715,18 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
             .map(PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
         let mut memory_failures = Vec::new();
-        for (profile, voice, utterances, names) in [
-            (
-                &LFM25,
-                "Samantha",
-                [
-                    "The secret word is pineapple. Please repeat it.",
-                    "What is the secret word?",
-                ],
-                &["pineapple"][..],
-            ),
-            (
-                &LFM25_JP,
-                "Kyoko",
-                [
-                    "合言葉はパイナップルです。合言葉を覚えて、繰り返してください。",
-                    "合言葉は何ですか。",
-                ],
-                &["パイナップル", "ぱいなっぷる"][..],
-            ),
-        ] {
+        for profile in crate::profiles::PROFILES.iter().copied().filter(|profile| {
+            matches!(
+                profile.protocol,
+                crate::profiles::Protocol::LiquidAudio { .. }
+            )
+        }) {
+            let voice = "Samantha";
+            let utterances = [
+                "The secret word is pineapple. Please repeat it.",
+                "What is the secret word?",
+            ];
+            let names = ["pineapple"];
             let mut inputs = Vec::new();
             for (index, utterance) in utterances.iter().enumerate() {
                 let path = fixture.0.join(format!("{index}.wav"));

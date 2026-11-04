@@ -291,19 +291,21 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert!(models.status.success());
     assert_eq!(
         models.stdout,
-        b"LFM3-Audio-2B\nLFM3-Omni-2B\nLFM2.5-Audio-1.5B\nLFM2.5-Audio-1.5B-JP\n"
+        b"LFM3-Audio-2B\nLFM3-Omni-2B\nLFM2.5-Audio-1.5B\n"
     );
     let cache = package.0.join("unused-cache");
     let cache_arg = cache.to_str().unwrap();
     for command in ["run", "pull", "doctor"] {
-        assert_eq!(
-            package
-                .run(&["--cache-dir", cache_arg, command, "unknown"])
-                .status
-                .code(),
-            Some(2)
-        );
-        assert!(!cache.exists(), "Unknown model created a cache");
+        for model in ["unknown", "LFM2.5-Audio-1.5B-JP"] {
+            assert_eq!(
+                package
+                    .run(&["--cache-dir", cache_arg, command, model])
+                    .status
+                    .code(),
+                Some(2)
+            );
+            assert!(!cache.exists(), "Rejected model created a cache");
+        }
     }
     let doctor = package.run(&["--cache-dir", cache_arg, "doctor"]);
     let explicit = package.run(&["--cache-dir", cache_arg, "doctor", "LFM3-Audio-2B"]);
@@ -316,14 +318,12 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     assert!(text.contains("Profile: Liquid AI LFM3-Omni-2B"));
     assert!(text.contains("mmproj-LFM3-Omni-2B-Q8_0.gguf"));
     assert!(!text.contains("mmproj-LFM3-Audio"));
-    for model in ["LFM2.5-Audio-1.5B", "LFM2.5-Audio-1.5B-JP"] {
-        let doctor = package.run(&["--cache-dir", cache_arg, "doctor", model]);
-        assert_eq!(doctor.status.code(), Some(1));
-        let text = String::from_utf8_lossy(&doctor.stdout);
-        assert!(text.contains(&format!("Profile: Liquid AI {model}")));
-        assert!(text.contains(&format!("tokenizer-{model}-Q8_0.gguf")));
-        assert!(text.contains(&format!("vocoder-{model}-Q8_0.gguf")));
-    }
+    let doctor = package.run(&["--cache-dir", cache_arg, "doctor", "LFM2.5-Audio-1.5B"]);
+    assert_eq!(doctor.status.code(), Some(1));
+    let text = String::from_utf8_lossy(&doctor.stdout);
+    assert!(text.contains("Profile: Liquid AI LFM2.5-Audio-1.5B"));
+    assert!(text.contains("tokenizer-LFM2.5-Audio-1.5B-Q8_0.gguf"));
+    assert!(text.contains("vocoder-LFM2.5-Audio-1.5B-Q8_0.gguf"));
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("LFM3-Omni-2B"));
     assert!(!cache.exists(), "Doctor mutated the cache");
