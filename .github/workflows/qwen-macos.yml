@@ -31,11 +31,6 @@ jobs:
         run: |
           test "$(uname -m)" = arm64
           python -m venv "$RUNNER_TEMP/qwen-smoke"
-          "$RUNNER_TEMP/qwen-smoke/bin/python" -m pip install --report "$RUNNER_TEMP/qwen-pip.json" 'speech-to-speech==1.1.0'
+          "$RUNNER_TEMP/qwen-smoke/bin/python" -m pip install --require-hashes --no-deps -r packaging/qwen/requirements-macos.lock
+          "$RUNNER_TEMP/qwen-smoke/bin/python" -m pip check
           "$RUNNER_TEMP/qwen-smoke/bin/speech-to-speech" local --help > /dev/null
-          python - "$RUNNER_TEMP/qwen-pip.json" <<'PY'
-          import json, sys
-          for entry in json.load(open(sys.argv[1]))["install"]:
-              meta, src = entry["metadata"], entry["download_info"]
-              print(f"LOCK {meta['name']}=={meta['version']} --hash=sha256:{src['archive_info']['hashes']['sha256']}")
-          PY
