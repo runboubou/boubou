@@ -279,6 +279,25 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 }
 
 #[test]
+fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
+    let package = Package::new();
+    let cache = package.0.join("qwen-cache");
+    for id in ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"] {
+        let output = package.run(&[
+            "--cache-dir",
+            cache.to_str().unwrap(),
+            "run",
+            id,
+            "--input",
+            "missing.wav",
+        ]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Qwen voice chat"));
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
 fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     let package = Package::new();
     let version = package.run(&["--version"]);
