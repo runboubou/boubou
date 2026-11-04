@@ -469,10 +469,8 @@ impl Screen {
                     }
                     _ => {}
                 },
-                Event::Paste(paste) => {
-                    if text.len() + paste.len() <= 1024 {
-                        text.extend(paste.chars().filter(|c| !c.is_control()));
-                    }
+                Event::Paste(paste) if text.len() + paste.len() <= 1024 => {
+                    text.extend(paste.chars().filter(|c| !c.is_control()));
                 }
                 _ => {}
             }
