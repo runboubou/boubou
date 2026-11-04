@@ -572,3 +572,75 @@ fn npm_launcher_waits_for_cleanup_before_propagating_termination() {
             .success()
     );
 }
+
+#[test]
+fn qwen_runner_reaches_loopback_with_a_proxy_and_preserves_bypasses() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, os, runpy, sys, types, urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Thread
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy"):
+    os.environ[key] = "http://127.0.0.1:1"
+os.environ["NO_PROXY"] = os.environ["no_proxy"] = "kept.invalid"
+
+with HTTPServer(("127.0.0.1", 0), Handler) as server:
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def run_pipeline(command, argv):
+            assert command == "local"
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/v1/realtime", timeout=2
+            ) as response:
+                assert response.status == 204
+            for host in ("localhost", "::1", "kept.invalid"):
+                assert urllib.request.proxy_bypass(host), host
+
+        package = types.ModuleType("speech_to_speech")
+        package.__path__ = []
+        pipeline = types.ModuleType("speech_to_speech.s2s_pipeline")
+        pipeline.run_pipeline_command = run_pipeline
+        sys.modules["speech_to_speech"] = package
+        sys.modules["speech_to_speech.s2s_pipeline"] = pipeline
+        with TemporaryDirectory() as folder:
+            cache = Path(folder)
+            manifest = cache / "models.json"
+            manifest.write_text(json.dumps([
+                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
+                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit",
+                             "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
+            ]))
+            runpy.run_path(sys.argv[1])["run"](
+                "local", "qwen3-tts:1.7b-customvoice", cache, manifest
+            )
+    finally:
+        server.shutdown()
+        thread.join()
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

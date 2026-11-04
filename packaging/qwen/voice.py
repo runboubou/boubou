@@ -53,6 +53,11 @@ def run(command, model, cache, manifest, *extra):
             PYTHONPYCACHEPREFIX=str(work / "bytecode"),
         )
         sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
+        # The local audio client must bypass macOS system proxies for loopback.
+        for key in ("NO_PROXY", "no_proxy"):
+            os.environ[key] = ",".join(
+                filter(None, (os.environ.get(key), "127.0.0.1,localhost,::1"))
+            )
         options = arguments(model, cache, manifest, work)
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         # Upstream v1.1.0 sets this to its package directory during import.
