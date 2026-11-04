@@ -31,7 +31,7 @@ def main():
     args = parser.parse_args()
     if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
         parser.error("build on an Apple Silicon Mac")
-    if args.url and not args.url.startswith("https://"):
+    if args.url is not None and not args.url.startswith("https://"):
         parser.error("supply an HTTPS archive URL")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,10 @@ def main():
         subprocess.run([python, "-I", "-B", "-m", "pip", "check"], check=True)
         shutil.copy2(HERE / "voice.py", root)
         shutil.copy2(HERE / "requirements-macos.lock", root)
-        install(root)
+        provenance = install(root)
+        provenance.update(python_url=PYTHON, python_sha256=PYTHON_SHA,
+                          wheel_lock_sha256=digest(root / "requirements-macos.lock"))
+        (root / "BUILD.json").write_text(json.dumps(provenance, indent=2) + "\n")
         for path in root.rglob("__pycache__"):
             shutil.rmtree(path)
         # Only the interpreter is executed. Generated entry scripts have build-time shebangs.

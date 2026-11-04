@@ -46,7 +46,10 @@ fn runner(dir: &Path) -> Result<Runner> {
     )?;
     let runner: Runner = serde_json::from_slice(&bytes)?;
     ensure!(
-        runner.url.as_ref().is_none_or(|url| url.starts_with("https://"))
+        runner
+            .url
+            .as_ref()
+            .is_none_or(|url| url.starts_with("https://"))
             && runner.sha256.len() == 64
             && runner.sha256.bytes().all(|c| c.is_ascii_hexdigit())
             && runner.size > 0,
@@ -101,7 +104,10 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
         assets::fetch(&runner.archive(), &engine, offline)?
     } else {
         let archive = dir.join("runner.tar.gz");
-        ensure!(assets::verified(&archive, &runner.archive())?, "The bundled Qwen interpreter failed verification. Reinstall the package.");
+        ensure!(
+            assets::verified(&archive, &runner.archive())?,
+            "The bundled Qwen interpreter failed verification. Reinstall the package."
+        );
         archive
     };
     let installed = engine.join("installed");

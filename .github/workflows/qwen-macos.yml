@@ -50,7 +50,10 @@ jobs:
           "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
           "$cli" pull qwen3-tts:1.7b-customvoice
+          find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > before
           "$cli" pull qwen3-tts:0.6b-customvoice
+          find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > after
+          test -z "$(LC_ALL=C comm -23 before after)"
           for size in 1.7b 0.6b; do
             "$cli" pull "qwen3-tts:$size-customvoice" --offline
             "$cli" doctor "qwen3-tts:$size-customvoice"
@@ -64,3 +67,15 @@ jobs:
             ${{ runner.temp }}/qwen/runtime.json
             ${{ runner.temp }}/qwen/models.json
             target/dist/**/*.tgz
+      - name: Check offline speech inference through the loopback service
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/qwen-cache/qwen"
+          manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou/qwen/models.json"
+          sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
+          python="$root/runtimes/$sha/installed/bin/python3"
+          sw_vers -productVersion
+          sysctl hw.model hw.memsize
+          for size in 1.7b 0.6b; do
+            "$python" -I -B packaging/qwen/smoke.py "qwen3-tts:$size-customvoice" "$root" "$manifest"
+          done

@@ -5,7 +5,6 @@ import io
 import subprocess
 import tempfile
 import zipfile
-from pathlib import Path
 from urllib.request import urlopen
 
 
@@ -40,3 +39,4 @@ def install(root):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(git("show", f"{revision}:{name}"))
         (root / "torch/hub/trusted_list").write_text("snakers4_silero-vad\n")
+    return {"nltk_data_revision": nltk, "silero_revision": revision}
