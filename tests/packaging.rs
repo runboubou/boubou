@@ -295,16 +295,23 @@ fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
     let mut header = tar::Header::new_gnu();
     header.set_size(script.len() as u64);
     header.set_mode(0o755);
-    archive.append_data(&mut header, "bin/python3", &script[..]).unwrap();
+    archive
+        .append_data(&mut header, "bin/python3", &script[..])
+        .unwrap();
     let bytes = archive.into_inner().unwrap().finish().unwrap();
     let digest = format!("{:x}", Sha256::digest(&bytes));
     let engine = cache.join("runtimes").join(&digest);
     fs::create_dir_all(&engine).unwrap();
     fs::write(engine.join("runner.tar.gz"), &bytes).unwrap();
-    fs::write(release.join("runtime.json"), serde_json::json!({
-        "url": "https://example.invalid/runner.tar.gz",
-        "sha256": digest, "size": bytes.len(), "min_macos": "13.3"
-    }).to_string()).unwrap();
+    fs::write(
+        release.join("runtime.json"),
+        serde_json::json!({
+            "url": "https://example.invalid/runner.tar.gz",
+            "sha256": digest, "size": bytes.len(), "min_macos": "13.3"
+        })
+        .to_string(),
+    )
+    .unwrap();
     let id = "qwen3-tts:1.7b-customvoice";
     let asset = b"pinned fixture";
     let files = serde_json::json!([{
