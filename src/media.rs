@@ -83,7 +83,7 @@ impl Input {
             // Fail before inference if a soundtrack or picture track cannot be decoded.
             tool_output(
                 Command::new("ffmpeg")
-                    .args(["-v", "error", "-nostdin", "-i"])
+                    .args(["-v", "error", "-xerror", "-nostdin", "-i"])
                     .arg(&self.path)
                     .args([
                         "-map", "0:v:0", "-map", "0:a:0?", "-t", "10", "-f", "null", "-",
