@@ -14,7 +14,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   });
 }
 child.once("error", (error) => {
-  console.error(`Could not start bobo: ${error.message}`);
+  console.error(`Could not start boubou: ${error.message}`);
   process.exitCode = 1;
 });
 child.once("exit", (code, signal) => {

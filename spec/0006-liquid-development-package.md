@@ -2,7 +2,7 @@
 
 **Status:** [Accepted for MVP 1](0001-liquid-macos-product.md).
 
-**Behavior:** Publish `boubou` with the `bobo` command. Require the explicit model
+**Behavior:** Publish `boubou` with the `boubou` command. Require the explicit model
 ID `LFM3-Audio-2B` for run/pull. Bundle the Mac arm64 Rust executable and a small
 Node launcher; inherit terminal I/O, cancel Rust on shutdown, wait for its cleanup
 and preserve exit status/signals.
