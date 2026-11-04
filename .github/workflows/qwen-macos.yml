@@ -1,0 +1,33 @@
+name: Qwen Mac runtime
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/qwen/**'
+      - '.github/workflows/qwen-macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qwen-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate:
+    runs-on: macos-15
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - name: Verify the upstream Mac package
+        run: |
+          test "$(uname -m)" = arm64
+          python -m venv "$RUNNER_TEMP/qwen-smoke"
+          "$RUNNER_TEMP/qwen-smoke/bin/python" -m pip install 'speech-to-speech==1.1.0'
+          "$RUNNER_TEMP/qwen-smoke/bin/speech-to-speech" local --help > /dev/null
