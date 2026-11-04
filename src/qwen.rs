@@ -1,9 +1,11 @@
+mod integrity;
+
 use crate::{assets, profiles::Download};
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::{
     env, fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -81,8 +83,10 @@ fn check_host(runner: &Runner) -> Result<()> {
     Ok(())
 }
 
-fn runtime_dir(cache: &Path, runner: &Runner) -> PathBuf {
-    cache.join("runtimes").join(&runner.sha256)
+fn runtime_dir(root: &Path, runner: &Runner) -> Result<PathBuf> {
+    let relative = Path::new("runtimes").join(&runner.sha256);
+    integrity::safe_destination(root, &relative.join("runner.tar.gz"))?;
+    Ok(root.join(relative))
 }
 
 pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
@@ -90,11 +94,16 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     let runner = runner(&dir)?;
     check_host(&runner)?;
     let root = cache.join("qwen");
+    integrity::safe_destination(cache, Path::new("qwen/install.lock"))?;
     let _lock = assets::preparation_lock(&root)?;
-    let engine = runtime_dir(&root, &runner);
+    let engine = runtime_dir(&root, &runner)?;
     let archive = assets::fetch(&runner.archive(), &engine, offline)?;
     let installed = engine.join("installed");
-    assets::install_runtime(&archive, &installed, "bin/python3")?;
+    let refresh = !integrity::runtime_tree(&archive, &installed)?;
+    assets::install_runtime(&archive, &installed, "bin/python3", refresh)?;
+    if refresh {
+        ensure!(integrity::runtime_tree(&archive, &installed)?, "The Qwen runtime contains unexpected files");
+    }
     model_assets(id, &root, &dir, Some(offline))?;
     Ok(installed)
 }
@@ -105,9 +114,10 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     let runner = runner(&dir)?;
     check_host(&runner)?;
     let root = cache.join("qwen");
-    let engine = runtime_dir(&root, &runner);
+    let engine = runtime_dir(&root, &runner)?;
     let archive = engine.join("runner.tar.gz");
     let ready = assets::verified(&archive, &runner.archive())?
+        && integrity::runtime_tree(&archive, &engine.join("installed"))?
         && assets::runtime_valid(&archive, &engine.join("installed"), "bin/python3")?;
     println!(
         "Qwen runner: {}",
@@ -140,16 +150,13 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
         "Missing Qwen model profile {id}"
     );
     let mut ready = true;
+    let mut selected = Vec::new();
     for f in files
         .iter()
         .filter(|f| f.profile.as_deref().is_none_or(|p| p == id))
     {
-        ensure!(
-            f.path
-                .components()
-                .all(|c| matches!(c, Component::Normal(_))),
-            "Invalid model asset path"
-        );
+        integrity::safe_destination(root, &f.path)?;
+        selected.push(f.path.as_path());
         let path = root.join(&f.path);
         let spec = Download {
             name: path
@@ -172,7 +179,7 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
         }
     }
     ensure!(ready, "Run `boubou pull {id}` while online.");
-    Ok(())
+    integrity::model_snapshots(root, &selected)
 }
 
 pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {

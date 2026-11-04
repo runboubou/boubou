@@ -40,7 +40,7 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let model_dir = cache_dir.join(profile.model_directory);
     let archive = download(&profile.runtime.archive, &cache_dir.join("downloads"))?;
     let installed = cache_dir.join(profile.runtime.directory);
-    install_runtime(&archive, &installed, profile.runtime.server)?;
+    install_runtime(&archive, &installed, profile.runtime.server, false)?;
 
     // Cache the model's license alongside its weights before making it runnable.
     for spec in profile.model_assets() {
@@ -67,8 +67,8 @@ pub(crate) fn preparation_lock(cache_dir: &Path) -> Result<File> {
     Ok(lock)
 }
 
-pub(crate) fn install_runtime(archive: &Path, installed: &Path, server: &str) -> Result<()> {
-    if !runtime_valid(archive, installed, server)? {
+pub(crate) fn install_runtime(archive: &Path, installed: &Path, server: &str, refresh: bool) -> Result<()> {
+    if refresh || !runtime_valid(archive, installed, server)? {
         let staging = installed.with_extension("partial");
         if staging.exists() {
             fs::remove_dir_all(&staging)?;

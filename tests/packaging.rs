@@ -314,18 +314,20 @@ fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
     .unwrap();
     let id = "qwen3-tts:1.7b-customvoice";
     let asset = b"pinned fixture";
+    let snapshot = "hub/models--fixture--qwen/snapshots/abc";
     let files = serde_json::json!([{
-        "profile": id, "path": "models/tts.bin", "size": asset.len(),
+        "profile": id, "path": format!("{snapshot}/tts.bin"), "size": asset.len(),
         "sha256": format!("{:x}", Sha256::digest(asset)), "url": "https://example.invalid/tts.bin"
     }]);
     fs::write(release.join("models.json"), files.to_string()).unwrap();
-    fs::create_dir(cache.join("models")).unwrap();
-    fs::write(cache.join("models/tts.bin.part"), asset).unwrap();
+    let snapshot = cache.join(snapshot);
+    fs::create_dir_all(&snapshot).unwrap();
+    fs::write(snapshot.join("tts.bin.part"), asset).unwrap();
     let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
     prompt.expect(&["selected: qwen3-tts:1.7b-customvoice"]);
     assert!(prompt.finish().success());
-    assert_eq!(fs::read(cache.join("models/tts.bin")).unwrap(), asset);
-    assert!(!cache.join("models/tts.bin.part").exists());
+    assert_eq!(fs::read(snapshot.join("tts.bin")).unwrap(), asset);
+    assert!(!snapshot.join("tts.bin.part").exists());
 }
 
 #[test]
