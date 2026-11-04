@@ -5,6 +5,7 @@ mod backend;
 #[cfg(target_os = "macos")]
 mod onboarding;
 mod profiles;
+mod progress;
 mod realtime;
 #[cfg(any(target_os = "macos", test))]
 mod voice;
@@ -213,9 +214,11 @@ fn run() -> Result<()> {
             let flag = stopped.clone();
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
             check_cancel(&stopped)?;
-            eprintln!("Loading {} locally…", model.id);
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
-            let mut connection = Realtime::connect(&backend.address, files.profile, &stopped)?;
+            let mut connection = {
+                let _progress = progress::Progress::new("Connecting the voice session", None);
+                Realtime::connect(&backend.address, files.profile, &stopped)?
+            };
             let result = if turns.is_empty() {
                 microphone(
                     &cache,
@@ -359,8 +362,12 @@ fn microphone(
     manual: bool,
     language: &str,
 ) -> Result<()> {
-    eprintln!("Allow microphone access if macOS asks. Speak {language}.");
-    let (mut audio, captured) = audio::Audio::start(cache, !manual, stopped)?;
+    eprintln!("Allow microphone access if macOS asks.");
+    let (mut audio, captured) = {
+        let _progress = progress::Progress::new("Opening microphone and speakers", None);
+        audio::Audio::start(cache, !manual, stopped)?
+    };
+    eprintln!("Ready. Speak {language}.");
     let _terminal = Terminal::enter()?;
     if manual {
         eprint!(

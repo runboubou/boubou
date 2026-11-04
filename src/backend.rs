@@ -1,4 +1,4 @@
-use crate::{assets::Assets, profiles::Profile};
+use crate::{assets::Assets, profiles::Profile, progress::Progress};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     fs::{self, OpenOptions},
@@ -22,6 +22,7 @@ impl Backend {
     pub fn start(assets: &Assets, cache: &Path, stopped: &AtomicBool) -> Result<Self> {
         let profile = assets.profile;
         crate::check_cancel(stopped)?;
+        let _progress = Progress::new(&format!("Loading {} locally", profile.id), None);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         let address = format!("127.0.0.1:{port}");
