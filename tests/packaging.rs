@@ -279,7 +279,7 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 }
 
 #[test]
-fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
+fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     use flate2::{Compression, write::GzEncoder};
     use sha2::{Digest, Sha256};
 
@@ -323,9 +323,16 @@ fn packaged_qwen_recovers_partial_assets_and_launches_offline() {
     let snapshot = cache.join(snapshot);
     fs::create_dir_all(&snapshot).unwrap();
     fs::write(snapshot.join("tts.bin.part"), asset).unwrap();
+    // The fixture runner exits instead of serving; Boubou reports its arguments and output.
     let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
-    prompt.expect(&["selected: qwen3-tts:1.7b-customvoice"]);
-    assert!(prompt.finish().success());
+    for line in [
+        "The Qwen voice runner stopped",
+        "selected: qwen3-tts:1.7b-customvoice",
+        "selected: --port",
+    ] {
+        prompt.expect(&[line]);
+    }
+    assert!(!prompt.finish().success());
     assert_eq!(fs::read(snapshot.join("tts.bin")).unwrap(), asset);
     assert!(!snapshot.join("tts.bin.part").exists());
 }
@@ -602,7 +609,7 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
     thread.start()
     try:
         def run_pipeline(command, argv):
-            assert command == "local"
+            assert command == "serve"
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{server.server_port}/v1/realtime", timeout=2
             ) as response:
@@ -625,7 +632,7 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
                              "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
             ]))
             runpy.run_path(sys.argv[1])["run"](
-                "local", "qwen3-tts:1.7b-customvoice", cache, manifest
+                "serve", "qwen3-tts:1.7b-customvoice", cache, manifest
             )
     finally:
         server.shutdown()
