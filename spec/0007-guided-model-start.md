@@ -31,6 +31,13 @@ path to a suitable model; users arriving from a model library need direct access
   screen and retain their existing behavior. Redirected I/O and `TERM=dumb`
   print help instead of opening the menu. No npm publication is part of this change.
 
+- After selection or direct `run`, keep startup visible: report verification,
+  downloads, engine installation/loading, session connection and audio opening.
+  Show measured byte percentages for verification/downloads; other phases show
+  an animated bar with elapsed time and no invented percentage. Non-terminal
+  output gets one phase heading without animation; retain `NO_COLOR` behavior.
+  Clear active progress before errors, and show Ready only after audio opens.
+
 **Failures:** Device detection failure or no suitable model offers a return to
 the welcome screen. Browsing, cancelling and invalid input never prepare assets
 or open audio devices. Restore terminal mode, cursor and signal handlers on exit

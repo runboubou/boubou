@@ -1,4 +1,7 @@
-use crate::profiles::{Download, Profile};
+use crate::{
+    profiles::{Download, Profile},
+    progress::Progress,
+};
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
 use fs2::FileExt;
@@ -8,7 +11,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Debug)]
@@ -46,15 +49,17 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let archive = download(&profile.runtime.archive, &cache_dir.join("downloads"))?;
     let installed = cache_dir.join(profile.runtime.directory);
     if !runtime_valid(&archive, &installed, profile.runtime.server)? {
-        eprintln!("Installing the local speech engine…");
         let staging = installed.with_extension("partial");
         if staging.exists() {
             fs::remove_dir_all(&staging)?;
         }
         fs::create_dir_all(&staging)?;
-        tar::Archive::new(GzDecoder::new(File::open(&archive)?))
-            .unpack(&staging)
-            .context("Cannot unpack the speech engine")?;
+        {
+            let _progress = Progress::new("Installing the local speech engine", None);
+            tar::Archive::new(GzDecoder::new(File::open(&archive)?))
+                .unpack(&staging)
+                .context("Cannot unpack the speech engine")?;
+        }
         ensure!(
             runtime_valid(&archive, &staging, profile.runtime.server)?,
             "The unpacked speech engine failed verification"
@@ -120,7 +125,7 @@ pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sha256(mut reader: impl Read) -> Result<String> {
+fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> {
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
     loop {
@@ -129,6 +134,9 @@ fn sha256(mut reader: impl Read) -> Result<String> {
             break;
         }
         hash.update(&buffer[..n]);
+        if let Some(progress) = progress {
+            progress.advance(n as u64);
+        }
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -140,7 +148,11 @@ fn verified(path: &Path, spec: &Download<'_>) -> Result<bool> {
         Err(e) => return Err(e).with_context(|| format!("Cannot read {}", path.display())),
     };
     let metadata = file.metadata()?;
-    Ok(metadata.is_file() && metadata.len() == spec.size && sha256(file)? == spec.sha256)
+    if !metadata.is_file() || metadata.len() != spec.size {
+        return Ok(false);
+    }
+    let progress = Progress::new(&format!("Verifying {}", spec.name), Some(spec.size));
+    Ok(sha256(file, Some(&progress))? == spec.sha256)
 }
 
 fn sync_parent(path: &Path) -> Result<()> {
@@ -183,15 +195,17 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     if offset > 0 {
         request = request.header(header::RANGE, format!("bytes={offset}-"));
     }
-    eprintln!(
-        "{} {} ({:.1} MB)…",
-        if offset == 0 {
-            "Downloading"
-        } else {
-            "Resuming"
-        },
-        spec.name,
-        spec.size as f64 / 1_000_000.0
+    let progress = Progress::new(
+        &format!(
+            "{} {}",
+            if offset == 0 {
+                "Downloading"
+            } else {
+                "Resuming"
+            },
+            spec.name,
+        ),
+        Some(spec.size),
     );
     let mut response = request
         .send()
@@ -229,7 +243,7 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
         .truncate(start == 0)
         .open(&partial)?;
     let mut received = start;
-    let mut last_progress = Instant::now();
+    progress.advance(start);
     let mut buffer = vec![0; 256 * 1024];
     loop {
         let n = response
@@ -245,13 +259,11 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
         );
         file.write_all(&buffer[..n])?;
         received += n as u64;
-        if last_progress.elapsed() >= Duration::from_secs(2) {
-            eprintln!("  {:.0}%", received as f64 * 100.0 / spec.size as f64);
-            last_progress = Instant::now();
-        }
+        progress.advance(n as u64);
     }
     file.sync_all()?;
     drop(file);
+    drop(progress);
     ensure!(
         verified(&partial, spec)?,
         "{} failed its size or SHA-256 check; it was not installed. Run again to retry.",
@@ -266,6 +278,7 @@ fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool>
     if !installed.is_dir() {
         return Ok(false);
     }
+    let _progress = Progress::new("Verifying the installed speech engine", None);
     let mut tar = tar::Archive::new(GzDecoder::new(File::open(archive)?));
     for entry in tar.entries()? {
         let mut entry = entry?;
@@ -279,7 +292,7 @@ fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool>
         if kind.is_file() {
             if !metadata.is_file()
                 || metadata.len() != entry.size()
-                || sha256(File::open(&path)?)? != sha256(&mut entry)?
+                || sha256(File::open(&path)?, None)? != sha256(&mut entry, None)?
             {
                 return Ok(false);
             }
@@ -373,7 +386,7 @@ mod tests {
     fn resumes_partial_and_publishes_only_verified_bytes() {
         let dir = TestDir::new();
         fs::write(dir.0.join("weights.part"), b"abc").unwrap();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let (url, worker) = serve(
             "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
         );
@@ -393,7 +406,7 @@ mod tests {
     fn restarts_when_server_ignores_range() {
         let dir = TestDir::new();
         fs::write(dir.0.join("weights.part"), b"abc").unwrap();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let (url, worker) =
             serve("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef");
         let path = fetch(&spec(&url, &hash), &dir.0, false).unwrap();
@@ -405,7 +418,7 @@ mod tests {
     fn refuses_inconsistent_range_without_destroying_partial() {
         let dir = TestDir::new();
         fs::write(dir.0.join("weights.part"), b"abc").unwrap();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let (url, worker) = serve(
             "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 0-2/6\r\nConnection: close\r\n\r\nabc",
         );
@@ -418,7 +431,7 @@ mod tests {
     #[test]
     fn offline_checks_hash_and_never_connects() {
         let dir = TestDir::new();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let spec = spec("http://127.0.0.1:1/must-not-connect", &hash);
         assert!(
             fetch(&spec, &dir.0, true)
@@ -453,7 +466,7 @@ mod tests {
     fn recovers_complete_partial_without_network() {
         let dir = TestDir::new();
         fs::write(dir.0.join("weights.part"), b"abcdef").unwrap();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let path = fetch(&spec("http://127.0.0.1:1", &hash), &dir.0, true).unwrap();
         assert_eq!(fs::read(path).unwrap(), b"abcdef");
     }
@@ -461,7 +474,7 @@ mod tests {
     #[test]
     fn does_not_install_corrupted_download() {
         let dir = TestDir::new();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let (url, worker) =
             serve("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdeg");
         assert!(fetch(&spec(&url, &hash), &dir.0, false).is_err());
@@ -472,7 +485,7 @@ mod tests {
     #[test]
     fn interrupted_body_preserves_bytes_for_next_attempt() {
         let dir = TestDir::new();
-        let hash = sha256(&b"abcdef"[..]).unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
         let (url, worker) =
             serve("HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabc");
         assert!(fetch(&spec(&url, &hash), &dir.0, false).is_err());
