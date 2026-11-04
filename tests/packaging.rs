@@ -293,11 +293,20 @@ fn qwen_package_lists_both_models_and_doctor_is_read_only() {
     )
     .unwrap();
     let ids = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
-    let files: Vec<_> = ids.iter().map(|id| serde_json::json!({
-        "profile": id, "path": format!("models/{id}/config.json"), "size": 7,
-        "url": "https://example.invalid/config.json", "sha256": "b".repeat(64)
-    })).collect();
-    fs::write(release.join("models.json"), serde_json::to_vec(&files).unwrap()).unwrap();
+    let files: Vec<_> = ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "profile": id, "path": format!("models/{id}/config.json"), "size": 7,
+                "url": "https://example.invalid/config.json", "sha256": "b".repeat(64)
+            })
+        })
+        .collect();
+    fs::write(
+        release.join("models.json"),
+        serde_json::to_vec(&files).unwrap(),
+    )
+    .unwrap();
     let models = package.run(&["list"]);
     let model_list = String::from_utf8(models.stdout).unwrap();
     let cache = package.0.join("unused-cache");
