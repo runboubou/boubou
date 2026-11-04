@@ -53,9 +53,11 @@ def run(command, model, cache, manifest, *extra):
             PYTHONPYCACHEPREFIX=str(work / "bytecode"),
         )
         sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
-        sys.argv = ["speech-to-speech", command, *arguments(model, cache, manifest, work), *extra]
-        from speech_to_speech.cli import main
-        main()
+        options = arguments(model, cache, manifest, work)
+        from speech_to_speech.s2s_pipeline import run_pipeline_command
+        # Upstream v1.1.0 sets this to its package directory during import.
+        os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")
+        run_pipeline_command(command, [*options, *extra])
 
 
 if __name__ == "__main__":
