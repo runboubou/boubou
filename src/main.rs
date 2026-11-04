@@ -2,13 +2,15 @@ mod assets;
 #[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
+#[cfg(target_os = "macos")]
+mod onboarding;
 mod profiles;
 mod realtime;
 #[cfg(any(target_os = "macos", test))]
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 #[cfg(target_os = "macos")]
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
@@ -29,7 +31,7 @@ use std::{sync::mpsc::TryRecvError, time::Duration};
 
 #[derive(Parser)]
 #[command(
-    name = "bobo",
+    name = "boubou",
     version,
     about = "Local voice conversations, one command away"
 )]
@@ -38,7 +40,7 @@ struct Cli {
     #[arg(long, global = true, env = "BOUBOU_HOME")]
     cache_dir: Option<PathBuf>,
     #[command(subcommand)]
-    command: Action,
+    command: Option<Action>,
 }
 
 #[derive(Subcommand)]
@@ -82,7 +84,7 @@ fn main() {
         if error.is::<Cancelled>() {
             std::process::exit(130);
         }
-        eprintln!("\nbobo: {error:#}");
+        eprintln!("\nboubou: {error:#}");
         std::process::exit(1);
     }
 }
@@ -126,7 +128,35 @@ fn run() -> Result<()> {
         .cache_dir
         .or_else(|| dirs::cache_dir().map(|p| p.join("boubou")))
         .context("Cannot find a cache directory. Set BOUBOU_HOME or --cache-dir.")?;
-    match cli.command {
+    let command = match cli.command {
+        Some(command) => command,
+        None => {
+            if !io::stdin().is_terminal()
+                || !io::stdout().is_terminal()
+                || std::env::var("TERM").as_deref() == Ok("dumb")
+            {
+                Cli::command().print_help()?;
+                println!();
+                return Ok(());
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let selected = onboarding::start(&cache)?;
+                Action::Run {
+                    model: selected.model,
+                    offline: selected.offline,
+                    manual: false,
+                    input: Vec::new(),
+                    output: None,
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            bail!(
+                "Guided startup currently requires an Apple Silicon Mac. Use --help for commands."
+            );
+        }
+    };
+    match command {
         Action::List => {
             for model in profiles::PROFILES {
                 println!("{}", model.id);
@@ -134,7 +164,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Action::Doctor { model } => {
-            println!("bobo {}", env!("CARGO_PKG_VERSION"));
+            println!("boubou {}", env!("CARGO_PKG_VERSION"));
             println!(
                 "Platform: {} / {}",
                 std::env::consts::OS,
@@ -158,7 +188,7 @@ fn run() -> Result<()> {
         Action::Pull { model, offline } => {
             assets::prepare(model, &cache, offline)?;
             eprintln!(
-                "{} is ready. Run: bobo run {} --offline",
+                "{} is ready. Run: boubou run {} --offline",
                 model.id, model.id
             );
             Ok(())
@@ -673,32 +703,44 @@ mod tests {
     #[test]
     fn model_name_is_explicit_and_matches_the_upstream_model() {
         for command in ["run", "pull"] {
-            assert!(Cli::try_parse_from(["bobo", command, profiles::DEFAULT.id]).is_ok());
-            assert!(Cli::try_parse_from(["bobo", command]).is_err());
-            assert!(Cli::try_parse_from(["bobo", command, "liquid"]).is_err());
-            assert!(Cli::try_parse_from(["bobo", command, "other"]).is_err());
+            assert!(Cli::try_parse_from(["boubou", command, profiles::DEFAULT.id]).is_ok());
+            assert!(Cli::try_parse_from(["boubou", command]).is_err());
+            assert!(Cli::try_parse_from(["boubou", command, "liquid"]).is_err());
+            assert!(Cli::try_parse_from(["boubou", command, "other"]).is_err());
         }
     }
 
     #[test]
     fn output_requires_a_file_input() {
         assert!(
-            Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--output", "reply.wav"])
-                .is_err()
+            Cli::try_parse_from([
+                "boubou",
+                "run",
+                profiles::DEFAULT.id,
+                "--output",
+                "reply.wav"
+            ])
+            .is_err()
         );
-        assert!(Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--offline"]).is_ok());
-        assert!(Cli::try_parse_from(["bobo", "run", "other"]).is_err());
+        assert!(Cli::try_parse_from(["boubou", "run", profiles::DEFAULT.id, "--offline"]).is_ok());
+        assert!(Cli::try_parse_from(["boubou", "run", "other"]).is_err());
     }
 
     #[test]
     fn manual_recording_is_available_only_for_the_microphone() {
         assert!(
-            Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--manual", "--offline"])
-                .is_ok()
+            Cli::try_parse_from([
+                "boubou",
+                "run",
+                profiles::DEFAULT.id,
+                "--manual",
+                "--offline"
+            ])
+            .is_ok()
         );
         assert!(
             Cli::try_parse_from([
-                "bobo",
+                "boubou",
                 "run",
                 profiles::DEFAULT.id,
                 "--manual",

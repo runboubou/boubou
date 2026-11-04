@@ -37,7 +37,7 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let download = |spec: &Download<'_>, directory: &Path| {
         fetch(spec, directory, offline).with_context(|| {
             format!(
-                "Cannot prepare {}. Run `bobo pull {}` while online.",
+                "Cannot prepare {}. Run `boubou pull {}` while online.",
                 profile.id, profile.id
             )
         })
@@ -114,7 +114,7 @@ pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
     );
     ensure!(
         ready && runtime_ready,
-        "Liquid assets are missing or invalid. Run `bobo pull {}` while online.",
+        "Liquid assets are missing or invalid. Run `boubou pull {}` while online.",
         profile.id
     );
     Ok(())
@@ -444,7 +444,7 @@ mod tests {
             status(&crate::profiles::DEFAULT, &dir.0)
                 .unwrap_err()
                 .to_string()
-                .contains("bobo pull LFM3-Audio-2B")
+                .contains("boubou pull LFM3-Audio-2B")
         );
         assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 0);
     }

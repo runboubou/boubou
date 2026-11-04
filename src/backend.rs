@@ -111,7 +111,7 @@ impl Backend {
             })
         }) {
             return anyhow!(
-                "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `bobo run {} --offline`. Backend log: {}",
+                "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `boubou run {} --offline`. Backend log: {}",
                 self.profile.context_tokens,
                 self.profile.id,
                 self.log_path.display()
@@ -319,7 +319,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("bobo run LFM3-Audio-2B --offline")
+                .contains("boubou run LFM3-Audio-2B --offline")
         );
         fs::write(
             &log_path,

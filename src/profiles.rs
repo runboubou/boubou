@@ -26,6 +26,8 @@ pub struct Profile {
     pub projector: Download<'static>,
     pub license: Download<'static>,
     pub runtime: Runtime,
+    /// Conservative runtime memory budget, including headroom; None excludes recommendations.
+    pub memory_budget: Option<u64>,
     pub context_tokens: usize,
     pub max_output_tokens: usize,
     pub audio_samples_per_token: usize,
@@ -67,6 +69,9 @@ pub static DEFAULT: Profile = Profile {
         directory: "runtimes/b11960-macos-arm64",
         server: "llama-b11960/llama-server",
     },
+    // Native voice-file/cancellation profiling used about 2 GiB RSS. Reserve 6 GiB
+    // for the full runtime and headroom; this is an estimate, not a speed guarantee.
+    memory_budget: Some(6 * 1024 * 1024 * 1024),
     context_tokens: 32_768,
     max_output_tokens: 1024,
     // The pinned LFM3 encoder uses one context position per eight 160-sample mel frames.
