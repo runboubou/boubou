@@ -19,25 +19,39 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>> {
 pub(super) fn safe_destination(root: &Path, relative: &Path) -> Result<()> {
     ensure!(
         relative.file_name().is_some()
-            && relative.components().all(|part| matches!(part, Component::Normal(_))),
-        "Invalid Qwen asset path: {}", relative.display()
+            && relative
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))),
+        "Invalid Qwen asset path: {}",
+        relative.display()
     );
-    let destination = root.join(relative);
     // BOUBOU_HOME may itself be on a mounted volume. Check only the Qwen-owned tree.
-    for dir in relative.ancestors().skip(1) {
-        let path = root.join(dir);
-        ensure!(metadata(&path)?.is_none_or(|m| m.is_dir()),
-                "Expected a directory at {}. Remove the conflicting Qwen cache entry.", path.display());
+    let mut destination = root.to_owned();
+    for part in relative {
+        ensure!(
+            metadata(&destination)?.is_none_or(|m| m.is_dir()),
+            "Expected a directory at {}. Remove the conflicting Qwen cache entry.",
+            destination.display()
+        );
+        destination.push(part);
     }
     let mut partial = destination.as_os_str().to_owned();
     partial.push(".part");
     for path in [destination.as_path(), Path::new(&partial)] {
         if let Some(m) = metadata(path)? {
-            ensure!(m.is_file(), "Expected a regular file at {}. Remove the conflicting Qwen cache entry.", path.display());
+            ensure!(
+                m.is_file(),
+                "Expected a regular file at {}. Remove the conflicting Qwen cache entry.",
+                path.display()
+            );
             #[cfg(unix)]
             if path != destination {
                 use std::os::unix::fs::MetadataExt;
-                ensure!(m.nlink() == 1, "Remove the hard-linked partial download at {}", path.display());
+                ensure!(
+                    m.nlink() == 1,
+                    "Remove the hard-linked partial download at {}",
+                    path.display()
+                );
             }
         }
     }
@@ -45,7 +59,11 @@ pub(super) fn safe_destination(root: &Path, relative: &Path) -> Result<()> {
 }
 
 fn include_path(expected: &mut HashSet<PathBuf>, path: &Path) {
-    expected.extend(path.ancestors().filter(|p| !p.as_os_str().is_empty()).map(Path::to_owned));
+    expected.extend(
+        path.ancestors()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_owned),
+    );
 }
 
 // Walk without following links. Also count visited entries so a missing subtree cannot pass.
@@ -70,7 +88,9 @@ fn tree_matches(root: &Path, expected: &HashSet<PathBuf>, allow_links: bool) -> 
             } else if kind.is_symlink() {
                 if !allow_links
                     || fs::read_link(&path)?.is_absolute()
-                    || !path.canonicalize().is_ok_and(|target| target.starts_with(&root))
+                    || !path
+                        .canonicalize()
+                        .is_ok_and(|target| target.starts_with(&root))
                 {
                     return Ok(false);
                 }
@@ -91,7 +111,11 @@ pub(super) fn runtime_tree(archive: &Path, installed: &Path) -> Result<bool> {
     for entry in tar.entries()? {
         let entry = entry?;
         let path = entry.path()?;
-        ensure!(path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir)), "Unsafe path in Qwen runner archive");
+        ensure!(
+            path.components()
+                .all(|c| matches!(c, Component::Normal(_) | Component::CurDir)),
+            "Unsafe path in Qwen runner archive"
+        );
         let relative: PathBuf = path.iter().filter(|c| *c != OsStr::new(".")).collect();
         include_path(&mut expected, &relative);
     }
@@ -105,15 +129,23 @@ pub(super) fn model_snapshots(root: &Path, selected_files: &[&Path]) -> Result<(
         let snapshot: PathBuf = path.iter().take(4).collect();
         ensure!(
             path.iter().nth(2) == Some(OsStr::new("snapshots")) && path.iter().count() >= 5,
-            "Invalid Qwen snapshot path: {}", path.display()
+            "Invalid Qwen snapshot path: {}",
+            path.display()
         );
-        include_path(snapshots.entry(snapshot.clone()).or_default(), path.strip_prefix(snapshot)?);
+        let suffix = path.strip_prefix(&snapshot)?;
+        include_path(snapshots.entry(snapshot).or_default(), suffix);
     }
-    ensure!(!snapshots.is_empty(), "Packaged Qwen model manifest contains no snapshots");
+    ensure!(
+        !snapshots.is_empty(),
+        "Packaged Qwen model manifest contains no snapshots"
+    );
     for (snapshot, expected) in snapshots {
         let dir = root.join(snapshot);
-        ensure!(tree_matches(&dir, &expected, false)?,
-                "Qwen snapshot has missing or unexpected files. Remove {} and pull the model again.", dir.display());
+        ensure!(
+            tree_matches(&dir, &expected, false)?,
+            "Qwen snapshot has missing or unexpected files. Remove {} and pull the model again.",
+            dir.display()
+        );
     }
     Ok(())
 }
@@ -121,12 +153,17 @@ pub(super) fn model_snapshots(root: &Path, selected_files: &[&Path]) -> Result<(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::{os::unix::fs::symlink, sync::atomic::{AtomicU64, Ordering}};
+    use std::{
+        os::unix::fs::symlink,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     fn fixture(test: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "boubou-qwen-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)
+            "boubou-qwen-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&root)?;
         let result = test(&root);
@@ -145,7 +182,8 @@ mod tests {
             fs::write(bin.join("python3.11"), "engine")?;
             symlink("python3.11", bin.join("python3"))?;
             let archive = root.join("runner.tar.gz");
-            let encoder = flate2::write::GzEncoder::new(File::create(&archive)?, flate2::Compression::fast());
+            let encoder =
+                flate2::write::GzEncoder::new(File::create(&archive)?, flate2::Compression::fast());
             let mut tar = tar::Builder::new(encoder);
             tar.follow_symlinks(false);
             tar.append_dir_all(".", &installed)?;

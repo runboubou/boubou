@@ -102,7 +102,10 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     let refresh = !integrity::runtime_tree(&archive, &installed)?;
     assets::install_runtime(&archive, &installed, "bin/python3", refresh)?;
     if refresh {
-        ensure!(integrity::runtime_tree(&archive, &installed)?, "The Qwen runtime contains unexpected files");
+        ensure!(
+            integrity::runtime_tree(&archive, &installed)?,
+            "The Qwen runtime contains unexpected files"
+        );
     }
     model_assets(id, &root, &dir, Some(offline))?;
     Ok(installed)

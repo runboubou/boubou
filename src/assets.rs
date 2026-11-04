@@ -67,7 +67,12 @@ pub(crate) fn preparation_lock(cache_dir: &Path) -> Result<File> {
     Ok(lock)
 }
 
-pub(crate) fn install_runtime(archive: &Path, installed: &Path, server: &str, refresh: bool) -> Result<()> {
+pub(crate) fn install_runtime(
+    archive: &Path,
+    installed: &Path,
+    server: &str,
+    refresh: bool,
+) -> Result<()> {
     if refresh || !runtime_valid(archive, installed, server)? {
         let staging = installed.with_extension("partial");
         if staging.exists() {
