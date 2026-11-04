@@ -1,4 +1,8 @@
-use crate::{assets::Assets, profiles::Profile, progress::Progress};
+use crate::{
+    assets::Assets,
+    profiles::{Profile, Protocol},
+    progress::Progress,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     fs::{self, OpenOptions},
@@ -15,7 +19,7 @@ pub struct Backend {
     profile: &'static Profile,
     child: Child,
     pub address: String,
-    log_path: PathBuf,
+    log_path: Option<PathBuf>,
 }
 
 impl Backend {
@@ -26,25 +30,33 @@ impl Backend {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
         let address = format!("127.0.0.1:{port}");
-        let logs = cache.join("logs");
-        fs::create_dir_all(&logs)?;
-        let log_path = logs.join(format!("backend-{}.log", std::process::id()));
-        let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let log = options.open(&log_path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            log.set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
+        let (log_path, stdout, stderr) = match profile.protocol {
+            Protocol::Realtime => {
+                let logs = cache.join("logs");
+                fs::create_dir_all(&logs)?;
+                let path = logs.join(format!("backend-{}.log", std::process::id()));
+                let mut options = OpenOptions::new();
+                options.write(true).create(true).truncate(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let log = options.open(&path)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    log.set_permissions(fs::Permissions::from_mode(0o600))?;
+                }
+                (Some(path), Stdio::from(log.try_clone()?), Stdio::from(log))
+            }
+            // Liquid Audio prints reply text even at its normal log level.
+            Protocol::LiquidAudio { .. } => (None, Stdio::null(), Stdio::null()),
+        };
         drop(listener);
 
-        let child = Command::new(&assets.server)
+        let mut command = Command::new(&assets.server);
+        command
             .args(["--host", "127.0.0.1", "--port", &port.to_string()])
             .arg("--model")
             .arg(&assets.model)
@@ -57,13 +69,27 @@ impl Backend {
                 "1",
                 "--n-gpu-layers",
                 "99",
-                "--no-webui",
                 "--offline",
             ])
-            .args(profile.backend_args)
+            .args(profile.backend_args);
+        match profile.protocol {
+            Protocol::Realtime => {
+                command.arg("--no-webui");
+            }
+            Protocol::LiquidAudio { tokenizer, vocoder } => {
+                let folder = cache.join(profile.model_directory);
+                command
+                    .arg("--model-vocoder")
+                    .arg(folder.join(vocoder.name))
+                    .arg("--tts-speaker-file")
+                    .arg(folder.join(tokenizer.name))
+                    .arg("--log-disable");
+            }
+        }
+        let child = command
             .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone()?))
-            .stderr(Stdio::from(log))
+            .stdout(stdout)
+            .stderr(stderr)
             .spawn()
             .with_context(|| format!("Cannot start {}", assets.server.display()))?;
         let mut backend = Self {
@@ -80,32 +106,57 @@ impl Backend {
         loop {
             crate::check_cancel(stopped)?;
             if let Some(status) = backend.child.try_wait()? {
-                bail!(
-                    "Liquid backend exited ({status}). See {}",
-                    backend.log_path.display()
-                );
+                bail!("Liquid backend exited ({status}). {}", backend.diagnostic());
             }
             if let Ok(response) = client
                 .get(format!("http://{}/health", backend.address))
                 .send()
-                && response.status().is_success()
+                && (response.status().is_success()
+                    // The Liquid Audio server binds only after loading, with no /health route.
+                    || (matches!(profile.protocol, Protocol::LiquidAudio { .. })
+                        && response.status() == reqwest::StatusCode::NOT_FOUND))
             {
                 return Ok(backend);
             }
             if Instant::now() >= deadline {
                 bail!(
-                    "Liquid did not become ready within 120 seconds. See {}",
-                    backend.log_path.display()
+                    "Liquid did not become ready within 120 seconds. {}",
+                    backend.diagnostic()
                 );
             }
             thread::sleep(Duration::from_millis(100));
         }
     }
 
+    fn diagnostic(&self) -> String {
+        match &self.log_path {
+            Some(path) => format!("See {}", path.display()),
+            None => format!(
+                "Check cached assets with `boubou doctor {}`. Runner output is disabled for privacy.",
+                self.profile.id
+            ),
+        }
+    }
+
+    pub fn stop(&mut self) -> Result<()> {
+        if self.child.try_wait()?.is_none() {
+            self.child
+                .kill()
+                .context("Cannot stop the owned Liquid backend")?;
+        }
+        self.child
+            .wait()
+            .context("Cannot reap the owned Liquid backend")?;
+        Ok(())
+    }
+
     pub fn explain_failure(&self, error: anyhow::Error) -> anyhow::Error {
+        let Some(log_path) = &self.log_path else {
+            return error;
+        };
         // b11960 aborts while reporting realtime context exhaustion. Its socket
         // reset loses the actual cause, which is still available in our own log.
-        if fs::read_to_string(&self.log_path).is_ok_and(|log| {
+        if fs::read_to_string(log_path).is_ok_and(|log| {
             log.lines().any(|line| {
                 line.contains("send_error: task id =")
                     && line.contains("error: the conversation does not fit in the context")
@@ -115,14 +166,11 @@ impl Backend {
                 "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `boubou run {} --offline`. Backend log: {}",
                 self.profile.context_tokens,
                 self.profile.id,
-                self.log_path.display()
+                log_path.display()
             );
         }
         if error.chain().any(|cause| cause.is::<tungstenite::Error>()) {
-            return error.context(format!(
-                "Local Liquid backend log: {}",
-                self.log_path.display()
-            ));
+            return error.context(format!("Local Liquid backend log: {}", log_path.display()));
         }
         error
     }
@@ -130,8 +178,7 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.stop();
     }
 }
 
@@ -312,7 +359,7 @@ mod tests {
             profile: &crate::profiles::DEFAULT,
             child: Command::new("true").spawn().unwrap(),
             address: String::new(),
-            log_path: log_path.clone(),
+            log_path: Some(log_path.clone()),
         };
         let error = backend.explain_failure(tungstenite::Error::ConnectionClosed.into());
         assert!(

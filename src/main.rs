@@ -2,6 +2,7 @@ mod assets;
 #[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
+mod liquid;
 mod media;
 #[cfg(target_os = "macos")]
 mod onboarding;
@@ -116,6 +117,42 @@ fn check_cancel(stopped: &AtomicBool) -> Result<()> {
         return Err(Cancelled.into());
     }
     Ok(())
+}
+
+trait Conversation {
+    fn busy(&self) -> bool;
+    fn ready_for_audio(&mut self) -> Result<bool>;
+    fn append_audio(&mut self, samples: &[i16]) -> Result<()>;
+    fn finish_audio(&mut self) -> Result<()>;
+    fn interrupt(&mut self) -> Result<bool>;
+    fn poll(&mut self) -> Result<Option<Output>>;
+    #[cfg(any(target_os = "macos", test))]
+    fn end_input_without_response(&mut self) -> Result<()>;
+}
+
+impl Conversation for Realtime {
+    fn busy(&self) -> bool {
+        self.busy()
+    }
+    fn ready_for_audio(&mut self) -> Result<bool> {
+        self.ready_for_audio()
+    }
+    fn append_audio(&mut self, samples: &[i16]) -> Result<()> {
+        self.append_audio(samples)
+    }
+    fn finish_audio(&mut self) -> Result<()> {
+        self.finish_audio()
+    }
+    fn interrupt(&mut self) -> Result<bool> {
+        self.interrupt()
+    }
+    fn poll(&mut self) -> Result<Option<Output>> {
+        self.poll()
+    }
+    #[cfg(any(target_os = "macos", test))]
+    fn end_input_without_response(&mut self) -> Result<()> {
+        self.end_input_without_response()
+    }
 }
 
 // Opt-in control metadata only: never pass speech, transcripts, or PCM here.
@@ -239,23 +276,28 @@ fn run() -> Result<()> {
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
             check_cancel(&stopped)?;
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
-            let mut connection = {
-                let _progress = progress::Progress::new("Connecting the voice session", None);
-                Realtime::connect(&backend.address, files.profile, &stopped)?
+            let converse = |chat: &mut dyn Conversation| {
+                if turns.is_empty() {
+                    microphone(&cache, chat, &stopped, manual, model.voice_chat_language)
+                } else {
+                    from_files(turns, output.as_deref(), chat, &stopped)
+                }
             };
-            let result = if turns.is_empty() {
-                microphone(
-                    &cache,
-                    &mut connection,
-                    &stopped,
-                    manual,
-                    model.voice_chat_language,
-                )
-            } else {
-                from_files(turns, output.as_deref(), &mut connection, &stopped)
+            let result = match model.protocol {
+                profiles::Protocol::Realtime => {
+                    let mut connection = {
+                        let _progress =
+                            progress::Progress::new("Connecting the voice session", None);
+                        Realtime::connect(&backend.address, files.profile, &stopped)?
+                    };
+                    converse(&mut connection).map_err(|error| backend.explain_failure(error))
+                }
+                profiles::Protocol::LiquidAudio { .. } => {
+                    converse(&mut liquid::Liquid::new(files, cache.clone(), backend))
+                }
             };
             check_cancel(&stopped)?;
-            result.map_err(|error| backend.explain_failure(error))
+            result
         }
     }
 }
@@ -284,7 +326,7 @@ fn read_wav(path: &Path) -> Result<Vec<i16>> {
 fn from_files(
     turns: Vec<Vec<i16>>,
     output: Option<&Path>,
-    chat: &mut Realtime,
+    chat: &mut dyn Conversation,
     stopped: &AtomicBool,
 ) -> Result<()> {
     let mut writer = output
@@ -368,7 +410,7 @@ impl Drop for Terminal {
 #[cfg(not(target_os = "macos"))]
 fn microphone(
     _cache: &Path,
-    _chat: &mut Realtime,
+    _chat: &mut dyn Conversation,
     _stopped: &AtomicBool,
     _manual: bool,
     _language: &str,
@@ -381,7 +423,7 @@ fn microphone(
 #[cfg(target_os = "macos")]
 fn microphone(
     cache: &Path,
-    chat: &mut Realtime,
+    chat: &mut dyn Conversation,
     stopped: &AtomicBool,
     manual: bool,
     language: &str,
@@ -598,7 +640,7 @@ fn microphone(
 #[cfg(any(target_os = "macos", test))]
 fn send_pending(
     pending: &mut voice::PendingAudio,
-    chat: &mut Realtime,
+    chat: &mut dyn Conversation,
     allow_finish: bool,
 ) -> Result<()> {
     if !chat.ready_for_audio()? {

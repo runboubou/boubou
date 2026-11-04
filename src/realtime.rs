@@ -1306,7 +1306,11 @@ mod tests {
         let cache = std::env::var_os("BOUBOU_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
-        for profile in crate::profiles::PROFILES {
+        for profile in crate::profiles::PROFILES
+            .iter()
+            .copied()
+            .filter(|profile| matches!(profile.protocol, crate::profiles::Protocol::Realtime))
+        {
             let assets = crate::assets::prepare(profile, &cache, true).unwrap();
             let backend =
                 crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
