@@ -65,7 +65,7 @@ struct Prompt {
 }
 
 impl Prompt {
-    fn new(package: &Package, no_color: bool) -> Self {
+    fn new(package: &Package, no_color: bool, args: &[&str]) -> Self {
         let (mut master, mut slave) = (-1, -1);
         let mut size = libc::winsize {
             ws_row: 24,
@@ -103,6 +103,7 @@ impl Prompt {
                 "--cache-dir",
                 package.0.join("menu-cache").to_str().unwrap(),
             ])
+            .args(args)
             .env("TERM", "xterm-256color")
             .env_remove("NO_COLOR")
             .stdin(slave.try_clone().unwrap())
@@ -203,7 +204,7 @@ impl Drop for Prompt {
 #[test]
 fn guided_start_navigates_recommendations_and_restores_the_terminal() {
     let package = Package::new();
-    let mut prompt = Prompt::new(&package, false);
+    let mut prompt = Prompt::new(&package, false, &[]);
     prompt.expect(&["Recommend a model for my Mac"]);
     assert!(prompt.output.contains("Use a model I already chose"));
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
@@ -223,7 +224,7 @@ fn guided_start_navigates_recommendations_and_restores_the_terminal() {
 #[test]
 fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     let package = Package::new();
-    let mut prompt = Prompt::new(&package, true);
+    let mut prompt = Prompt::new(&package, true, &[]);
     prompt.expect(&["Recommend a model for my Mac"]);
     assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
     prompt.send(b"\x1b[B\r");
@@ -241,7 +242,7 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 #[test]
 fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     let package = Package::new();
-    let mut prompt = Prompt::new(&package, false);
+    let mut prompt = Prompt::new(&package, false, &[]);
     prompt.expect(&["Recommend a model for my Mac"]);
     assert_eq!(
         unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
@@ -249,6 +250,32 @@ fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     );
     assert_eq!(prompt.finish().signal(), Some(15));
     assert!(!package.0.join("menu-cache").exists());
+}
+
+#[test]
+fn cached_model_verification_shows_live_progress_before_loading() {
+    let package = Package::new();
+    let model_dir = package
+        .0
+        .join("menu-cache/models/lfm3-audio-2b/02355c1a141e464a064f2ab2c276638dbcb7f38a");
+    fs::create_dir_all(&model_dir).unwrap();
+    // Sparse, deliberately unverified fixture: exercise the real hash-reading wait without weights.
+    fs::File::create(model_dir.join("LFM3-Audio-2B-Q4_K_M.gguf"))
+        .unwrap()
+        .set_len(1_099_626_016)
+        .unwrap();
+    let mut prompt = Prompt::new(&package, true, &["doctor", "LFM3-Audio-2B"]);
+    prompt.expect(&["Verifying LFM3-Audio-2B-Q4_K_M.gguf"]);
+    prompt.expect(&["%"]);
+    prompt.send(b"");
+    prompt.expect(&["%"]); // A second frame arrives while the checksum is still running.
+    assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
+    assert_eq!(
+        unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
+        0
+    );
+    assert_eq!(prompt.finish().signal(), Some(15));
+    assert!(!package.0.join("menu-cache/downloads").exists());
 }
 
 #[test]
