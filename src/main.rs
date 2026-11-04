@@ -215,8 +215,12 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
-        Action::Doctor { model: profiles::Model::Qwen(id) } => qwen::doctor(id, &cache),
-        Action::Doctor { model: profiles::Model::Liquid(model) } => {
+        Action::Doctor {
+            model: profiles::Model::Qwen(id),
+        } => qwen::doctor(id, &cache),
+        Action::Doctor {
+            model: profiles::Model::Liquid(model),
+        } => {
             println!("boubou {}", env!("CARGO_PKG_VERSION"));
             println!(
                 "Platform: {} / {}",
@@ -281,7 +285,10 @@ fn run() -> Result<()> {
                         !manual && input.is_empty() && output.is_none(),
                         "Qwen voice chat uses its own microphone and playback controls."
                     );
-                    ensure!(io::stdin().is_terminal(), "Qwen voice chat needs a terminal.");
+                    ensure!(
+                        io::stdin().is_terminal(),
+                        "Qwen voice chat needs a terminal."
+                    );
                     return qwen::run(id, &cache, offline);
                 }
             };
@@ -805,7 +812,9 @@ mod tests {
                     Action::Run { model, .. } | Action::Pull { model, .. } => model,
                     _ => unreachable!(),
                 };
-                assert!(matches!(selected, profiles::Model::Liquid(p) if std::ptr::eq(p, *profile)));
+                assert!(
+                    matches!(selected, profiles::Model::Liquid(p) if std::ptr::eq(p, *profile))
+                );
             }
             assert!(Cli::try_parse_from(["boubou", command]).is_err());
             assert!(Cli::try_parse_from(["boubou", command, "liquid"]).is_err());

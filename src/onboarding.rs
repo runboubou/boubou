@@ -188,8 +188,8 @@ fn parse_selection(text: &str) -> Result<Selection> {
         args.len() == 1 || (args.len() == 2 && args[1] == "--offline"),
         "Use a model name or boubou run MODEL [--offline]."
     );
-    let model = Model::find(&args[0])
-        .context("Model not supported. Check the name or update Boubou.")?;
+    let model =
+        Model::find(&args[0]).context("Model not supported. Check the name or update Boubou.")?;
     Ok(Selection {
         model,
         offline: args.len() == 2,

@@ -11,6 +11,8 @@
   "files": [
     "boubou",
     "cli.cjs",
+    "qwen/runtime.json",
+    "qwen/models.json",
     "licenses",
     "BUILD.json",
     "SHA256SUMS",

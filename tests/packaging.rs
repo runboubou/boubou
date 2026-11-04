@@ -279,6 +279,38 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 }
 
 #[test]
+fn qwen_package_lists_both_models_and_doctor_is_read_only() {
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(
+        release.join("runtime.json"),
+        serde_json::json!({
+            "url": "https://example.invalid/runner.tar.gz",
+            "sha256": "a".repeat(64), "size": 1, "min_macos": "13.3"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let ids = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+    let files: Vec<_> = ids.iter().map(|id| serde_json::json!({
+        "profile": id, "path": format!("models/{id}/config.json"), "size": 7,
+        "url": "https://example.invalid/config.json", "sha256": "b".repeat(64)
+    })).collect();
+    fs::write(release.join("models.json"), serde_json::to_vec(&files).unwrap()).unwrap();
+    let models = package.run(&["list"]);
+    let model_list = String::from_utf8(models.stdout).unwrap();
+    let cache = package.0.join("unused-cache");
+    for id in ids {
+        assert!(model_list.lines().any(|line| line == id));
+        let doctor = package.run(&["--cache-dir", cache.to_str().unwrap(), "doctor", id]);
+        assert_eq!(doctor.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&doctor.stdout).contains(id));
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
 fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     let package = Package::new();
     let cache = package.0.join("qwen-cache");

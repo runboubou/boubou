@@ -34,16 +34,20 @@ fn release_dir() -> Result<PathBuf> {
 }
 
 pub fn packaged() -> bool {
-    release_dir().is_ok_and(|dir| dir.join("runtime.json").is_file() && dir.join("models.json").is_file())
+    release_dir()
+        .is_ok_and(|dir| dir.join("runtime.json").is_file() && dir.join("models.json").is_file())
 }
 
 fn runner(dir: &Path) -> Result<Runner> {
-    let bytes = fs::read(dir.join("runtime.json"))
-        .context("This build does not include a Qwen runner manifest. Use a Qwen-enabled Boubou package.")?;
+    let bytes = fs::read(dir.join("runtime.json")).context(
+        "This build does not include a Qwen runner manifest. Use a Qwen-enabled Boubou package.",
+    )?;
     let runner: Runner = serde_json::from_slice(&bytes)?;
     ensure!(
-        runner.url.starts_with("https://") && runner.sha256.len() == 64
-            && runner.sha256.bytes().all(|c| c.is_ascii_hexdigit()) && runner.size > 0,
+        runner.url.starts_with("https://")
+            && runner.sha256.len() == 64
+            && runner.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+            && runner.size > 0,
         "Invalid packaged Qwen runner manifest"
     );
     Ok(runner)
@@ -58,12 +62,21 @@ fn version(text: &str) -> Result<(u32, u32, u32)> {
 }
 
 fn check_host(runner: &Runner) -> Result<()> {
-    ensure!(cfg!(all(target_os = "macos", target_arch = "aarch64")), "Qwen requires an Apple Silicon Mac.");
-    let os = Command::new("/usr/bin/sw_vers").arg("-productVersion").output()?;
-    ensure!(os.status.success(), "Cannot determine the installed macOS version");
+    ensure!(
+        cfg!(all(target_os = "macos", target_arch = "aarch64")),
+        "Qwen requires an Apple Silicon Mac."
+    );
+    let os = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()?;
+    ensure!(
+        os.status.success(),
+        "Cannot determine the installed macOS version"
+    );
     ensure!(
         version(std::str::from_utf8(&os.stdout)?)? >= version(&runner.min_macos)?,
-        "This Qwen runner requires macOS {} or later.", runner.min_macos
+        "This Qwen runner requires macOS {} or later.",
+        runner.min_macos
     );
     Ok(())
 }
@@ -96,7 +109,14 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     let archive = engine.join("runner.tar.gz");
     let ready = assets::verified(&archive, &runner.archive())?
         && assets::runtime_valid(&archive, &engine.join("installed"), "bin/python3")?;
-    println!("Qwen runner: {}", if ready { "verified" } else { "missing or incomplete" });
+    println!(
+        "Qwen runner: {}",
+        if ready {
+            "verified"
+        } else {
+            "missing or incomplete"
+        }
+    );
     model_assets(id, &root, &dir, None)?;
     ensure!(ready, "Run `boubou pull {id}` while online.");
     Ok(())
@@ -115,17 +135,37 @@ struct ModelFile {
 // None checks the cache in place. Some(offline) performs verified preparation.
 fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Result<()> {
     let files: Vec<ModelFile> = serde_json::from_slice(&fs::read(dir.join("models.json"))?)?;
-    ensure!(files.iter().any(|f| f.profile.as_deref() == Some(id)), "Missing Qwen model profile {id}");
+    ensure!(
+        files.iter().any(|f| f.profile.as_deref() == Some(id)),
+        "Missing Qwen model profile {id}"
+    );
     let mut ready = true;
-    for f in files.iter().filter(|f| f.profile.as_deref().is_none_or(|p| p == id)) {
-        ensure!(f.path.components().all(|c| matches!(c, Component::Normal(_))), "Invalid model asset path");
+    for f in files
+        .iter()
+        .filter(|f| f.profile.as_deref().is_none_or(|p| p == id))
+    {
+        ensure!(
+            f.path
+                .components()
+                .all(|c| matches!(c, Component::Normal(_))),
+            "Invalid model asset path"
+        );
         let path = root.join(&f.path);
         let spec = Download {
-            name: path.file_name().and_then(|s| s.to_str()).context("Invalid asset name")?,
-            url: &f.url, size: f.size, sha256: &f.sha256,
+            name: path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("Invalid asset name")?,
+            url: &f.url,
+            size: f.size,
+            sha256: &f.sha256,
         };
         if let Some(offline) = prepare {
-            assets::fetch(&spec, path.parent().context("Missing asset directory")?, offline)?;
+            assets::fetch(
+                &spec,
+                path.parent().context("Missing asset directory")?,
+                offline,
+            )?;
         } else if !assets::verified(&path, &spec)? {
             println!("Missing or invalid: {}", f.path.display());
             ready = false;
@@ -138,7 +178,11 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
 pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     let installed = prepare(id, cache, offline)?;
     let mut command = Command::new(installed.join("bin/python3"));
-    command.args(["-I", "-B"]).arg(installed.join("voice.py")).arg(id).arg(cache.join("qwen"));
+    command
+        .args(["-I", "-B"])
+        .arg(installed.join("voice.py"))
+        .arg(id)
+        .arg(cache.join("qwen"));
     // Keep the npm launcher's PID/signals and the terminal's foreground process group.
     #[cfg(unix)]
     {
@@ -148,4 +192,3 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     #[cfg(not(unix))]
     anyhow::bail!("Qwen requires an Apple Silicon Mac.")
 }
-
