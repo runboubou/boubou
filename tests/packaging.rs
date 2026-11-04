@@ -357,6 +357,29 @@ fn npm_exposes_the_product_name() {
 }
 
 #[test]
+fn media_questions_reject_invalid_selection_without_cache_or_microphone_access() {
+    let package = Package::new();
+    let cache = package.0.join("unused-media-cache");
+    for (model, code, message) in [
+        ("unknown", 2, "invalid value"),
+        ("LFM3-Audio-2B", 1, "does not support image/video"),
+        ("LFM3-Omni-2B", 1, "Cannot read"),
+    ] {
+        let output = package.run(&[
+            "--cache-dir",
+            cache.to_str().unwrap(),
+            "ask",
+            model,
+            "missing.png",
+            "What is here?",
+        ]);
+        assert_eq!(output.status.code(), Some(code));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        assert!(!cache.exists());
+    }
+}
+
+#[test]
 fn npm_launcher_preserves_arguments_with_spaces_and_exit_codes() {
     let package = Package::new();
     package.script("#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2))); process.exit(7);\n");

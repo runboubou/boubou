@@ -26,6 +26,8 @@ pub struct Profile {
     pub projector: Download<'static>,
     pub license: Download<'static>,
     pub runtime: Runtime,
+    /// Verified runtime executable for local image/video questions, when supported.
+    pub media_cli: Option<&'static str>,
     /// Conservative runtime memory budget, including headroom; None excludes recommendations.
     pub memory_budget: Option<u64>,
     pub context_tokens: usize,
@@ -69,6 +71,7 @@ pub static DEFAULT: Profile = Profile {
         directory: "runtimes/b11960-macos-arm64",
         server: "llama-b11960/llama-server",
     },
+    media_cli: None,
     // Native voice-file/cancellation profiling used about 2 GiB RSS. Reserve 6 GiB
     // for the full runtime and headroom; this is an estimate, not a speed guarantee.
     memory_budget: Some(6 * 1024 * 1024 * 1024),
@@ -112,6 +115,7 @@ pub static OMNI: Profile = Profile {
         url: "https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF/resolve/d508b88f08a5b4286f2d2805a6a8d69a0ff44c72/LICENSE",
         ..DEFAULT.license
     },
+    media_cli: Some("llama-b11960/llama-mtmd-cli"),
     // Omni is non-reasoning; audio sampling defaults are embedded in its GGUF.
     backend_args: &["--reasoning", "off", "--temp", "0"],
     // Both LFM3 profiles use the same Realtime codec, context and voice-chat prompt.

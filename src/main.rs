@@ -2,6 +2,7 @@ mod assets;
 #[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
+mod media;
 #[cfg(target_os = "macos")]
 mod onboarding;
 mod profiles;
@@ -70,6 +71,15 @@ enum Action {
     Pull {
         #[arg(value_parser = profiles::value_parser())]
         model: &'static profiles::Profile,
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Ask a text question about one local PNG/JPEG image or short MP4/MOV video.
+    Ask {
+        #[arg(value_parser = profiles::value_parser())]
+        model: &'static profiles::Profile,
+        file: PathBuf,
+        question: String,
         #[arg(long)]
         offline: bool,
     },
@@ -193,6 +203,20 @@ fn run() -> Result<()> {
                 model.id, model.id
             );
             Ok(())
+        }
+        Action::Ask {
+            model,
+            file,
+            question,
+            offline,
+        } => {
+            let input = media::Input::new(model, &file, &question)?;
+            let files = assets::prepare(model, &cache, offline)?;
+            let stopped = Arc::new(AtomicBool::new(false));
+            let flag = stopped.clone();
+            ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
+            let _progress = progress::Progress::new("Answering the media question locally", None);
+            input.answer(&files, &cache, &question, &stopped)
         }
         Action::Run {
             model,
