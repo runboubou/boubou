@@ -192,7 +192,8 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
         .args(["-I", "-B"])
         .arg(installed.join("voice.py"))
         .arg(id)
-        .arg(cache.join("qwen"));
+        .arg(cache.join("qwen"))
+        .arg(release_dir()?.join("models.json"));
     // Keep the npm launcher's PID/signals and the terminal's foreground process group.
     #[cfg(unix)]
     {

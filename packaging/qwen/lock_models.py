@@ -85,6 +85,10 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
+    files.extend(snapshot(
+        "pipecat-ai/smart-turn-v3", "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+        "smart-turn", None, {"README.md", "smart-turn-v3.2-cpu.onnx"},
+    ))
     files.append({
         "path": "licenses/parakeet/CC-BY-4.0.txt",
         "url": "https://raw.githubusercontent.com/creativecommons/cc-legal-tools-data/a0dac18d1a773b4cdb7d8dd5d9bf4efab7901030/docs/licenses/by/4.0/legalcode.txt",
