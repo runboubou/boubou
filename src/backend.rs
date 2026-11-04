@@ -1,4 +1,4 @@
-use crate::{MODEL_ID, assets::Assets};
+use crate::{assets::Assets, profiles::Profile};
 use anyhow::{Context, Result, anyhow, bail};
 use std::{
     fs::{self, OpenOptions},
@@ -10,25 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const CONTEXT_TOKENS: u32 = 32_768;
-// Greedy text decoding locks long voice chats into one reply repeated for every turn. b11960
-// realtime penalties only see the reply being generated, so earlier turns can be copied freely;
-// sample text with Liquid's LFM chat defaults instead. Audio frames keep the model's own sampler.
-const TEXT_SAMPLING: [&str; 10] = [
-    "--temp",
-    "0.3",
-    "--min-p",
-    "0.15",
-    "--top-k",
-    "0",
-    "--top-p",
-    "1.0",
-    "--repeat-penalty",
-    "1.05",
-];
-
 /// The backend lives only as long as this CLI invocation.
 pub struct Backend {
+    profile: &'static Profile,
     child: Child,
     pub address: String,
     log_path: PathBuf,
@@ -36,6 +20,7 @@ pub struct Backend {
 
 impl Backend {
     pub fn start(assets: &Assets, cache: &Path, stopped: &AtomicBool) -> Result<Self> {
+        let profile = assets.profile;
         crate::check_cancel(stopped)?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         let port = listener.local_addr()?.port();
@@ -66,7 +51,7 @@ impl Backend {
             .arg(&assets.projector)
             .args([
                 "--ctx-size",
-                &CONTEXT_TOKENS.to_string(),
+                &profile.context_tokens.to_string(),
                 "--parallel",
                 "1",
                 "--n-gpu-layers",
@@ -74,13 +59,14 @@ impl Backend {
                 "--no-webui",
                 "--offline",
             ])
-            .args(TEXT_SAMPLING)
+            .args(profile.text_sampling)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
             .spawn()
             .with_context(|| format!("Cannot start {}", assets.server.display()))?;
         let mut backend = Self {
+            profile,
             child,
             address,
             log_path,
@@ -125,7 +111,9 @@ impl Backend {
             })
         }) {
             return anyhow!(
-                "This conversation reached Liquid's context capacity ({CONTEXT_TOKENS} tokens). Start a new conversation with `bobo run {MODEL_ID} --offline`. Backend log: {}",
+                "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `bobo run {} --offline`. Backend log: {}",
+                self.profile.context_tokens,
+                self.profile.id,
                 self.log_path.display()
             );
         }
@@ -186,6 +174,7 @@ mod tests {
         let began = Instant::now();
         let error = Backend::start(
             &Assets {
+                profile: &crate::profiles::DEFAULT,
                 server,
                 model: PathBuf::new(),
                 projector: PathBuf::new(),
@@ -228,6 +217,7 @@ mod tests {
         fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
         let error = Backend::start(
             &Assets {
+                profile: &crate::profiles::DEFAULT,
                 server,
                 model: PathBuf::new(),
                 projector: PathBuf::new(),
@@ -259,6 +249,41 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn selected_profile_controls_backend_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        static PROFILE: Profile = Profile {
+            context_tokens: 4096,
+            text_sampling: &["--temp", "0.7"],
+            ..crate::profiles::DEFAULT
+        };
+        let directory = std::env::temp_dir().join(format!("boubou-profile-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let server = directory.join("print-arguments");
+        fs::write(&server, "#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 3\n").unwrap();
+        fs::set_permissions(&server, fs::Permissions::from_mode(0o700)).unwrap();
+        let result = Backend::start(
+            &Assets {
+                profile: &PROFILE,
+                server,
+                model: directory.join("selected-model"),
+                projector: directory.join("selected-projector"),
+            },
+            &directory,
+            &AtomicBool::new(false),
+        );
+        assert!(result.is_err());
+        let arguments =
+            fs::read_to_string(directory.join(format!("logs/backend-{}.log", std::process::id())))
+                .unwrap();
+        assert!(arguments.contains("--ctx-size\n4096\n"));
+        assert!(arguments.contains("--temp\n0.7\n"));
+        assert!(arguments.contains("selected-model\n--mmproj\n"));
+        assert!(!arguments.contains("--min-p"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn context_abort_reports_its_cause_and_other_failures_keep_theirs() {
         let log_path = std::env::temp_dir().join(format!(
@@ -280,6 +305,7 @@ mod tests {
         )
         .unwrap();
         let backend = Backend {
+            profile: &crate::profiles::DEFAULT,
             child: Command::new("true").spawn().unwrap(),
             address: String::new(),
             log_path: log_path.clone(),

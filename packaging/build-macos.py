@@ -159,7 +159,7 @@ def main():
         build = {
             "version": version,
             "channel": "development",
-            "profile": "LFM3-Audio-2B",
+            "profiles": output(str(binary), "list").splitlines(),
             "source_commit": source,
             "source_url": f"https://github.com/entropyai-labs/boubou/commit/{source}",
             "target": "aarch64-apple-darwin",

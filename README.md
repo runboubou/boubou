@@ -19,6 +19,8 @@ resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Append `--help` for options.
+Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.
+Without a model ID, `doctor` checks `LFM3-Audio-2B`.
 
 The [first MVP](spec/0001-liquid-macos-product.md) is accepted.
 Signing and notarization remain deferred.

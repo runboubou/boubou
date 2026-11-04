@@ -62,6 +62,27 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
     let help = package.run(&["run", "--help"]);
     assert!(help.status.success(), "{help:?}");
     assert!(String::from_utf8_lossy(&help.stdout).contains("LFM3-Audio-2B"));
+    let models = package.run(&["list"]);
+    assert!(models.status.success());
+    assert_eq!(models.stdout, b"LFM3-Audio-2B\n");
+    let cache = package.0.join("unused-cache");
+    let cache_arg = cache.to_str().unwrap();
+    for command in ["run", "pull", "doctor"] {
+        assert_eq!(
+            package
+                .run(&["--cache-dir", cache_arg, command, "unknown"])
+                .status
+                .code(),
+            Some(2)
+        );
+        assert!(!cache.exists(), "Unknown model created a cache");
+    }
+    let doctor = package.run(&["--cache-dir", cache_arg, "doctor"]);
+    let explicit = package.run(&["--cache-dir", cache_arg, "doctor", "LFM3-Audio-2B"]);
+    assert_eq!(doctor.status.code(), Some(1));
+    assert_eq!(doctor.stdout, explicit.stdout);
+    assert_eq!(doctor.stderr, explicit.stderr);
+    assert!(!cache.exists(), "Doctor mutated the cache");
     assert_eq!(package.run(&["run", "liquid"]).status.code(), Some(2));
     assert_eq!(package.run(&["run", "other"]).status.code(), Some(2));
     assert_eq!(package.run(&["run"]).status.code(), Some(2));
