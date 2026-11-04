@@ -171,16 +171,16 @@ pub static LFM25: Profile = Profile {
         size: 10_596,
         sha256: "5188f2b355da20647257a3156db5834c794e5fb5e6d8dc4d4cdbb3180e75b85b",
     },
-    // Share one PCM16 SSE format; the older English archive emits float32 audio.
+    // Rebuild pinned upstream UTF-8 and conversation-continuation fixes for both models.
     runtime: Runtime {
-        label: "Liquid Audio 8256 (22e8cd6f6)",
+        label: "Liquid Audio (ec9d1fd)",
         archive: Download {
-            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64.zip",
-            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-macos-arm64.zip",
-            size: 7_280_738,
-            sha256: "e59b7be254b6386960fc1d3cf51851709220202a4fdf7f83eb29953987992c9b",
+            name: "liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64.zip",
+            url: "https://github.com/entropyai-labs/boubou/releases/download/runtime-liquid-audio-ec9d1fd/liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64.zip",
+            size: 3_079_154,
+            sha256: "b4f4d3ca701cc0be668eef7853f8416f6a6d5ba3856601f41f03438b7e759c67",
         },
-        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64",
+        directory: "runtimes/liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64",
         server: "llama-liquid-audio-macos-arm64/llama-liquid-audio-server",
     },
     protocol: Protocol::LiquidAudio {
