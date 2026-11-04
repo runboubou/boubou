@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "macos", test))]
+mod chat;
 mod integrity;
 
 use crate::{assets, profiles::Download};
@@ -197,8 +199,17 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
     integrity::model_snapshots(root, &selected)
 }
 
+#[cfg(target_os = "macos")]
 pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
     let installed = prepare(id, cache, offline)?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = stopped.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
     let mut command = Command::new(installed.join("bin/python3"));
     command
         .args(["-I", "-B"])
@@ -206,12 +217,17 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
         .arg(id)
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"));
-    // Keep the npm launcher's PID/signals and the terminal's foreground process group.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        Err(command.exec()).context("Cannot start the Qwen voice runner")
-    }
-    #[cfg(not(unix))]
+    let (mut server, mut session) = {
+        let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
+        chat::Server::start(command, &stopped)?
+    };
+    let result = chat::converse(&mut server, &mut session, cache, &stopped);
+    crate::check_cancel(&stopped)?;
+    result
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
+    prepare(id, cache, offline)?;
     anyhow::bail!("Qwen requires an Apple Silicon Mac.")
 }

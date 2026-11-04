@@ -53,7 +53,7 @@ def run(command, model, cache, manifest, *extra):
             PYTHONPYCACHEPREFIX=str(work / "bytecode"),
         )
         sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
-        # The local audio client must bypass macOS system proxies for loopback.
+        # Loopback connections must bypass macOS system proxies.
         for key in ("NO_PROXY", "no_proxy"):
             os.environ[key] = ",".join(
                 filter(None, (os.environ.get(key), "127.0.0.1,localhost,::1"))
@@ -66,4 +66,5 @@ def run(command, model, cache, manifest, *extra):
 
 
 if __name__ == "__main__":
-    run("local", *sys.argv[1:])
+    # Boubou owns the microphone and speakers; the pipeline serves the Realtime API on loopback.
+    run("serve", *sys.argv[1:])

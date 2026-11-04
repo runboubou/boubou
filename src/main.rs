@@ -280,7 +280,7 @@ fn run() -> Result<()> {
                 profiles::Model::Qwen(id) => {
                     ensure!(
                         !manual && input.is_empty() && output.is_none(),
-                        "Qwen voice chat uses its own microphone and playback controls."
+                        "Qwen voice chat supports live microphone turns only."
                     );
                     ensure!(
                         io::stdin().is_terminal(),
