@@ -15,10 +15,8 @@ from websockets.sync.client import connect
 
 def serve(model, cache, manifest, port):
     entry = Path(sys.executable).resolve().parents[1] / "voice.py"
-    options = runpy.run_path(str(entry))["arguments"](model, cache, manifest)
-    sys.argv = ["speech-to-speech", "serve", *options, "--host", "127.0.0.1", "--port", port]
-    from speech_to_speech.cli import main
-    main()
+    run = runpy.run_path(str(entry))["run"]
+    run("serve", model, cache, manifest, "--host", "127.0.0.1", "--port", port)
 
 
 def check(model, cache, manifest):

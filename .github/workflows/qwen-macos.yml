@@ -78,4 +78,5 @@ jobs:
           sysctl hw.model hw.memsize
           for size in 1.7b 0.6b; do
             "$python" -I -B packaging/qwen/smoke.py "qwen3-tts:$size-customvoice" "$root" "$manifest"
+            BOUBOU_HOME="$RUNNER_TEMP/qwen-cache" "$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou" doctor "qwen3-tts:$size-customvoice"
           done

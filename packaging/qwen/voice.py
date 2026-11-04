@@ -4,9 +4,10 @@ import json
 import os
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
-def arguments(model_id, cache, manifest):
+def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
@@ -15,7 +16,10 @@ def arguments(model_id, cache, manifest):
         parts = Path(entry["path"]).parts
         if (entry.get("profile", model_id) == model_id and len(parts) == 5
                 and parts[0] == "hub" and parts[2] == "snapshots" and parts[4] == "config.json"):
-            snapshots[parts[1]] = str(cache.joinpath(*parts[:4]))
+            # MLX Audio infers the Parakeet architecture from the final path component.
+            alias = work / parts[1].removeprefix("models--mlx-community--")
+            alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
+            snapshots[parts[1]] = str(alias)
     (tts,) = (path for name, path in snapshots.items() if name.startswith("models--mlx-community--Qwen3-TTS-"))
     os.environ.update({
         "HF_HOME": str(cache / "hf"),
@@ -35,11 +39,15 @@ def arguments(model_id, cache, manifest):
     ]
 
 
-def main():
-    sys.argv = ["speech-to-speech", "local", *arguments(*sys.argv[1:])]
-    from speech_to_speech.cli import main as conversation
-    conversation()
+def run(command, model, cache, manifest, *extra):
+    # Keep model-name aliases and compiled caches outside the verified package.
+    with TemporaryDirectory(prefix="boubou-qwen-") as work:
+        work = Path(work)
+        sys.argv = ["speech-to-speech", command, *arguments(model, cache, manifest, work), *extra]
+        os.environ["NUMBA_CACHE_DIR"] = str(work / "numba")
+        from speech_to_speech.cli import main
+        main()
 
 
 if __name__ == "__main__":
-    main()
+    run("local", *sys.argv[1:])
