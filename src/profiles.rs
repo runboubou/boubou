@@ -266,11 +266,16 @@ impl Model {
     }
 
     pub fn all() -> impl Iterator<Item = Self> {
+        let qwen = if crate::qwen::packaged() {
+            &QWEN_IDS[..]
+        } else {
+            &[]
+        };
         PROFILES
             .iter()
             .copied()
             .map(Self::Liquid)
-            .chain(QWEN_IDS.into_iter().map(Self::Qwen))
+            .chain(qwen.iter().copied().map(Self::Qwen))
     }
 
     pub fn find(id: &str) -> Option<Self> {

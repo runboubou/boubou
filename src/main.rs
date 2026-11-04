@@ -208,9 +208,6 @@ fn run() -> Result<()> {
     match command {
         Action::List => {
             for model in profiles::Model::all() {
-                if matches!(model, profiles::Model::Qwen(_)) && !qwen::packaged() {
-                    continue;
-                }
                 println!("{}", model.id());
             }
             Ok(())

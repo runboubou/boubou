@@ -372,6 +372,10 @@ fn qwen_package_lists_both_models_and_doctor_is_read_only() {
 #[test]
 fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(release.join("runtime.json"), "{}").unwrap();
+    fs::write(release.join("models.json"), "[]").unwrap();
     let cache = package.0.join("qwen-cache");
     for id in ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"] {
         let output = package.run(&[
