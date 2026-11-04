@@ -2,6 +2,7 @@ mod assets;
 #[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
+mod profiles;
 mod realtime;
 #[cfg(any(target_os = "macos", test))]
 mod voice;
@@ -26,8 +27,6 @@ use std::{
 #[cfg(target_os = "macos")]
 use std::{sync::mpsc::TryRecvError, time::Duration};
 
-const MODEL_ID: &str = "LFM3-Audio-2B";
-
 #[derive(Parser)]
 #[command(
     name = "bobo",
@@ -44,10 +43,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
+    /// List supported model IDs.
+    List,
     /// Start a local voice conversation with automatic context clearing.
     Run {
-        #[arg(value_parser = [MODEL_ID])]
-        model: String,
+        #[arg(value_parser = profiles::value_parser())]
+        model: &'static profiles::Profile,
         /// Use cached assets only. Never download or check for updates.
         #[arg(long)]
         offline: bool,
@@ -64,13 +65,16 @@ enum Action {
     },
     /// Download and verify the Liquid model and its inference backend.
     Pull {
-        #[arg(value_parser = [MODEL_ID])]
-        model: String,
+        #[arg(value_parser = profiles::value_parser())]
+        model: &'static profiles::Profile,
         #[arg(long)]
         offline: bool,
     },
     /// Show the selected profile and verify cached assets without networking.
-    Doctor,
+    Doctor {
+        #[arg(value_parser = profiles::value_parser(), default_value = profiles::DEFAULT.id)]
+        model: &'static profiles::Profile,
+    },
 }
 
 fn main() {
@@ -123,33 +127,48 @@ fn run() -> Result<()> {
         .or_else(|| dirs::cache_dir().map(|p| p.join("boubou")))
         .context("Cannot find a cache directory. Set BOUBOU_HOME or --cache-dir.")?;
     match cli.command {
-        Action::Doctor => {
+        Action::List => {
+            for model in profiles::PROFILES {
+                println!("{}", model.id);
+            }
+            Ok(())
+        }
+        Action::Doctor { model } => {
             println!("bobo {}", env!("CARGO_PKG_VERSION"));
             println!(
                 "Platform: {} / {}",
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
-            println!("Profile: Liquid AI {MODEL_ID} · Q4_K_M + Q8_0 audio · llama.cpp b11960");
-            println!("Voice chat: English · audio input 16 kHz · audio output 24 kHz");
+            println!(
+                "Profile: Liquid AI {} · {} · {}",
+                model.id, model.quantization, model.runtime.label
+            );
+            println!(
+                "Voice chat: {} · audio input 16 kHz · audio output 24 kHz",
+                model.voice_chat_language
+            );
             println!(
                 "Conversation context: {} tokens; automatically cleared before it fills",
-                backend::CONTEXT_TOKENS
+                model.context_tokens
             );
             println!("Cache: {}", cache.display());
-            assets::status(&cache)
+            assets::status(model, &cache)
         }
-        Action::Pull { offline, .. } => {
-            assets::prepare(&cache, offline)?;
-            eprintln!("{MODEL_ID} is ready. Run: bobo run {MODEL_ID} --offline");
+        Action::Pull { model, offline } => {
+            assets::prepare(model, &cache, offline)?;
+            eprintln!(
+                "{} is ready. Run: bobo run {} --offline",
+                model.id, model.id
+            );
             Ok(())
         }
         Action::Run {
+            model,
             offline,
             manual,
             input,
             output,
-            ..
         } => {
             if input.is_empty() {
                 ensure!(
@@ -159,16 +178,22 @@ fn run() -> Result<()> {
             }
             // Validate file inputs before downloading models or acquiring audio devices.
             let turns: Vec<Vec<i16>> = input.iter().map(|p| read_wav(p)).collect::<Result<_>>()?;
-            let files = assets::prepare(&cache, offline)?;
+            let files = assets::prepare(model, &cache, offline)?;
             let stopped = Arc::new(AtomicBool::new(false));
             let flag = stopped.clone();
             ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
             check_cancel(&stopped)?;
-            eprintln!("Loading {MODEL_ID} locally…");
+            eprintln!("Loading {} locally…", model.id);
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
-            let mut connection = Realtime::connect(&backend.address, &stopped)?;
+            let mut connection = Realtime::connect(&backend.address, files.profile, &stopped)?;
             let result = if turns.is_empty() {
-                microphone(&cache, &mut connection, &stopped, manual)
+                microphone(
+                    &cache,
+                    &mut connection,
+                    &stopped,
+                    manual,
+                    model.voice_chat_language,
+                )
             } else {
                 from_files(turns, output.as_deref(), &mut connection, &stopped)
             };
@@ -289,6 +314,7 @@ fn microphone(
     _chat: &mut Realtime,
     _stopped: &AtomicBool,
     _manual: bool,
+    _language: &str,
 ) -> Result<()> {
     bail!(
         "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
@@ -296,8 +322,14 @@ fn microphone(
 }
 
 #[cfg(target_os = "macos")]
-fn microphone(cache: &Path, chat: &mut Realtime, stopped: &AtomicBool, manual: bool) -> Result<()> {
-    eprintln!("Allow microphone access if macOS asks. Speak English.");
+fn microphone(
+    cache: &Path,
+    chat: &mut Realtime,
+    stopped: &AtomicBool,
+    manual: bool,
+    language: &str,
+) -> Result<()> {
+    eprintln!("Allow microphone access if macOS asks. Speak {language}.");
     let (mut audio, captured) = audio::Audio::start(cache, !manual, stopped)?;
     let _terminal = Terminal::enter()?;
     if manual {
@@ -641,7 +673,7 @@ mod tests {
     #[test]
     fn model_name_is_explicit_and_matches_the_upstream_model() {
         for command in ["run", "pull"] {
-            assert!(Cli::try_parse_from(["bobo", command, MODEL_ID]).is_ok());
+            assert!(Cli::try_parse_from(["bobo", command, profiles::DEFAULT.id]).is_ok());
             assert!(Cli::try_parse_from(["bobo", command]).is_err());
             assert!(Cli::try_parse_from(["bobo", command, "liquid"]).is_err());
             assert!(Cli::try_parse_from(["bobo", command, "other"]).is_err());
@@ -650,19 +682,25 @@ mod tests {
 
     #[test]
     fn output_requires_a_file_input() {
-        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--output", "reply.wav"]).is_err());
-        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--offline"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--output", "reply.wav"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--offline"]).is_ok());
         assert!(Cli::try_parse_from(["bobo", "run", "other"]).is_err());
     }
 
     #[test]
     fn manual_recording_is_available_only_for_the_microphone() {
-        assert!(Cli::try_parse_from(["bobo", "run", MODEL_ID, "--manual", "--offline"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["bobo", "run", profiles::DEFAULT.id, "--manual", "--offline"])
+                .is_ok()
+        );
         assert!(
             Cli::try_parse_from([
                 "bobo",
                 "run",
-                MODEL_ID,
+                profiles::DEFAULT.id,
                 "--manual",
                 "--input",
                 "question.wav"

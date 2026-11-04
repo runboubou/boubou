@@ -1,4 +1,4 @@
-use crate::MODEL_ID;
+use crate::profiles::{Download, Profile};
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
 use fs2::FileExt;
@@ -11,49 +11,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-const REVISION: &str = "02355c1a141e464a064f2ab2c276638dbcb7f38a";
-const MODEL: Download<'_> = Download {
-    name: "LFM3-Audio-2B-Q4_K_M.gguf",
-    url: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/02355c1a141e464a064f2ab2c276638dbcb7f38a/LFM3-Audio-2B-Q4_K_M.gguf",
-    size: 1_099_626_016,
-    sha256: "9a773289bd321ed879cd3a76545f6aca506e403851a45fb315420aee45625be2",
-};
-const PROJECTOR: Download<'_> = Download {
-    name: "mmproj-LFM3-Audio-2B-Q8_0.gguf",
-    url: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/02355c1a141e464a064f2ab2c276638dbcb7f38a/mmproj-LFM3-Audio-2B-Q8_0.gguf",
-    size: 303_811_840,
-    sha256: "2b6648b1fd48af16aa0877b0592b144d15070783673e038a379fdbc51d40e365",
-};
-const LICENSE: Download<'_> = Download {
-    name: "LICENSE",
-    url: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/02355c1a141e464a064f2ab2c276638dbcb7f38a/LICENSE",
-    size: 10_574,
-    sha256: "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
-};
-const RUNTIME: Download<'_> = Download {
-    name: "llama-b11960-bin-macos-arm64.tar.gz",
-    url: "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
-    size: 16_465_074,
-    sha256: "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-};
-const RUNTIME_DIR: &str = "runtimes/b11960-macos-arm64";
-const SERVER: &str = "llama-b11960/llama-server";
-
-struct Download<'a> {
-    name: &'a str,
-    url: &'a str,
-    size: u64,
-    sha256: &'a str,
-}
-
 #[derive(Debug)]
 pub struct Assets {
+    pub profile: &'static Profile,
     pub server: PathBuf,
     pub model: PathBuf,
     pub projector: PathBuf,
 }
 
-pub fn prepare(cache_dir: &Path, offline: bool) -> Result<Assets> {
+pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Result<Assets> {
     ensure!(
         cfg!(all(target_os = "macos", target_arch = "aarch64")),
         "This first release supports Apple Silicon Macs."
@@ -68,10 +34,18 @@ pub fn prepare(cache_dir: &Path, offline: bool) -> Result<Assets> {
     FileExt::try_lock_exclusive(&lock)
         .context("Another Boubou process is preparing models; wait for it to finish")?;
 
-    let model_dir = cache_dir.join("models/lfm3-audio-2b").join(REVISION);
-    let archive = fetch(&RUNTIME, &cache_dir.join("downloads"), offline)?;
-    let installed = cache_dir.join(RUNTIME_DIR);
-    if !runtime_valid(&archive, &installed)? {
+    let download = |spec: &Download<'_>, directory: &Path| {
+        fetch(spec, directory, offline).with_context(|| {
+            format!(
+                "Cannot prepare {}. Run `bobo pull {}` while online.",
+                profile.id, profile.id
+            )
+        })
+    };
+    let model_dir = cache_dir.join(profile.model_directory);
+    let archive = download(&profile.runtime.archive, &cache_dir.join("downloads"))?;
+    let installed = cache_dir.join(profile.runtime.directory);
+    if !runtime_valid(&archive, &installed, profile.runtime.server)? {
         eprintln!("Installing the local speech engine…");
         let staging = installed.with_extension("partial");
         if staging.exists() {
@@ -82,7 +56,7 @@ pub fn prepare(cache_dir: &Path, offline: bool) -> Result<Assets> {
             .unpack(&staging)
             .context("Cannot unpack the speech engine")?;
         ensure!(
-            runtime_valid(&archive, &staging)?,
+            runtime_valid(&archive, &staging, profile.runtime.server)?,
             "The unpacked speech engine failed verification"
         );
         if installed.exists() {
@@ -93,20 +67,21 @@ pub fn prepare(cache_dir: &Path, offline: bool) -> Result<Assets> {
     }
 
     // Cache the model's license alongside its weights before making it runnable.
-    fetch(&LICENSE, &model_dir, offline)?;
-    let model = fetch(&MODEL, &model_dir, offline)?;
-    let projector = fetch(&PROJECTOR, &model_dir, offline)?;
+    download(&profile.license, &model_dir)?;
+    let model = download(&profile.model, &model_dir)?;
+    let projector = download(&profile.projector, &model_dir)?;
     Ok(Assets {
-        server: installed.join(SERVER),
+        profile,
+        server: installed.join(profile.runtime.server),
         model,
         projector,
     })
 }
 
-pub fn status(cache_dir: &Path) -> Result<()> {
-    let model_dir = cache_dir.join("models/lfm3-audio-2b").join(REVISION);
+pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
+    let model_dir = cache_dir.join(profile.model_directory);
     let mut ready = true;
-    for spec in [&MODEL, &PROJECTOR, &LICENSE] {
+    for spec in [&profile.model, &profile.projector, &profile.license] {
         let valid = verified(&model_dir.join(spec.name), spec)?;
         ready &= valid;
         println!(
@@ -119,11 +94,18 @@ pub fn status(cache_dir: &Path) -> Result<()> {
             }
         );
     }
-    let archive = cache_dir.join("downloads").join(RUNTIME.name);
-    let runtime_ready =
-        verified(&archive, &RUNTIME)? && runtime_valid(&archive, &cache_dir.join(RUNTIME_DIR))?;
+    let archive = cache_dir
+        .join("downloads")
+        .join(profile.runtime.archive.name);
+    let runtime_ready = verified(&archive, &profile.runtime.archive)?
+        && runtime_valid(
+            &archive,
+            &cache_dir.join(profile.runtime.directory),
+            profile.runtime.server,
+        )?;
     println!(
-        "Speech engine (b11960, macOS arm64): {}",
+        "Speech engine ({}, macOS arm64): {}",
+        profile.runtime.label,
         if runtime_ready {
             "verified"
         } else {
@@ -132,7 +114,8 @@ pub fn status(cache_dir: &Path) -> Result<()> {
     );
     ensure!(
         ready && runtime_ready,
-        "Liquid assets are missing or invalid. Run `bobo pull {MODEL_ID}` while online."
+        "Liquid assets are missing or invalid. Run `bobo pull {}` while online.",
+        profile.id
     );
     Ok(())
 }
@@ -178,7 +161,7 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     }
     ensure!(
         !offline,
-        "{} is missing or corrupted. Run `bobo pull {MODEL_ID}` while online first.",
+        "{} is missing or corrupted and offline mode is enabled.",
         spec.name
     );
 
@@ -279,7 +262,7 @@ fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn runtime_valid(archive: &Path, installed: &Path) -> Result<bool> {
+fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool> {
     if !installed.is_dir() {
         return Ok(false);
     }
@@ -314,7 +297,7 @@ fn runtime_valid(archive: &Path, installed: &Path) -> Result<bool> {
             bail!("Unsupported entry in the pinned speech engine archive");
         }
     }
-    let server = installed.join(SERVER);
+    let server = installed.join(server);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -441,14 +424,14 @@ mod tests {
             fetch(&spec, &dir.0, true)
                 .unwrap_err()
                 .to_string()
-                .contains("bobo pull LFM3-Audio-2B")
+                .contains("offline mode")
         );
         fs::write(dir.0.join("weights"), b"badbad").unwrap();
         assert!(
             fetch(&spec, &dir.0, true)
                 .unwrap_err()
                 .to_string()
-                .contains("bobo pull LFM3-Audio-2B")
+                .contains("offline mode")
         );
         fs::write(dir.0.join("weights"), b"abcdef").unwrap();
         assert!(fetch(&spec, &dir.0, true).is_ok());
@@ -458,7 +441,7 @@ mod tests {
     fn doctor_rejects_an_empty_cache() {
         let dir = TestDir::new();
         assert!(
-            status(&dir.0)
+            status(&crate::profiles::DEFAULT, &dir.0)
                 .unwrap_err()
                 .to_string()
                 .contains("bobo pull LFM3-Audio-2B")
@@ -501,6 +484,7 @@ mod tests {
     #[test]
     fn installed_engine_checks_actual_contents() {
         let dir = TestDir::new();
+        let server = "fixture/llama-server";
         let archive = dir.0.join("engine.tar.gz");
         let encoder = flate2::write::GzEncoder::new(
             File::create(&archive).unwrap(),
@@ -511,17 +495,17 @@ mod tests {
         header.set_mode(0o755);
         header.set_size(6);
         header.set_cksum();
-        tar.append_data(&mut header, SERVER, &b"engine"[..])
+        tar.append_data(&mut header, server, &b"engine"[..])
             .unwrap();
         tar.into_inner().unwrap().finish().unwrap();
 
         let installed = dir.0.join("installed");
-        assert!(!runtime_valid(&archive, &installed).unwrap());
+        assert!(!runtime_valid(&archive, &installed, server).unwrap());
         tar::Archive::new(GzDecoder::new(File::open(&archive).unwrap()))
             .unpack(&installed)
             .unwrap();
-        assert!(runtime_valid(&archive, &installed).unwrap());
-        fs::write(installed.join(SERVER), b"broken").unwrap();
-        assert!(!runtime_valid(&archive, &installed).unwrap());
+        assert!(runtime_valid(&archive, &installed, server).unwrap());
+        fs::write(installed.join(server), b"broken").unwrap();
+        assert!(!runtime_valid(&archive, &installed, server).unwrap());
     }
 }

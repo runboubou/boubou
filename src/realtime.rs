@@ -1,3 +1,4 @@
+use crate::profiles::Profile;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -14,10 +15,6 @@ use std::{
 use tungstenite::{Message, WebSocket};
 
 const MAX_TURN_SAMPLES: usize = 16_000 * 30;
-const MAX_OUTPUT_TOKENS: usize = 1024;
-// Pinned LFM3 audio uses one context position per eight 160-sample mel frames.
-const AUDIO_SAMPLES_PER_TOKEN: usize = 1280;
-const MAX_AUDIO_INPUT_TOKENS: usize = MAX_TURN_SAMPLES.div_ceil(AUDIO_SAMPLES_PER_TOKEN);
 // Conservative allowances for the fixed prompt, turn delimiters and playback notice.
 const SESSION_OVERHEAD_TOKENS: usize = 512;
 const TURN_OVERHEAD_TOKENS: usize = 256;
@@ -27,10 +24,6 @@ const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
 // Short answers, such as a name, and a reply the user asks to hear again may legitimately repeat.
 const MAX_IDENTICAL_REPLIES: usize = 4;
 const MIN_LOOP_WORDS: usize = 4;
-// Liquid's voice-chat prompt comes first. Without the guidance, long sessions drift into one stock
-// reply, often after brief acknowledgements, and restate replies the user interrupted.
-const INSTRUCTIONS: &str = "Respond with interleaved text and audio.\n\nYou are a friendly voice assistant in a spoken conversation. Answer the user's latest words in one to three short sentences. Do not repeat an earlier reply. If the user only acknowledges you, keep the conversation going naturally.";
-
 #[derive(Debug, PartialEq)]
 pub enum Output {
     Text(String),
@@ -59,6 +52,7 @@ enum Phase {
 }
 
 pub struct Realtime {
+    profile: &'static Profile,
     socket: Option<WebSocket<TcpStream>>,
     address: String,
     phase: Phase,
@@ -72,7 +66,7 @@ pub struct Realtime {
 }
 
 impl Realtime {
-    pub fn connect(address: &str, stopped: &AtomicBool) -> Result<Self> {
+    pub fn connect(address: &str, profile: &'static Profile, stopped: &AtomicBool) -> Result<Self> {
         crate::check_cancel(stopped)?;
         let stream = TcpStream::connect_timeout(&address.parse()?, Duration::from_secs(1))
             .context("Cannot connect to the local Liquid backend")?;
@@ -103,6 +97,7 @@ impl Realtime {
             .get_ref()
             .set_read_timeout(Some(Duration::from_millis(10)))?;
         let mut this = Self {
+            profile,
             socket: Some(socket),
             address: address.to_owned(),
             phase: Phase::Idle,
@@ -125,9 +120,9 @@ impl Realtime {
         );
         this.send(json!({"type":"session.update","session":{
             "type":"realtime",
-            "instructions":INSTRUCTIONS,
+            "instructions":profile.instructions,
             "output_modalities":["text","audio"],
-            "max_output_tokens":MAX_OUTPUT_TOKENS
+            "max_output_tokens":profile.max_output_tokens
         }}))?;
         this.wait_for("session.updated", stopped)?;
         Ok(this)
@@ -149,13 +144,16 @@ impl Realtime {
         if self.user_samples > 0 {
             return Ok(true);
         }
-        self.prepare_turn(MAX_AUDIO_INPUT_TOKENS)
+        self.prepare_turn(MAX_TURN_SAMPLES.div_ceil(self.profile.audio_samples_per_token))
     }
 
     fn can_admit(&self, input_tokens: usize) -> bool {
         self.identical_replies < MAX_IDENTICAL_REPLIES
-            && self.context_tokens + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
-                < crate::backend::CONTEXT_TOKENS as usize
+            && self.context_tokens
+                + input_tokens
+                + TURN_OVERHEAD_TOKENS
+                + self.profile.max_output_tokens
+                < self.profile.context_tokens
     }
 
     fn prepare_turn(&mut self, input_tokens: usize) -> Result<bool> {
@@ -163,8 +161,11 @@ impl Realtime {
             return Ok(false);
         }
         ensure!(
-            SESSION_OVERHEAD_TOKENS + input_tokens + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
-                < crate::backend::CONTEXT_TOKENS as usize,
+            SESSION_OVERHEAD_TOKENS
+                + input_tokens
+                + TURN_OVERHEAD_TOKENS
+                + self.profile.max_output_tokens
+                < self.profile.context_tokens,
             "A single turn exceeds Liquid's context capacity"
         );
         if self.can_admit(input_tokens) {
@@ -172,6 +173,7 @@ impl Realtime {
         }
         let mut socket = self.socket.take().context("Liquid connection is missing")?;
         let address = self.address.clone();
+        let profile = self.profile;
         let stopped = Arc::new(AtomicBool::new(false));
         let signal = stopped.clone();
         // b11960 has no history-delete event. Closing releases its sole slot;
@@ -181,7 +183,7 @@ impl Realtime {
             .spawn(move || {
                 let _ = socket.close(None);
                 drop(socket);
-                Self::connect(&address, &signal).context("Cannot renew Liquid context")
+                Self::connect(&address, profile, &signal).context("Cannot renew Liquid context")
             })
             .context("Cannot start Liquid context renewal")?;
         self.phase = Phase::Renewing { worker, stopped };
@@ -209,7 +211,7 @@ impl Realtime {
         }
         if self.user_samples == 0 {
             ensure!(
-                self.can_admit(MAX_AUDIO_INPUT_TOKENS),
+                self.can_admit(MAX_TURN_SAMPLES.div_ceil(self.profile.audio_samples_per_token)),
                 "Wait for automatic context renewal before sending a new turn"
             );
             self.context_tokens += TURN_OVERHEAD_TOKENS;
@@ -218,8 +220,10 @@ impl Realtime {
         let bytes: Vec<u8> = samples.iter().flat_map(|x| x.to_le_bytes()).collect();
         self.send(json!({"type":"input_audio_buffer.append","audio":STANDARD.encode(bytes)}))?;
         let next_samples = self.user_samples + samples.len();
-        self.context_tokens += next_samples.div_ceil(AUDIO_SAMPLES_PER_TOKEN)
-            - self.user_samples.div_ceil(AUDIO_SAMPLES_PER_TOKEN);
+        self.context_tokens += next_samples.div_ceil(self.profile.audio_samples_per_token)
+            - self
+                .user_samples
+                .div_ceil(self.profile.audio_samples_per_token);
         self.user_samples = next_samples;
         Ok(())
     }
@@ -286,7 +290,7 @@ impl Realtime {
             format_args!("samples={}", self.user_samples),
         );
         self.send(json!({"type":"response.create"}))?;
-        self.context_tokens += MAX_OUTPUT_TOKENS;
+        self.context_tokens += self.profile.max_output_tokens;
         crate::trace("response.create.sent", format_args!(""));
         self.user_samples = 0;
         self.audio_samples = 0;
@@ -413,9 +417,9 @@ impl Realtime {
             );
             if let Some(tokens) = event["response"]["usage"]["output_tokens"]
                 .as_u64()
-                .filter(|&tokens| tokens <= MAX_OUTPUT_TOKENS as u64)
+                .filter(|&tokens| tokens <= self.profile.max_output_tokens as u64)
             {
-                self.context_tokens -= MAX_OUTPUT_TOKENS - tokens as usize;
+                self.context_tokens -= self.profile.max_output_tokens - tokens as usize;
             }
             if !cancelled {
                 // Interrupted text is partial; only finished replies show a loop.
@@ -550,6 +554,10 @@ impl Drop for Realtime {
 
 #[cfg(test)]
 mod tests {
+    use crate::profiles::DEFAULT;
+    const MAX_OUTPUT_TOKENS: usize = DEFAULT.max_output_tokens;
+    const AUDIO_SAMPLES_PER_TOKEN: usize = DEFAULT.audio_samples_per_token;
+    const MAX_AUDIO_INPUT_TOKENS: usize = MAX_TURN_SAMPLES.div_ceil(AUDIO_SAMPLES_PER_TOKEN);
     use super::*;
     use std::{net::TcpListener, thread};
 
@@ -612,7 +620,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(100));
             });
             let began = Instant::now();
-            let error = Realtime::connect(&address, &stopped)
+            let error = Realtime::connect(&address, &DEFAULT, &stopped)
                 .err()
                 .expect("Startup must be cancelled");
             server.join().unwrap();
@@ -628,7 +636,7 @@ mod tests {
         let worker = thread::spawn(move || {
             let stream = accept_mock(listener);
             let mut ws = tungstenite::accept(stream).unwrap();
-            context_session_ready(&mut ws);
+            context_session_ready(&mut ws, &DEFAULT);
             work(ws);
         });
         (address, worker)
@@ -673,7 +681,7 @@ mod tests {
             .unwrap();
             thread::sleep(Duration::from_millis(100));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         client.text_turn("hello").unwrap();
         client.interrupt().unwrap();
         assert!(client.text_turn("too soon").is_err());
@@ -712,7 +720,7 @@ mod tests {
             assert!(matches!(ws.read(), Err(tungstenite::Error::Io(e))
                 if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         client.append_audio(&[0; 320]).unwrap();
         client.end_input_without_response().unwrap();
         client.end_input_without_response().unwrap();
@@ -724,7 +732,7 @@ mod tests {
     #[test]
     fn odd_pcm_delta_is_rejected() {
         let (addr, server) = mock_server(|_| thread::sleep(Duration::from_millis(200)));
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         client.phase = Phase::Generating {
             id: Some("x".into()),
             since: Instant::now(),
@@ -739,7 +747,7 @@ mod tests {
         event
     }
 
-    fn context_session_ready(ws: &mut WebSocket<TcpStream>) {
+    fn context_session_ready(ws: &mut WebSocket<TcpStream>, profile: &Profile) {
         ws.send(Message::Text(
             json!({"type":"session.created","session":{"audio":{
                 "input":{"format":{"rate":16000}},"output":{"format":{"rate":24000}}
@@ -749,10 +757,12 @@ mod tests {
         ))
         .unwrap();
         let update = context_event(ws, "session.update");
-        assert_eq!(update["session"]["max_output_tokens"], MAX_OUTPUT_TOKENS);
+        assert_eq!(
+            update["session"]["max_output_tokens"],
+            profile.max_output_tokens
+        );
         let instructions = update["session"]["instructions"].as_str().unwrap();
-        assert!(instructions.starts_with("Respond with interleaved text and audio.\n\n"));
-        assert!(instructions.contains("Do not repeat an earlier reply."));
+        assert_eq!(instructions, profile.instructions);
         ws.send(Message::Text(
             json!({"type":"session.updated"}).to_string().into(),
         ))
@@ -761,7 +771,7 @@ mod tests {
 
     fn context_session(listener: &TcpListener) -> WebSocket<TcpStream> {
         let mut ws = tungstenite::accept(accept_mock(listener.try_clone().unwrap())).unwrap();
-        context_session_ready(&mut ws);
+        context_session_ready(&mut ws, &DEFAULT);
         ws
     }
 
@@ -789,6 +799,51 @@ mod tests {
     }
 
     #[test]
+    fn selected_profile_survives_renewal_and_controls_token_accounting() {
+        static PROFILE: Profile = Profile {
+            context_tokens: 4096,
+            max_output_tokens: 64,
+            audio_samples_per_token: 2560,
+            instructions: "Use the selected profile.",
+            ..DEFAULT
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let server = thread::spawn(move || {
+            for session in 0..2 {
+                let mut ws =
+                    tungstenite::accept(accept_mock(listener.try_clone().unwrap())).unwrap();
+                context_session_ready(&mut ws, &PROFILE);
+                if session == 1 {
+                    context_event(&mut ws, "input_audio_buffer.append");
+                    context_event(&mut ws, "response.create");
+                    for event in [
+                        json!({"type":"response.created","response":{"id":"selected"}}),
+                        json!({"type":"response.done","response":{"id":"selected","status":"completed", "usage":{"output_tokens":1}}}),
+                    ] {
+                        ws.send(Message::Text(event.to_string().into())).unwrap();
+                    }
+                }
+                assert!(matches!(ws.read().unwrap(), Message::Close(_)));
+            }
+        });
+        let mut client = Realtime::connect(&address, &PROFILE, &AtomicBool::new(false)).unwrap();
+        client.context_tokens = PROFILE.context_tokens;
+        assert!(!client.ready_for_audio().unwrap());
+        assert_eq!(next_context_output(&mut client), Output::ContextCleared);
+        assert!(client.ready_for_audio().unwrap());
+        client.append_audio(&vec![1; 2561]).unwrap();
+        let input_tokens = SESSION_OVERHEAD_TOKENS + TURN_OVERHEAD_TOKENS + 2;
+        assert_eq!(client.context_tokens, input_tokens);
+        client.finish_audio().unwrap();
+        assert_eq!(client.context_tokens, input_tokens + 64);
+        assert_eq!(next_context_output(&mut client), Output::Done);
+        assert_eq!(client.context_tokens, input_tokens + 1);
+        drop(client);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn audio_budget_rounds_each_committed_stream_and_keeps_paused_input() {
         let (addr, server) = mock_server(|mut ws| {
             for kind in [
@@ -803,7 +858,7 @@ mod tests {
             }
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         assert!(client.ready_for_audio().unwrap());
         client.append_audio(&[]).unwrap();
         assert_eq!(client.context_tokens, SESSION_OVERHEAD_TOKENS);
@@ -842,9 +897,9 @@ mod tests {
             context_reply(&mut ws, 1);
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         let reserve = MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS;
-        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve - 1;
+        client.context_tokens = DEFAULT.context_tokens - reserve - 1;
         assert!(client.ready_for_audio().unwrap());
         client.append_audio(&[1]).unwrap();
         assert!(
@@ -853,13 +908,10 @@ mod tests {
         );
         client.append_audio(&vec![2; MAX_TURN_SAMPLES - 1]).unwrap();
         client.finish_audio().unwrap();
-        assert_eq!(
-            client.context_tokens,
-            crate::backend::CONTEXT_TOKENS as usize - 1
-        );
+        assert_eq!(client.context_tokens, DEFAULT.context_tokens - 1);
         assert!(!client.ready_for_audio().unwrap());
         assert_eq!(next_context_output(&mut client), Output::Done);
-        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize - reserve;
+        client.context_tokens = DEFAULT.context_tokens - reserve;
         assert!(
             client.append_audio(&[3]).is_err(),
             "Reject input until renewal is admitted"
@@ -877,7 +929,7 @@ mod tests {
         let (addr, server) = mock_server(|mut ws| {
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         for (usage, retained) in [
             (Value::Null, MAX_OUTPUT_TOKENS),
             (json!({}), MAX_OUTPUT_TOKENS),
@@ -955,7 +1007,7 @@ mod tests {
                     assert_eq!(event["type"], "input_audio_buffer.append");
                     assert!(
                         used + MAX_AUDIO_INPUT_TOKENS + TURN_OVERHEAD_TOKENS + MAX_OUTPUT_TOKENS
-                            < crate::backend::CONTEXT_TOKENS as usize
+                            < DEFAULT.context_tokens
                     );
                     let pcm = STANDARD.decode(event["audio"].as_str().unwrap()).unwrap();
                     assert_eq!(pcm.len(), 640);
@@ -967,7 +1019,7 @@ mod tests {
             }
             sessions
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         let mut renewals = 0;
         for _ in 0..60 {
             if !client.ready_for_audio().unwrap() {
@@ -982,10 +1034,7 @@ mod tests {
         drop(client);
         assert!(renewals >= 2);
         assert_eq!(server.join().unwrap(), renewals + 1);
-        assert!(
-            60 * (TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS)
-                > 2 * crate::backend::CONTEXT_TOKENS as usize
-        );
+        assert!(60 * (TURN_OVERHEAD_TOKENS + 1 + MAX_OUTPUT_TOKENS) > 2 * DEFAULT.context_tokens);
     }
 
     #[test]
@@ -1000,7 +1049,7 @@ mod tests {
             let mut ws = tungstenite::accept(accept_mock(listener)).unwrap();
             arrived.send(()).unwrap();
             resumed.recv_timeout(Duration::from_secs(3)).unwrap();
-            context_session_ready(&mut ws);
+            context_session_ready(&mut ws, &DEFAULT);
             for (id, expected) in [(1, vec![1_i16, 2]), (2, vec![3_i16, 4])] {
                 let input = context_event(&mut ws, "input_audio_buffer.append");
                 let bytes: Vec<u8> = expected
@@ -1016,11 +1065,11 @@ mod tests {
             }
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         let mut pending = crate::voice::PendingAudio::default();
         pending.push(crate::voice::Segment::Start(vec![1])).unwrap();
         pending.push(crate::voice::Segment::End(vec![2])).unwrap();
-        client.context_tokens = crate::backend::CONTEXT_TOKENS as usize;
+        client.context_tokens = DEFAULT.context_tokens;
         crate::send_pending(&mut pending, &mut client, true).unwrap();
         assert!(client.busy());
         waiting.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -1073,8 +1122,8 @@ mod tests {
                 arrived.send(()).unwrap();
                 assert!(matches!(ws.read().unwrap(), Message::Close(_)));
             });
-            let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
-            client.context_tokens = crate::backend::CONTEXT_TOKENS as usize;
+            let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
+            client.context_tokens = DEFAULT.context_tokens;
             assert!(!client.ready_for_audio().unwrap());
             waiting.recv_timeout(Duration::from_secs(3)).unwrap();
             if fail {
@@ -1164,7 +1213,7 @@ mod tests {
             text_reply(&mut ws, 0, "You're very welcome!", "completed");
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         let finish = |client: &mut Realtime, cancel: bool| {
             client.append_audio(&[1; 320]).unwrap();
             client.finish_audio().unwrap();
@@ -1207,7 +1256,7 @@ mod tests {
         let (addr, server) = mock_server(|mut ws| {
             assert!(matches!(ws.read().unwrap(), Message::Close(_)));
         });
-        let mut client = Realtime::connect(&addr, &AtomicBool::new(false)).unwrap();
+        let mut client = Realtime::connect(&addr, &DEFAULT, &AtomicBool::new(false)).unwrap();
         for (text, cancelled, count) in [
             ("Goodbye, take care now.", false, 1),
             ("goodbye TAKE care now", false, 2),
@@ -1257,10 +1306,11 @@ mod tests {
         let cache = std::env::var_os("BOUBOU_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
-        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let assets = crate::assets::prepare(&DEFAULT, &cache, true).unwrap();
         let backend =
             crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
-        let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
+        let mut client =
+            Realtime::connect(&backend.address, &DEFAULT, &AtomicBool::new(false)).unwrap();
         client
             .text_turn("Count slowly from one to one hundred. Say every number.")
             .unwrap();
@@ -1314,7 +1364,7 @@ mod tests {
         let cache = std::env::var_os("BOUBOU_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
-        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let assets = crate::assets::prepare(&DEFAULT, &cache, true).unwrap();
         let backend =
             crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
         let http = reqwest::blocking::Client::builder()
@@ -1344,9 +1394,10 @@ mod tests {
             token_count > 8192,
             "The regression must cross the old capacity"
         );
-        assert!(token_count + 2048 < crate::backend::CONTEXT_TOKENS as usize);
-        let mut chat = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
-        let rounds = crate::backend::CONTEXT_TOKENS as usize / token_count + 2;
+        assert!(token_count + 2048 < DEFAULT.context_tokens);
+        let mut chat =
+            Realtime::connect(&backend.address, &DEFAULT, &AtomicBool::new(false)).unwrap();
+        let rounds = DEFAULT.context_tokens / token_count + 2;
         let mut renewals = 0;
         for _ in 0..rounds {
             let follow_up = "What was the code word? Reply only with that word.";
@@ -1378,7 +1429,7 @@ mod tests {
             }
         }
         assert!(renewals > 0, "No context renewal occurred");
-        assert!(rounds * token_count > crate::backend::CONTEXT_TOKENS as usize);
+        assert!(rounds * token_count > DEFAULT.context_tokens);
         assert!(
             http.get(format!("http://{}/health", backend.address))
                 .send()
@@ -1389,7 +1440,7 @@ mod tests {
         eprintln!(
             "CONTEXT_REGRESSION input_tokens={} context={} renewals={renewals} backend_alive=true",
             rounds * token_count,
-            crate::backend::CONTEXT_TOKENS
+            DEFAULT.context_tokens
         );
         drop(chat);
         drop(backend);
@@ -1502,10 +1553,11 @@ mod tests {
         let cache = std::env::var_os("BOUBOU_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
-        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let assets = crate::assets::prepare(&DEFAULT, &cache, true).unwrap();
         let backend =
             crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
-        let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
+        let mut client =
+            Realtime::connect(&backend.address, &DEFAULT, &AtomicBool::new(false)).unwrap();
         // Roughly 15-20 minutes of spoken conversation, enough to cross one context renewal.
         let turns = 3 * TURNS.len();
         let began = Instant::now();
@@ -1593,11 +1645,12 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         let cache = dirs::cache_dir().unwrap().join("boubou");
-        let assets = crate::assets::prepare(&cache, true).unwrap();
+        let assets = crate::assets::prepare(&DEFAULT, &cache, true).unwrap();
         let backend =
             crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
         for size in [1600, 320] {
-            let mut client = Realtime::connect(&backend.address, &AtomicBool::new(false)).unwrap();
+            let mut client =
+                Realtime::connect(&backend.address, &DEFAULT, &AtomicBool::new(false)).unwrap();
             for chunk in pcm.chunks(size) {
                 client.append_audio(chunk).unwrap();
             }
