@@ -1306,56 +1306,59 @@ mod tests {
         let cache = std::env::var_os("BOUBOU_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| dirs::cache_dir().unwrap().join("boubou"));
-        let assets = crate::assets::prepare(&DEFAULT, &cache, true).unwrap();
-        let backend =
-            crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
-        let mut client =
-            Realtime::connect(&backend.address, &DEFAULT, &AtomicBool::new(false)).unwrap();
-        client
-            .text_turn("Count slowly from one to one hundred. Say every number.")
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            assert!(Instant::now() < deadline, "No first audio from Liquid");
-            if let Some(Output::Audio(pcm)) = client.poll().unwrap() {
-                assert!(!pcm.is_empty());
-                break;
+        for profile in crate::profiles::PROFILES {
+            let assets = crate::assets::prepare(profile, &cache, true).unwrap();
+            let backend =
+                crate::backend::Backend::start(&assets, &cache, &AtomicBool::new(false)).unwrap();
+            let mut client =
+                Realtime::connect(&backend.address, profile, &AtomicBool::new(false)).unwrap();
+            client
+                .text_turn("Count slowly from one to one hundred. Say every number.")
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                assert!(Instant::now() < deadline, "No first audio from Liquid");
+                if let Some(Output::Audio(pcm)) = client.poll().unwrap() {
+                    assert!(!pcm.is_empty());
+                    break;
+                }
+                assert!(client.busy(), "Liquid completed without audio");
             }
-            assert!(client.busy(), "Liquid completed without audio");
-        }
-        client.interrupt().unwrap();
-        let cancel_started = Instant::now();
-        while client.busy() {
-            assert!(Instant::now() < deadline);
-            if let Some(output) = client.poll().unwrap() {
-                assert_eq!(
-                    output,
-                    Output::Interrupted,
-                    "Cancelled output leaked to the player"
-                );
+            client.interrupt().unwrap();
+            let cancel_started = Instant::now();
+            while client.busy() {
+                assert!(Instant::now() < deadline);
+                if let Some(output) = client.poll().unwrap() {
+                    assert_eq!(
+                        output,
+                        Output::Interrupted,
+                        "Cancelled output leaked to the player"
+                    );
+                }
             }
-        }
-        eprintln!(
-            "Cancellation acknowledged in {:?}",
-            cancel_started.elapsed()
-        );
-        client.text_turn("Say only: ready.").unwrap();
-        let mut samples = 0;
-        let mut text = String::new();
-        while client.busy() {
-            assert!(Instant::now() < deadline);
-            match client.poll().unwrap() {
-                Some(Output::Audio(pcm)) => samples += pcm.len(),
-                Some(Output::Text(delta)) => text.push_str(&delta),
-                _ => {}
+            eprintln!(
+                "{}: cancellation acknowledged in {:?}",
+                profile.id,
+                cancel_started.elapsed()
+            );
+            client.text_turn("Say only: ready.").unwrap();
+            let mut samples = 0;
+            let mut text = String::new();
+            while client.busy() {
+                assert!(Instant::now() < deadline);
+                match client.poll().unwrap() {
+                    Some(Output::Audio(pcm)) => samples += pcm.len(),
+                    Some(Output::Text(delta)) => text.push_str(&delta),
+                    _ => {}
+                }
             }
+            assert!(samples > 0, "Next turn produced no audio");
+            assert!(
+                text.to_lowercase().contains("ready"),
+                "Unexpected next turn: {text}"
+            );
+            eprintln!("{}: next turn produced {samples} audio samples", profile.id);
         }
-        assert!(samples > 0, "Next turn produced no audio");
-        assert!(
-            text.to_lowercase().contains("ready"),
-            "Unexpected next turn: {text}"
-        );
-        eprintln!("Next turn: {text}; {samples} audio samples");
     }
 
     #[test]

@@ -703,7 +703,14 @@ mod tests {
     #[test]
     fn model_name_is_explicit_and_matches_the_upstream_model() {
         for command in ["run", "pull"] {
-            assert!(Cli::try_parse_from(["boubou", command, profiles::DEFAULT.id]).is_ok());
+            for profile in profiles::PROFILES {
+                let cli = Cli::try_parse_from(["boubou", command, profile.id]).unwrap();
+                let selected = match cli.command.unwrap() {
+                    Action::Run { model, .. } | Action::Pull { model, .. } => model,
+                    _ => unreachable!(),
+                };
+                assert!(std::ptr::eq(selected, *profile));
+            }
             assert!(Cli::try_parse_from(["boubou", command]).is_err());
             assert!(Cli::try_parse_from(["boubou", command, "liquid"]).is_err());
             assert!(Cli::try_parse_from(["boubou", command, "other"]).is_err());
