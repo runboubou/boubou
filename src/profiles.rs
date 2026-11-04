@@ -171,16 +171,16 @@ pub static LFM25: Profile = Profile {
         size: 10_596,
         sha256: "5188f2b355da20647257a3156db5834c794e5fb5e6d8dc4d4cdbb3180e75b85b",
     },
-    // Rebuild pinned upstream UTF-8 and conversation-continuation fixes for both models.
+    // Use PCM16 SSE; the older English archive emits float32 audio.
     runtime: Runtime {
-        label: "Liquid Audio (ec9d1fd)",
+        label: "Liquid Audio 8256 (22e8cd6f6)",
         archive: Download {
-            name: "liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64.zip",
-            url: "https://github.com/entropyai-labs/boubou/releases/download/runtime-liquid-audio-ec9d1fd/liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64.zip",
-            size: 3_079_154,
-            sha256: "b4f4d3ca701cc0be668eef7853f8416f6a6d5ba3856601f41f03438b7e759c67",
+            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64.zip",
+            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-macos-arm64.zip",
+            size: 7_280_738,
+            sha256: "e59b7be254b6386960fc1d3cf51851709220202a4fdf7f83eb29953987992c9b",
         },
-        directory: "runtimes/liquid-audio-ec9d1fdd9cc18643c5e161b65b8053f6f6f34a4b-macos-arm64",
+        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64",
         server: "llama-liquid-audio-macos-arm64/llama-liquid-audio-server",
     },
     protocol: Protocol::LiquidAudio {
@@ -207,46 +207,7 @@ pub static LFM25: Profile = Profile {
     ..DEFAULT
 };
 
-pub static LFM25_JP: Profile = Profile {
-    id: "LFM2.5-Audio-1.5B-JP",
-    model_directory: "models/lfm2.5-audio-1.5b-jp/64b96718b341dbd5650f9e85627cecdcbd4ac61b",
-    voice_chat_language: "Japanese",
-    model: Download {
-        name: "LFM2.5-Audio-1.5B-JP-Q4_0.gguf",
-        url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/LFM2.5-Audio-1.5B-JP-Q4_0.gguf",
-        size: 695_750_848,
-        sha256: "d74e971956010953f5fbdf46ea8c4db6873b1b13a7893c4830f39f2ce7bba313",
-    },
-    projector: Download {
-        name: "mmproj-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-        url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/mmproj-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-        size: 293_443_840,
-        sha256: "710b339f336488b97800761b26a843c326fba6e390c532bcb6dcd5fa34dcf521",
-    },
-    license: Download {
-        name: "LICENSE",
-        url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/LICENSE",
-        size: 10_575,
-        sha256: "c138fe99cb339429d6daba8aa44c3dc5996e1a8caf55dec76170f8d2d626ddf7",
-    },
-    protocol: Protocol::LiquidAudio {
-        tokenizer: Download {
-            name: "tokenizer-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/tokenizer-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-            size: 74_584_224,
-            sha256: "744a50aacb44a573b64bb33c5b764afb3b1dd88542f7f25dfd8272a7dcc52627",
-        },
-        vocoder: Download {
-            name: "vocoder-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/vocoder-LFM2.5-Audio-1.5B-JP-Q8_0.gguf",
-            size: 205_742_368,
-            sha256: "e8b13a4b6964c3e7c12aa0c9b6d3a98ebc5128cca01292660cf7a893a5c3b7c6",
-        },
-    },
-    ..LFM25
-};
-
-pub static PROFILES: &[&Profile] = &[&DEFAULT, &OMNI, &LFM25, &LFM25_JP];
+pub static PROFILES: &[&Profile] = &[&DEFAULT, &OMNI, &LFM25];
 
 pub fn value_parser() -> impl TypedValueParser<Value = &'static Profile> {
     PossibleValuesParser::new(PROFILES.iter().map(|profile| profile.id)).map(|id| {
