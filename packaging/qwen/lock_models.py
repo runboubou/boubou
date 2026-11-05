@@ -43,6 +43,12 @@ PHONON = [
      {"README.md", "config.json", "default-voice.safetensors", "model.q8.gguf", "tokenizer.json"}, "phonon:31m-en"),
     ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3", {"voices.jsonl"}, "phonon:31m-en"),
 ]
+# supertonic 1.3.1 loads the revision it pins from one directory: the ONNX graphs, their configs and
+# the upstream default voice style, M1. The stub config.json marks the snapshot for voice.py.
+SUPERTONIC = ("Supertone/supertonic-3", "724fb5abbf5502583fb520898d45929e62f02c0b",
+              {"LICENSE", "README.md", "config.json", "onnx/tts.json", "onnx/unicode_indexer.json",
+               "onnx/duration_predictor.onnx", "onnx/text_encoder.onnx", "onnx/vector_estimator.onnx",
+               "onnx/vocoder.onnx", "voice_styles/M1.json"}, "supertonic:3")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -153,7 +159,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in PHONON:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())
