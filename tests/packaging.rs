@@ -338,7 +338,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
 }
 
 #[test]
-fn qwen_package_lists_both_models_and_doctor_is_read_only() {
+fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     let package = Package::new();
     let release = package.0.join("qwen");
     fs::create_dir(&release).unwrap();
@@ -351,7 +351,11 @@ fn qwen_package_lists_both_models_and_doctor_is_read_only() {
         .to_string(),
     )
     .unwrap();
-    let ids = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+    let ids = [
+        "qwen3-tts:1.7b-customvoice",
+        "qwen3-tts:0.6b-customvoice",
+        "phonon:31m-en",
+    ];
     let files: Vec<_> = ids
         .iter()
         .map(|id| {
@@ -386,7 +390,11 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     fs::write(release.join("runtime.json"), "{}").unwrap();
     fs::write(release.join("models.json"), "[]").unwrap();
     let cache = package.0.join("qwen-cache");
-    for id in ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"] {
+    for id in [
+        "qwen3-tts:1.7b-customvoice",
+        "qwen3-tts:0.6b-customvoice",
+        "phonon:31m-en",
+    ] {
         let output = package.run(&[
             "--cache-dir",
             cache.to_str().unwrap(),
@@ -628,15 +636,67 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
             manifest = cache / "models.json"
             manifest.write_text(json.dumps([
                 {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
-                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit",
-                             "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
-            ]))
+                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")
+            ] + [{
+                "path": "hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit/snapshots/pinned/config.json",
+                "profile": "qwen3-tts:1.7b-customvoice",
+            }]))
             runpy.run_path(sys.argv[1])["run"](
                 "serve", "qwen3-tts:1.7b-customvoice", cache, manifest
             )
     finally:
         server.shutdown()
         thread.join()
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn runner_speaks_with_the_model_each_profile_owns() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, os, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+owned = {
+    "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
+                                   ["--qwen3_tts_speaker", "Aiden", "--qwen3_tts_language", "english"]),
+    "phonon:31m-en": ("phonon", "gradium--phonon-31m-en", ["--phonon_tts_language", "en"]),
+}
+snapshot = "hub/models--{}/snapshots/pinned".format
+files = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
+         for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+files += [{"path": f"{snapshot(repo)}/config.json", "profile": id} for id, (_, repo, _) in owned.items()]
+files.append({"path": f"{snapshot('gradium--phonon-voices')}/voices.jsonl", "profile": "phonon:31m-en"})
+
+with TemporaryDirectory() as folder:
+    root = Path(folder).resolve()
+    manifest = root / "models.json"
+    manifest.write_text(json.dumps(files))
+    for id, (tts, repo, options) in owned.items():
+        work = root / tts
+        work.mkdir()
+        argv = arguments(id, root / "cache", manifest, work)
+        at = argv.index("--tts")
+        assert argv[at:at + 3] == ["--tts", tts, f"--{tts}_tts_model_name"], argv
+        assert os.readlink(argv[at + 3]) == str(root / "cache" / snapshot(repo)), argv
+        assert argv[at + 4:] == options, argv
+        # Shared speech recognition and language models, plus only this profile's speech model.
+        assert len(list(work.iterdir())) == 3, argv
 "#,
         )
         .arg(concat!(

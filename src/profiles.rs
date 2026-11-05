@@ -216,7 +216,12 @@ pub enum Model {
     Qwen(&'static str),
 }
 
-pub const QWEN_IDS: [&str; 2] = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+/// Profiles served by the packaged speech-to-speech runner.
+pub const QWEN_IDS: &[&str] = &[
+    "qwen3-tts:1.7b-customvoice",
+    "qwen3-tts:0.6b-customvoice",
+    "phonon:31m-en",
+];
 
 impl Model {
     pub fn id(self) -> &'static str {
@@ -228,7 +233,7 @@ impl Model {
 
     pub fn all() -> impl Iterator<Item = Self> {
         let qwen = if crate::qwen::packaged() {
-            &QWEN_IDS[..]
+            QWEN_IDS
         } else {
             &[]
         };

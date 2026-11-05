@@ -6,12 +6,19 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+# Speech options per profile family, given the speech model that profile owns.
+TTS = {
+    "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
+                               "--qwen3_tts_language", "english"],
+    "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
+}
+
 
 def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
-    snapshots = {}
+    snapshots, owned = {}, []
     for entry in files:
         parts = Path(entry["path"]).parts
         if (entry.get("profile", model_id) == model_id and len(parts) == 5
@@ -20,7 +27,9 @@ def arguments(model_id, cache, manifest, work):
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
             snapshots[parts[1]] = str(alias)
-    (tts,) = (path for name, path in snapshots.items() if name.startswith("models--mlx-community--Qwen3-TTS-"))
+            if "profile" in entry:
+                owned.append(str(alias))
+    (tts,) = owned
     os.environ.update({
         "HF_HOME": str(cache / "hf"),
         "HF_HUB_CACHE": str(cache / "hub"),
@@ -33,8 +42,7 @@ def arguments(model_id, cache, manifest, work):
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
         "--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots["models--mlx-community--parakeet-tdt-0.6b-v3"],
         "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
-        "--tts", "qwen3", "--qwen3_tts_model_name", tts, "--qwen3_tts_speaker", "Aiden",
-        "--qwen3_tts_language", "english",
+        *TTS[model_id.split(":")[0]](tts),
     ]
 
 
