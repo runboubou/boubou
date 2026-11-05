@@ -11,7 +11,7 @@ def speech(model_id, tts):
     if model_id.startswith("qwen3-tts:"):
         return ["--tts", "qwen3", "--qwen3_tts_model_name", tts, "--qwen3_tts_speaker", "Aiden",
                 "--qwen3_tts_language", "english"]
-    if model_id == "kokoro:82m":
+    if model_id.startswith("kokoro:"):
         # A voice file path keeps MLX Audio from resolving the voice on the Hub.
         return ["--tts", "kokoro", "--kokoro_model_name", tts,
                 "--kokoro_voice", str(Path(tts, "voices/af_heart.safetensors")), "--kokoro_lang_code", "a"]
@@ -50,6 +50,7 @@ def arguments(model_id, cache, manifest, work):
 
 def link_espeak_data(work):
     # espeak-ng exits when its data path exceeds 159 bytes, as the installed runtime's does.
+    # Phonemizer resolves the configured directory, so configure the short parent of a link.
     import espeakng_loader
     from misaki import espeak
     (work / "espeak-ng-data").symlink_to(espeakng_loader.get_data_path(), target_is_directory=True)
