@@ -52,7 +52,7 @@ jobs:
           "$cli" list | grep -Fx 'kokoro:82m'
           "$cli" list | grep -Fx 'phonon:31m-en'
           "$cli" list | grep -Fx 'supertonic:3'
-          "$cli" list | grep -Fx 'chattts:en'
+          "$cli" list | grep -Fx 'chattts:default'
           test "$("$cli" list | grep -c '^pocket-tts:')" -eq 26
           test "$("$cli" list | grep -c '^kitten-tts:')" -eq 7
           "$cli" pull qwen3-tts:1.7b-customvoice
@@ -61,10 +61,7 @@ jobs:
           "$cli" pull kokoro:82m
           "$cli" pull phonon:31m-en
           "$cli" pull supertonic:3
-          "$cli" pull chattts:en
-          for id in qwen3-tts:1.7b-customvoice-zh qwen3-tts:0.6b-customvoice-zh chattts:zh; do
-            "$cli" pull "$id"
-          done
+          "$cli" pull chattts:default
           # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
           for id in pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french; do
             "$cli" pull "$id"
@@ -96,8 +93,7 @@ jobs:
           sw_vers -productVersion
           sysctl hw.model hw.memsize
           status=0
-          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en supertonic:3 chattts:en \
-              qwen3-tts:1.7b-customvoice-zh qwen3-tts:0.6b-customvoice-zh chattts:zh \
+          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en supertonic:3 chattts:default \
               pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french \
               kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1; do
             "$cli" pull "$id" --offline || { status=1; continue; }

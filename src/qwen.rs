@@ -125,10 +125,10 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     Ok(installed)
 }
 
-/// Language modes are explicit; Pocket profiles name their stock language.
+/// Qwen3-TTS and ChatTTS detect the language; Pocket names its stock language.
 fn language(id: &str) -> String {
-    if id.ends_with("-zh") || id == "chattts:zh" {
-        return "Chinese".into();
+    if id.starts_with("qwen3-tts:") || id == "chattts:default" {
+        return "Multilingual (auto)".into();
     }
     let Some(config) = id.strip_prefix("pocket-tts:") else {
         return "English".into();
@@ -269,12 +269,12 @@ mod tests {
                 r#"{{"path":"hub/config.json","url":"https://example.invalid/config.json","size":1,"sha256":"digest"{ownership}}}"#
             )).unwrap()
         };
-        assert!(file("").applies_to("chattts:zh"));
+        assert!(file("").applies_to("chattts:default"));
         assert!(file(r#", "profile":"chattts:en""#).applies_to("chattts:en"));
-        assert!(!file(r#", "profile":"chattts:en""#).applies_to("chattts:zh"));
-        let grouped = file(r#", "profiles":["chattts:zh","qwen3-tts:0.6b-customvoice-zh"]"#);
-        assert!(grouped.applies_to("chattts:zh"));
-        assert!(grouped.applies_to("qwen3-tts:0.6b-customvoice-zh"));
+        assert!(!file(r#", "profile":"chattts:en""#).applies_to("chattts:default"));
+        let grouped = file(r#", "profiles":["chattts:default","qwen3-tts:0.6b-customvoice"]"#);
+        assert!(grouped.applies_to("chattts:default"));
+        assert!(grouped.applies_to("qwen3-tts:0.6b-customvoice"));
         assert!(!grouped.applies_to("chattts:en"));
     }
 }

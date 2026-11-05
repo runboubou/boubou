@@ -54,7 +54,7 @@ CHATTTS = ("2Noise/ChatTTS", "1a3c04a8b0651689bd9242fbb55b1f4b5a9aef84",
            {"README.md", "asset/Decoder.safetensors", "asset/DVAE.safetensors", "asset/Embed.safetensors",
             "asset/Vocos.safetensors", "asset/gpt/config.json", "asset/gpt/model.safetensors",
             "asset/tokenizer/special_tokens_map.json", "asset/tokenizer/tokenizer_config.json",
-            "asset/tokenizer/tokenizer.json"}, "chattts:en")
+            "asset/tokenizer/tokenizer.json"}, "chattts:default")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -168,24 +168,14 @@ def pocket():
             yield {**file, "profile": f"pocket-tts:{config}"}
 
 
-CHINESE_PROFILES = {
-    "qwen3-tts:1.7b-customvoice": "qwen3-tts:1.7b-customvoice-zh",
-    "qwen3-tts:0.6b-customvoice": "qwen3-tts:0.6b-customvoice-zh",
-    "chattts:en": "chattts:zh",
-}
+WHISPER_PROFILES = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice", "chattts:default"]
 
 
-def with_chinese_profiles(files):
-    english = sorted({file["profile"] for file in files if "profile" in file})
-    result = []
-    for file in files:
-        profile = file.get("profile")
-        if profile in CHINESE_PROFILES:
-            file = {key: value for key, value in file.items() if key != "profile"}
-            file["profiles"] = [profile, CHINESE_PROFILES[profile]]
-        elif file["path"].startswith("hub/models--mlx-community--parakeet-tdt-0.6b-v3/"):
-            file = {**file, "profiles": english}
-        result.append(file)
+def with_whisper_profiles(files):
+    parakeet = sorted({file["profile"] for file in files if "profile" in file} - set(WHISPER_PROFILES))
+    result = [{**file, "profiles": parakeet}
+              if file["path"].startswith("hub/models--mlx-community--parakeet-tdt-0.6b-v3/") else file
+              for file in files]
     for repo, revision, only in [
         ("mlx-community/whisper-large-v3-turbo", "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
          {"README.md", "config.json", "weights.safetensors"}),
@@ -194,7 +184,7 @@ def with_chinese_profiles(files):
           "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"}),
     ]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
-        result.extend({**file, "profiles": list(CHINESE_PROFILES.values())}
+        result.extend({**file, "profiles": WHISPER_PROFILES}
                       for file in snapshot(repo, revision, directory, None, only))
     return result
 
@@ -223,7 +213,7 @@ def main():
         "size": 18657,
         "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
     })
-    args.output.write_text(json.dumps(with_chinese_profiles(files), indent=2) + "\n")
+    args.output.write_text(json.dumps(with_whisper_profiles(files), indent=2) + "\n")
 
 
 if __name__ == "__main__":

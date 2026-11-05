@@ -72,8 +72,8 @@ def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
-    chinese = model_id.endswith("-zh") or model_id == "chattts:zh"
-    recognizer = ("models--mlx-community--whisper-large-v3-turbo" if chinese
+    multilingual = model_id.startswith("qwen3-tts:") or model_id == "chattts:default"
+    recognizer = ("models--mlx-community--whisper-large-v3-turbo" if multilingual
                   else "models--mlx-community--parakeet-tdt-0.6b-v3")
     snapshots, owned = {}, []
     for entry in files:
@@ -103,7 +103,7 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "NLTK_DATA": str(bundle / "nltk_data"),
     })
-    if chinese:
+    if multilingual:
         # MLX's Whisper conversion omits its processor. Combine the two pinned snapshots
         # in temporary storage, keeping the verified cache and installed runtime unchanged.
         whisper = work / "whisper"
@@ -113,15 +113,15 @@ def arguments(model_id, cache, manifest, work):
             if (len(parts) == 5 and parts[1] in (recognizer, "models--openai--whisper-large-v3")
                     and parts[-1] != "README.md"):
                 (whisper / parts[-1]).symlink_to(cache / entry["path"])
-        stt = ["--stt", "mlx-audio-whisper", "--mlx_audio_whisper_model_name", str(whisper), "--language", "zh"]
+        stt = ["--stt", "mlx-audio-whisper", "--mlx_audio_whisper_model_name", str(whisper), "--language", "auto"]
     else:
         stt = ["--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots[recognizer]]
     speech = TTS[model_id.split(":")[0]](tts)
-    if chinese:
+    if multilingual:
         if model_id.startswith("qwen3-tts:"):
-            speech[speech.index("--qwen3_tts_language") + 1] = "chinese"
+            speech[speech.index("--qwen3_tts_language") + 1] = "auto"
             speech[speech.index("--qwen3_tts_speaker") + 1] = "Vivian"
-        speech += ["--init_chat_prompt", f"{PROMPT} Always reply in Chinese."]
+        speech += ["--init_chat_prompt", f"{PROMPT} Reply in the language of the user's latest message."]
     return [
         "--mac-optimal-settings",
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
