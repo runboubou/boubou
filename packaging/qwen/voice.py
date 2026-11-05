@@ -13,6 +13,7 @@ TTS = {
     # A voice file path keeps MLX Audio from resolving the voice on the Hub.
     "kokoro": lambda path: ["--tts", "kokoro", "--kokoro_model_name", path, "--kokoro_lang_code", "a",
                             "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
+    "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
 }
 
 

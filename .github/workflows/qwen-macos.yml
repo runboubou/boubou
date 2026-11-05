@@ -50,10 +50,12 @@ jobs:
           "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
           "$cli" list | grep -Fx 'kokoro:82m'
+          "$cli" list | grep -Fx 'phonon:31m-en'
           "$cli" pull qwen3-tts:1.7b-customvoice
           find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > before
           "$cli" pull qwen3-tts:0.6b-customvoice
           "$cli" pull kokoro:82m
+          "$cli" pull phonon:31m-en
           find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > after
           test -z "$(LC_ALL=C comm -23 before after)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -77,7 +79,7 @@ jobs:
           sw_vers -productVersion
           sysctl hw.model hw.memsize
           status=0
-          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m; do
+          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en; do
             "$cli" pull "$id" --offline || { status=1; continue; }
             "$python" -I -B packaging/qwen/smoke.py "$id" "$root" "$manifest" || status=1
             "$cli" doctor "$id" || status=1

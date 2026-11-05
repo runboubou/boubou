@@ -355,6 +355,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         "qwen3-tts:1.7b-customvoice",
         "qwen3-tts:0.6b-customvoice",
         "kokoro:82m",
+        "phonon:31m-en",
     ];
     let files: Vec<_> = ids
         .iter()
@@ -394,6 +395,7 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
         "qwen3-tts:1.7b-customvoice",
         "qwen3-tts:0.6b-customvoice",
         "kokoro:82m",
+        "phonon:31m-en",
     ] {
         let output = package.run(&[
             "--cache-dir",
@@ -663,41 +665,43 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
 }
 
 #[test]
-fn voice_profiles_load_only_their_own_speech_model() {
+fn runner_speaks_with_the_model_each_profile_owns() {
     let output = Command::new("python3")
         .args(["-I", "-B", "-c"])
         .arg(
-            r#"import json, runpy, sys
+            r#"import json, os, runpy, sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 arguments = runpy.run_path(sys.argv[1])["arguments"]
-speech = {"qwen3-tts:1.7b-customvoice": "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
-          "kokoro:82m": "Kokoro-82M-bf16"}
-entries = [{"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
-           for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
-entries += [{"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json",
-             "profile": profile} for profile, name in speech.items()]
+owned = {
+    "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
+                                   ["--qwen3_tts_speaker", "Aiden", "--qwen3_tts_language", "english"]),
+    "kokoro:82m": ("kokoro", "mlx-community--Kokoro-82M-bf16", ["--kokoro_lang_code", "a"]),
+    "phonon:31m-en": ("phonon", "gradium--phonon-31m-en", ["--phonon_tts_language", "en"]),
+}
+snapshot = "hub/models--{}/snapshots/pinned".format
+files = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
+         for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+files += [{"path": f"{snapshot(repo)}/config.json", "profile": id} for id, (_, repo, _) in owned.items()]
+files.append({"path": f"{snapshot('gradium--phonon-voices')}/voices.jsonl", "profile": "phonon:31m-en"})
+
 with TemporaryDirectory() as folder:
-    cache = Path(folder).resolve()
-    manifest = cache / "models.json"
-    manifest.write_text(json.dumps(entries))
-    for profile, name in speech.items():
-        work = cache / profile.replace(":", "-")
+    root = Path(folder).resolve()
+    manifest = root / "models.json"
+    manifest.write_text(json.dumps(files))
+    for id, (tts, repo, options) in owned.items():
+        work = root / tts
         work.mkdir()
-        argv = arguments(profile, cache, manifest, work)
-        option = lambda key: argv[argv.index(key) + 1]
-        tts = work / name
-        assert tts.resolve() == cache / f"hub/models--mlx-community--{name}/snapshots/pinned", tts
-        assert sorted(p.name for p in work.iterdir()) == sorted(
-            ["parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit", name]), list(work.iterdir())
-        if profile == "kokoro:82m":
-            assert option("--tts") == "kokoro" and option("--kokoro_model_name") == str(tts)
-            assert option("--kokoro_voice") == str(tts / "voices/af_heart.safetensors")
-            assert option("--kokoro_lang_code") == "a"
-        else:
-            assert option("--tts") == "qwen3" and option("--qwen3_tts_model_name") == str(tts)
-            assert "--kokoro_voice" not in argv
+        argv = arguments(id, root / "cache", manifest, work)
+        at = argv.index("--tts")
+        assert argv[at:at + 2] == ["--tts", tts] and argv[at + 2].endswith("_model_name"), argv
+        assert os.readlink(argv[at + 3]) == str(root / "cache" / snapshot(repo)), argv
+        assert argv[at + 4:at + 4 + len(options)] == options, argv
+        if tts == "kokoro":
+            assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
+        # Shared speech recognition and language models, plus only this profile's speech model.
+        assert len(list(work.iterdir())) == 3, argv
 "#,
         )
         .arg(concat!(

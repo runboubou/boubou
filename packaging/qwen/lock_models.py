@@ -32,6 +32,14 @@ ORIGINALS = [
     ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe", {"README.md"}, "qwen3-tts:1.7b-customvoice"),
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987", {"README.md"}, "kokoro:82m"),
 ]
+# ptts 0.4.0 defaults: its checkpoint, read locally (q8 weights, tokenizer, default voice), and its
+# voice catalog, which the upstream handler lists at startup. The Hub client ptts uses ignores
+# HF_HUB_OFFLINE, but returns a file cached at an exact commit without connecting.
+PHONON = [
+    ("gradium/phonon-31m-en", "8c64b55ec301728e2d1695bfea87a08a267d0c2d",
+     {"README.md", "config.json", "default-voice.safetensors", "model.q8.gguf", "tokenizer.json"}, "phonon:31m-en"),
+    ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3", {"voices.jsonl"}, "phonon:31m-en"),
+]
 
 
 def snapshot(repo, revision, destination, profile, only=None):
@@ -89,6 +97,9 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
+    for repo, revision, only, profile in PHONON:
+        directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
+        files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(snapshot(
         "pipecat-ai/smart-turn-v3", "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
         "smart-turn", None, {"README.md", "smart-turn-v3.2-cpu.onnx"},
