@@ -216,12 +216,38 @@ pub enum Model {
     Qwen(&'static str),
 }
 
-/// Profiles served by the packaged speech-to-speech runner.
+/// Profiles served by the packaged speech-to-speech runner. Pocket TTS profiles name a stock config.
 pub const QWEN_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice",
     "qwen3-tts:0.6b-customvoice",
     "kokoro:82m",
     "phonon:31m-en",
+    "pocket-tts:english_2026-10",
+    "pocket-tts:english_2026-09_2",
+    "pocket-tts:english_2026-09",
+    "pocket-tts:english_2026-09_24l",
+    "pocket-tts:english_drifting_26-09",
+    "pocket-tts:english_2026-04",
+    "pocket-tts:english_2026-04_24l",
+    "pocket-tts:english_2026-01",
+    "pocket-tts:english_18m_2026-10",
+    "pocket-tts:english_18m_refl_2026-10",
+    "pocket-tts:english_7m_2026-10",
+    "pocket-tts:english_7m_refl_2026-10",
+    "pocket-tts:english_2m_2026-10",
+    "pocket-tts:english_2m_refl_2026-10",
+    "pocket-tts:dutch",
+    "pocket-tts:dutch_24l",
+    "pocket-tts:french",
+    "pocket-tts:french_24l",
+    "pocket-tts:german",
+    "pocket-tts:german_24l",
+    "pocket-tts:italian",
+    "pocket-tts:italian_24l",
+    "pocket-tts:portuguese",
+    "pocket-tts:portuguese_24l",
+    "pocket-tts:spanish",
+    "pocket-tts:spanish_24l",
 ];
 
 impl Model {

@@ -352,14 +352,16 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     )
     .unwrap();
     let ids = [
-        "qwen3-tts:1.7b-customvoice",
-        "qwen3-tts:0.6b-customvoice",
-        "kokoro:82m",
-        "phonon:31m-en",
+        ("qwen3-tts:1.7b-customvoice", "English"),
+        ("qwen3-tts:0.6b-customvoice", "English"),
+        ("kokoro:82m", "English"),
+        ("phonon:31m-en", "English"),
+        ("pocket-tts:english_2m_2026-10", "English"),
+        ("pocket-tts:french_24l", "French"),
     ];
     let files: Vec<_> = ids
         .iter()
-        .map(|id| {
+        .map(|(id, _)| {
             serde_json::json!({
                 "profile": id, "path": format!("models/{id}/config.json"), "size": 7,
                 "url": "https://example.invalid/config.json", "sha256": "b".repeat(64)
@@ -373,12 +375,18 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     .unwrap();
     let models = package.run(&["list"]);
     let model_list = String::from_utf8(models.stdout).unwrap();
+    let pocket = model_list.lines().filter(|l| l.starts_with("pocket-tts:"));
+    assert_eq!(pocket.count(), 26);
     let cache = package.0.join("unused-cache");
-    for id in ids {
+    for (id, language) in ids {
         assert!(model_list.lines().any(|line| line == id));
         let doctor = package.run(&["--cache-dir", cache.to_str().unwrap(), "doctor", id]);
         assert_eq!(doctor.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&doctor.stdout).contains(id));
+        let report = String::from_utf8_lossy(&doctor.stdout);
+        assert!(
+            report.contains(&format!("{id} · {language} voice chat")),
+            "{report}"
+        );
         assert!(!cache.exists());
     }
 }
@@ -702,6 +710,49 @@ with TemporaryDirectory() as folder:
             assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn pocket_profile_loads_its_stock_config_and_preset_voice() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+config, voice = "french_24l", "estelle"
+languages = "hub/models--kyutai--pocket-tts-without-voice-cloning/snapshots/pinned/languages"
+entries = [{"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
+           for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+entries.append({"path": f"{languages}/{config}/embeddings/{voice}.safetensors",
+                "profile": f"pocket-tts:{config}"})
+with TemporaryDirectory() as folder:
+    cache = Path(folder).resolve()
+    manifest = cache / "models.json"
+    manifest.write_text(json.dumps(entries))
+    work = cache / "pocket"
+    work.mkdir()
+    argv = arguments(f"pocket-tts:{config}", cache, manifest, work)
+    option = lambda key: argv[argv.index(key) + 1]
+    assert option("--tts") == "pocket" and option("--pocket_tts_language") == config
+    assert option("--pocket_tts_voice") == str(cache / languages / config / "embeddings" / f"{voice}.safetensors")
+    assert option("--init_chat_prompt").endswith(" Always reply in French.")
+    assert sorted(p.name for p in work.iterdir()) == ["Qwen3.5-4B-4bit", "parakeet-tdt-0.6b-v3"]
 "#,
         )
         .arg(concat!(
