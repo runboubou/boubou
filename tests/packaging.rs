@@ -358,6 +358,15 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("phonon:31m-en", "English"),
         ("supertonic:3", "English"),
         ("chattts:en", "English"),
+        ("chattts:whisper", "Chinese / English (Whisper)"),
+        (
+            "qwen3-tts:1.7b-customvoice-whisper",
+            "Chinese / English (Whisper)",
+        ),
+        (
+            "qwen3-tts:0.6b-customvoice-whisper",
+            "Chinese / English (Whisper)",
+        ),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
         ("kitten-tts:nano-0.8-int8", "English"),
@@ -867,6 +876,64 @@ with TemporaryDirectory() as folder:
         ))
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn dual_entries_select_their_recognizer_and_share_tts_assets() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(r#"import json, os, runpy, sys, types
+from pathlib import Path
+from tempfile import TemporaryDirectory
+sys.modules["ChatTTS"] = types.SimpleNamespace(Chat=type("Chat", (), {}))
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+snapshot = "hub/models--{}/snapshots/pinned".format
+pairs = [("qwen3-tts:0.6b-customvoice", "qwen3-tts:0.6b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"),
+         ("qwen3-tts:1.7b-customvoice", "qwen3-tts:1.7b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit"),
+         ("chattts:en", "chattts:whisper", "2Noise--ChatTTS")]
+defaults = [p[0] for p in pairs]
+optional = [p[1] for p in pairs]
+files = [{"path": snapshot("mlx-community--Qwen3.5-4B-4bit") + "/config.json"},
+         {"path": snapshot("mlx-community--parakeet-tdt-0.6b-v3") + "/config.json", "profiles": defaults}]
+for default, whisper, repo in pairs:
+    name = "/asset/gpt/config.json" if repo == "2Noise--ChatTTS" else "/config.json"
+    files.append({"path": snapshot(repo) + name, "profiles": [default, whisper]})
+files += [{"path": snapshot("mlx-community--whisper-large-v3-turbo") + "/" + name, "profiles": optional}
+          for name in ["config.json", "weights.safetensors", "README.md"]]
+files += [{"path": snapshot("openai--whisper-large-v3") + "/" + name, "profiles": optional}
+          for name in ["preprocessor_config.json", "tokenizer.json", "README.md"]]
+with TemporaryDirectory() as folder:
+    root = Path(folder)
+    manifest = root / "models.json"
+    manifest.write_text(json.dumps(files))
+    for default, whisper, repo in pairs:
+        targets = []
+        for model in [default, whisper]:
+            work = root / model.replace(":", "-")
+            work.mkdir()
+            argv = arguments(model, root / "cache", manifest, work)
+            assert argv[argv.index("--stt") + 1] == ("mlx-audio-whisper" if model == whisper else "parakeet-tdt"), argv
+            assert (work / "parakeet-tdt-0.6b-v3").is_symlink() == (model == default)
+            assert (work / "whisper").is_dir() == (model == whisper)
+            if model == whisper:
+                assert argv[argv.index("--language") + 1] == "auto", argv
+                assert "Reply in the language of the user's latest message." in argv[-1], argv
+                assert sorted(p.name for p in (work / "whisper").iterdir()) == ["config.json", "preprocessor_config.json", "tokenizer.json", "weights.safetensors"]
+            if repo == "2Noise--ChatTTS":
+                targets.append(os.readlink(work / "asset"))
+            else:
+                targets.append(os.readlink(argv[argv.index("--qwen3_tts_model_name") + 1]))
+                assert argv[argv.index("--qwen3_tts_language") + 1] == ("auto" if model == whisper else "english"), argv
+                assert argv[argv.index("--qwen3_tts_speaker") + 1] == ("Vivian" if model == whisper else "Aiden"), argv
+        assert targets[0] == targets[1], targets
+"#)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen/voice.py"))
+        .output().unwrap();
     assert!(
         output.status.success(),
         "{}",

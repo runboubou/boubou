@@ -125,8 +125,11 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     Ok(installed)
 }
 
-/// Pocket TTS profiles speak the language that starts their config name; the others speak English.
+/// Language modes are explicit; Pocket profiles name their stock language.
 fn language(id: &str) -> String {
+    if id.ends_with("-whisper") || id == "chattts:whisper" {
+        return "Chinese / English (Whisper)".into();
+    }
     let Some(config) = id.strip_prefix("pocket-tts:") else {
         return "English".into();
     };
@@ -171,21 +174,29 @@ struct ModelFile {
     sha256: String,
     #[serde(default)]
     profile: Option<String>,
+    #[serde(default)]
+    profiles: Vec<String>,
+}
+
+impl ModelFile {
+    fn applies_to(&self, id: &str) -> bool {
+        self.profile.as_deref().is_none_or(|profile| profile == id)
+            && (self.profiles.is_empty() || self.profiles.iter().any(|profile| profile == id))
+    }
 }
 
 // None checks the cache in place. Some(offline) performs verified preparation.
 fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Result<()> {
     let files: Vec<ModelFile> = serde_json::from_slice(&fs::read(dir.join("models.json"))?)?;
     ensure!(
-        files.iter().any(|f| f.profile.as_deref() == Some(id)),
+        files.iter().any(|f| {
+            f.profile.as_deref() == Some(id) || f.profiles.iter().any(|profile| profile == id)
+        }),
         "Missing Qwen model profile {id}"
     );
     let mut ready = true;
     let mut selected = Vec::new();
-    for f in files
-        .iter()
-        .filter(|f| f.profile.as_deref().is_none_or(|p| p == id))
-    {
+    for f in files.iter().filter(|f| f.applies_to(id)) {
         integrity::safe_destination(root, &f.path)?;
         selected.push(f.path.as_path());
         let path = root.join(&f.path);
@@ -245,4 +256,26 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
 pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     prepare(id, cache, offline)?;
     anyhow::bail!("Qwen requires an Apple Silicon Mac.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelFile;
+
+    #[test]
+    fn asset_ownership_accepts_legacy_and_grouped_profiles() {
+        let file = |ownership: &str| {
+            serde_json::from_str::<ModelFile>(&format!(
+                r#"{{"path":"hub/config.json","url":"https://example.invalid/config.json","size":1,"sha256":"digest"{ownership}}}"#
+            )).unwrap()
+        };
+        assert!(file("").applies_to("chattts:whisper"));
+        assert!(file(r#", "profile":"chattts:en""#).applies_to("chattts:en"));
+        assert!(!file(r#", "profile":"chattts:en""#).applies_to("chattts:whisper"));
+        let grouped =
+            file(r#", "profiles":["chattts:whisper","qwen3-tts:0.6b-customvoice-whisper"]"#);
+        assert!(grouped.applies_to("chattts:whisper"));
+        assert!(grouped.applies_to("qwen3-tts:0.6b-customvoice-whisper"));
+        assert!(!grouped.applies_to("chattts:en"));
+    }
 }

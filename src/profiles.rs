@@ -220,10 +220,13 @@ pub enum Model {
 pub const QWEN_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice",
     "qwen3-tts:0.6b-customvoice",
+    "qwen3-tts:1.7b-customvoice-whisper",
+    "qwen3-tts:0.6b-customvoice-whisper",
     "kokoro:82m",
     "phonon:31m-en",
     "supertonic:3",
     "chattts:en",
+    "chattts:whisper",
     "pocket-tts:english_2026-10",
     "pocket-tts:english_2026-09_2",
     "pocket-tts:english_2026-09",

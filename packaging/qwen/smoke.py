@@ -40,7 +40,7 @@ def check(model, cache, manifest):
         with ws:
             ws.send(json.dumps({"type": "conversation.item.create", "item": {
                 "type": "message", "role": "user",
-                "content": [{"type": "input_text", "text": "Please say hello in English."}]}}))
+                "content": [{"type": "input_text", "text": "请用中文打个招呼。" if model.endswith("-whisper") or model == "chattts:whisper" else "Please say hello in English."}]}}))
             ws.send(json.dumps({"type": "response.create"}))
             start = time.monotonic()
             deadline = start + 180
