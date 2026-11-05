@@ -635,12 +635,12 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
             cache = Path(folder)
             manifest = cache / "models.json"
             manifest.write_text(json.dumps([
-                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json",
-                 **profile}
-                for name, profile in (("parakeet-tdt-0.6b-v3", {}), ("Qwen3.5-4B-4bit", {}),
-                                      ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
-                                       {"profile": "qwen3-tts:1.7b-customvoice"}))
-            ]))
+                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
+                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")
+            ] + [{
+                "path": "hub/models--mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit/snapshots/pinned/config.json",
+                "profile": "qwen3-tts:1.7b-customvoice",
+            }]))
             runpy.run_path(sys.argv[1])["run"](
                 "serve", "qwen3-tts:1.7b-customvoice", cache, manifest
             )

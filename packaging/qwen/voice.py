@@ -6,23 +6,21 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
-def speech(model_id, tts):
-    if model_id.startswith("qwen3-tts:"):
-        return ["--tts", "qwen3", "--qwen3_tts_model_name", tts, "--qwen3_tts_speaker", "Aiden",
-                "--qwen3_tts_language", "english"]
-    if model_id.startswith("kokoro:"):
-        # A voice file path keeps MLX Audio from resolving the voice on the Hub.
-        return ["--tts", "kokoro", "--kokoro_model_name", tts,
-                "--kokoro_voice", str(Path(tts, "voices/af_heart.safetensors")), "--kokoro_lang_code", "a"]
-    raise ValueError(f"Unsupported voice profile: {model_id}")
+# Speech options per profile family, given the speech model that profile owns.
+TTS = {
+    "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
+                               "--qwen3_tts_language", "english"],
+    # A voice file path keeps MLX Audio from resolving the voice on the Hub.
+    "kokoro": lambda path: ["--tts", "kokoro", "--kokoro_model_name", path, "--kokoro_lang_code", "a",
+                            "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
+}
 
 
 def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
-    snapshots = {}
+    snapshots, owned = {}, []
     for entry in files:
         parts = Path(entry["path"]).parts
         if (entry.get("profile", model_id) == model_id and len(parts) == 5
@@ -30,8 +28,10 @@ def arguments(model_id, cache, manifest, work):
             # MLX Audio infers Parakeet and Kokoro architectures from the final path component.
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
-            # Shared snapshots serve every profile; the profile's own snapshot is its speech model.
-            snapshots["tts" if "profile" in entry else parts[1]] = str(alias)
+            snapshots[parts[1]] = str(alias)
+            if "profile" in entry:
+                owned.append(str(alias))
+    (tts,) = owned
     os.environ.update({
         "HF_HOME": str(cache / "hf"),
         "HF_HUB_CACHE": str(cache / "hub"),
@@ -44,7 +44,7 @@ def arguments(model_id, cache, manifest, work):
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
         "--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots["models--mlx-community--parakeet-tdt-0.6b-v3"],
         "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
-        *speech(model_id, snapshots["tts"]),
+        *TTS[model_id.split(":")[0]](tts),
     ]
 
 

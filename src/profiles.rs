@@ -216,9 +216,8 @@ pub enum Model {
     Qwen(&'static str),
 }
 
-/// Profiles of the packaged Qwen voice pipeline. They share its speech recognizer and language
-/// model; each one selects its own speech model.
-pub const QWEN_IDS: [&str; 3] = [
+/// Profiles served by the packaged speech-to-speech runner.
+pub const QWEN_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice",
     "qwen3-tts:0.6b-customvoice",
     "kokoro:82m",
@@ -234,7 +233,7 @@ impl Model {
 
     pub fn all() -> impl Iterator<Item = Self> {
         let qwen = if crate::qwen::packaged() {
-            &QWEN_IDS[..]
+            QWEN_IDS
         } else {
             &[]
         };
