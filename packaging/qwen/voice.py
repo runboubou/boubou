@@ -10,6 +10,9 @@ from tempfile import TemporaryDirectory
 TTS = {
     "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
                                "--qwen3_tts_language", "english"],
+    # A voice file path keeps MLX Audio from resolving the voice on the Hub.
+    "kokoro": lambda path: ["--tts", "kokoro", "--kokoro_model_name", path, "--kokoro_lang_code", "a",
+                            "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
     "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
 }
 
@@ -23,7 +26,7 @@ def arguments(model_id, cache, manifest, work):
         parts = Path(entry["path"]).parts
         if (entry.get("profile", model_id) == model_id and len(parts) == 5
                 and parts[0] == "hub" and parts[2] == "snapshots" and parts[4] == "config.json"):
-            # MLX Audio infers the Parakeet architecture from the final path component.
+            # MLX Audio infers Parakeet and Kokoro architectures from the final path component.
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
             snapshots[parts[1]] = str(alias)
@@ -44,6 +47,15 @@ def arguments(model_id, cache, manifest, work):
         "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
         *TTS[model_id.split(":")[0]](tts),
     ]
+
+
+def link_espeak_data(work):
+    # espeak-ng exits when its data path exceeds 159 bytes, as the installed runtime's does.
+    # Phonemizer resolves the configured directory, so configure the short parent of a link.
+    import espeakng_loader
+    from misaki import espeak
+    (work / "espeak-ng-data").symlink_to(espeakng_loader.get_data_path(), target_is_directory=True)
+    espeak.EspeakWrapper.set_data_path(str(work))
 
 
 def run(command, model, cache, manifest, *extra):
@@ -67,6 +79,8 @@ def run(command, model, cache, manifest, *extra):
                 filter(None, (os.environ.get(key), "127.0.0.1,localhost,::1"))
             )
         options = arguments(model, cache, manifest, work)
+        if model.startswith("kokoro:"):
+            link_espeak_data(work)
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         # Upstream v1.1.0 sets this to its package directory during import.
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")

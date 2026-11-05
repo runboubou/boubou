@@ -354,6 +354,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     let ids = [
         "qwen3-tts:1.7b-customvoice",
         "qwen3-tts:0.6b-customvoice",
+        "kokoro:82m",
         "phonon:31m-en",
     ];
     let files: Vec<_> = ids
@@ -393,6 +394,7 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     for id in [
         "qwen3-tts:1.7b-customvoice",
         "qwen3-tts:0.6b-customvoice",
+        "kokoro:82m",
         "phonon:31m-en",
     ] {
         let output = package.run(&[
@@ -675,6 +677,7 @@ arguments = runpy.run_path(sys.argv[1])["arguments"]
 owned = {
     "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
                                    ["--qwen3_tts_speaker", "Aiden", "--qwen3_tts_language", "english"]),
+    "kokoro:82m": ("kokoro", "mlx-community--Kokoro-82M-bf16", ["--kokoro_lang_code", "a"]),
     "phonon:31m-en": ("phonon", "gradium--phonon-31m-en", ["--phonon_tts_language", "en"]),
 }
 snapshot = "hub/models--{}/snapshots/pinned".format
@@ -692,9 +695,11 @@ with TemporaryDirectory() as folder:
         work.mkdir()
         argv = arguments(id, root / "cache", manifest, work)
         at = argv.index("--tts")
-        assert argv[at:at + 3] == ["--tts", tts, f"--{tts}_tts_model_name"], argv
+        assert argv[at:at + 2] == ["--tts", tts] and argv[at + 2].endswith("_model_name"), argv
         assert os.readlink(argv[at + 3]) == str(root / "cache" / snapshot(repo)), argv
-        assert argv[at + 4:] == options, argv
+        assert argv[at + 4:at + 4 + len(options)] == options, argv
+        if tts == "kokoro":
+            assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
 "#,

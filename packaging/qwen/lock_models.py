@@ -15,11 +15,14 @@ LFS = re.compile(
 )
 
 # The MLX repositories contain one conversion each, including the nested TTS codec.
+# Kokoro ships its card, weights and the selected voice, not samples or other voices.
 MODELS = [
-    ("parakeet-tdt-0.6b-v3", "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15", None),
-    ("Qwen3.5-4B-4bit", "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", None),
-    ("Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit", "7dc92af14613355896fcab13b268c19ede233139", "qwen3-tts:0.6b-customvoice"),
-    ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit", "1c6c0ff58c43afa8df571facde2efa077efd85e2", "qwen3-tts:1.7b-customvoice"),
+    ("parakeet-tdt-0.6b-v3", "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15", None, None),
+    ("Qwen3.5-4B-4bit", "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", None, None),
+    ("Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit", "7dc92af14613355896fcab13b268c19ede233139", "qwen3-tts:0.6b-customvoice", None),
+    ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit", "1c6c0ff58c43afa8df571facde2efa077efd85e2", "qwen3-tts:1.7b-customvoice", None),
+    ("Kokoro-82M-bf16", "a71e4d38b236d968966a2002c4c895dbd12b1c3c", "kokoro:82m",
+     {"README.md", "config.json", "kokoro-v1_0.safetensors", "voices/af_heart.safetensors"}),
 ]
 # Retain original attribution alongside the MLX model cards.
 ORIGINALS = [
@@ -27,6 +30,7 @@ ORIGINALS = [
     ("Qwen/Qwen3.5-4B", "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a", {"LICENSE", "README.md"}, None),
     ("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", "85e237c12c027371202489a0ec509ded67b5e4b5", {"README.md"}, "qwen3-tts:0.6b-customvoice"),
     ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe", {"README.md"}, "qwen3-tts:1.7b-customvoice"),
+    ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987", {"README.md"}, "kokoro:82m"),
 ]
 # ptts 0.4.0 defaults: its checkpoint, read locally (q8 weights, tokenizer, default voice), and its
 # voice catalog, which the upstream handler lists at startup. The Hub client ptts uses ignores
@@ -88,9 +92,9 @@ def main():
     parser.add_argument("output", type=Path, help="output path for models.json")
     args = parser.parse_args()
     files = []
-    for name, revision, profile in MODELS:
+    for name, revision, profile, only in MODELS:
         directory = f"hub/models--mlx-community--{name}/snapshots/{revision}"
-        files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile))
+        files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
     for repo, revision, only, profile in PHONON:
