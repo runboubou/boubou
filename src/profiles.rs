@@ -223,6 +223,7 @@ pub const QWEN_IDS: &[&str] = &[
     "kokoro:82m",
     "phonon:31m-en",
     "supertonic:3",
+    "chattts:en",
     "pocket-tts:english_2026-10",
     "pocket-tts:english_2026-09_2",
     "pocket-tts:english_2026-09",

@@ -50,7 +50,9 @@ def main():
             tar.extractall(stage, filter="data")
         root = stage / "python"
         python = root / "bin/python3"
+        # ChatTTS and EnCodec publish only pure-Python sdists. The verified interpreter's setuptools builds them.
         subprocess.run([python, "-I", "-B", "-m", "pip", "install", "--isolated", "--only-binary=:all:",
+                        "--no-binary=chattts,encodec", "--no-build-isolation",
                         "--require-hashes", "--no-deps", "--no-compile", "-r", HERE / "requirements-macos.lock"], check=True)
         subprocess.run([python, "-I", "-B", "-m", "pip", "check"], check=True)
         shutil.copy2(HERE / "voice.py", root)

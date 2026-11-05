@@ -49,6 +49,12 @@ SUPERTONIC = ("Supertone/supertonic-3", "724fb5abbf5502583fb520898d45929e62f02c0
               {"LICENSE", "README.md", "config.json", "onnx/tts.json", "onnx/unicode_indexer.json",
                "onnx/duration_predictor.onnx", "onnx/text_encoder.onnx", "onnx/vector_estimator.onnx",
                "onnx/vocoder.onnx", "voice_styles/M1.json"}, "supertonic:3")
+# The assets ChatTTS 0.2.5 checks against its own hashes and loads; the card states the CC BY-NC 4.0 terms.
+CHATTTS = ("2Noise/ChatTTS", "1a3c04a8b0651689bd9242fbb55b1f4b5a9aef84",
+           {"README.md", "asset/Decoder.safetensors", "asset/DVAE.safetensors", "asset/Embed.safetensors",
+            "asset/Vocos.safetensors", "asset/gpt/config.json", "asset/gpt/model.safetensors",
+            "asset/tokenizer/special_tokens_map.json", "asset/tokenizer/tokenizer_config.json",
+            "asset/tokenizer/tokenizer.json"}, "chattts:en")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -159,7 +165,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in [*PHONON, SUPERTONIC]:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())

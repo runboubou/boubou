@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,6 +27,31 @@ def supertonic(path):
     return ["--tts", "supertonic", "--supertonic_tts_voice", "M1", "--supertonic_tts_lang", "en"]
 
 
+def spell_numbers(text):
+    from num2words import num2words
+
+    def words(match):
+        number = match[0].replace(",", "")
+        return num2words(float(number) if "." in number else int(number)).replace("-", " ")
+    return re.sub(r"\d+(?:,\d{3})*(?:\.\d+)?", words, text).replace("%", " percent")
+
+
+def chattts(work):
+    import ChatTTS
+
+    class Chat(ChatTTS.Chat):
+        # ChatTTS drops digits unless a text normalizer is registered, and the upstream handler registers none.
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.normalizer.register("en", spell_numbers)
+
+    ChatTTS.Chat = Chat
+    # The upstream handler loads ChatTTS from asset/ in the working directory, linked here by arguments().
+    os.chdir(work)
+    # ChatTTS splits a multi-sentence input into a batch, and the handler streams only its first sentence.
+    return ["--tts", "chatTTS", "--chat_tts_device", "cpu", "--stream_batch_sentences", "1"]
+
+
 # Speech options per profile family, given the speech model that profile owns.
 TTS = {
     "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
@@ -36,6 +62,7 @@ TTS = {
     "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
     "pocket-tts": pocket,
     "supertonic": supertonic,
+    "chattts": chattts,
 }
 
 
@@ -57,6 +84,10 @@ def arguments(model_id, cache, manifest, work):
         elif entry.get("profile") == model_id and parts[-2] == "embeddings":
             # Pocket TTS loads its weights by Hub path; its preset voice state is the owned file.
             owned.append(str(cache.joinpath(*parts)))
+        elif entry.get("profile") == model_id and parts[4:] == ("asset", "gpt", "config.json"):
+            # Keep ChatTTS's working directory temporary, so nothing is written into the verified snapshot.
+            (work / "asset").symlink_to(cache.joinpath(*parts[:5]), target_is_directory=True)
+            owned.append(str(work))
     (tts,) = owned
     os.environ.update({
         "HF_HOME": str(cache / "hf"),
