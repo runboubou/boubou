@@ -357,6 +357,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("kokoro:82m", "English"),
         ("phonon:31m-en", "English"),
         ("supertonic:3", "English"),
+        ("chattts:en", "English"),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
     ];
@@ -406,6 +407,7 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
         "kokoro:82m",
         "phonon:31m-en",
         "supertonic:3",
+        "chattts:en",
     ] {
         let output = package.run(&[
             "--cache-dir",
@@ -753,6 +755,63 @@ with TemporaryDirectory() as folder:
     # The SDK downloads only when this directory lacks its ONNX files.
     assert os.readlink(os.environ["SUPERTONIC_CACHE_DIR"]) == str(cache / snapshot("Supertone--supertonic-3"))
     assert len(list(work.iterdir())) == 3, argv
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn chattts_profile_loads_its_snapshot_from_a_temporary_directory() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, os, runpy, sys, types
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+class Normalizer:
+    def register(self, language, normalize):
+        self.registered = language, normalize
+
+class Chat:
+    def __init__(self):
+        self.normalizer = Normalizer()
+
+sys.modules["ChatTTS"] = types.SimpleNamespace(Chat=Chat)
+words = {1000: "one thousand", 2: "two", 3.5: "three point five", 45: "forty-five"}
+sys.modules["num2words"] = types.SimpleNamespace(num2words=words.__getitem__)
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+snapshot = "hub/models--{}/snapshots/pinned".format
+entries = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
+           for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+assets = f"{snapshot('2Noise--ChatTTS')}/asset"
+entries += [{"path": f"{assets}/{name}", "profile": "chattts:en"} for name in ("DVAE.safetensors", "gpt/config.json")]
+with TemporaryDirectory() as folder:
+    cache = Path(folder).resolve()
+    manifest = cache / "models.json"
+    manifest.write_text(json.dumps(entries))
+    work = cache / "chattts"
+    work.mkdir()
+    argv = arguments("chattts:en", cache, manifest, work)
+    tts = ["--tts", "chatTTS", "--chat_tts_device", "cpu", "--stream_batch_sentences", "1"]
+    assert argv[argv.index("--tts"):] == tts, argv
+    # ChatTTS reads asset/ from the working directory, which must not be the verified snapshot.
+    assert Path.cwd() == work and os.readlink("asset") == str(cache / assets), argv
+    assert len(list(work.iterdir())) == 3, argv
+    # ChatTTS would drop the digits; the handler's Chat spells them out.
+    language, normalize = sys.modules["ChatTTS"].Chat().normalizer.registered
+    assert language == "en"
+    assert normalize("2 of 1,000 is 3.5%, or 45.") == "two of one thousand is three point five percent, or forty five."
 "#,
         )
         .arg(concat!(
