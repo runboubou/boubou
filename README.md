@@ -1,7 +1,6 @@
 # Boubou
 
-Local English voice chat on Apple Silicon Macs with Liquid AI LFM3-Audio-2B
-and LFM3-Omni-2B.
+Local voice conversations on Apple Silicon Macs.
 
 ## Run
 
@@ -18,11 +17,24 @@ Selecting `LFM3-Audio-2B` downloads about 1.42 GB of verified assets on first
 use and asks for microphone access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
 resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
-Source builds also offer a guided start: run `boubou` without a subcommand to
-choose a recommended model or paste a model name/run command. The English menu
-uses arrow keys and Enter; Esc goes back and Ctrl+C exits. Recommendations
-estimate memory and disk fit; speed varies by chip and other apps. Set
-`NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb` print help.
+For the guided start, use a source build or a package built from this checkout:
+
+```sh
+boubou
+```
+
+Choose English or Chinese, review the detected Mac, voice and estimated resource
+needs, then confirm the download and start talking. English uses the default
+voice. Chinese uses Vivian, also understands English, and requires macOS 15+
+and a [package with the shared voice runner](packaging/qwen/README.md).
+Builds without that runner offer English and explain why Chinese is unavailable.
+The menu uses arrow keys and Enter; Esc goes back and Ctrl+C exits.
+It checks architecture, macOS, total and available memory, and cache disk space
+before downloading. Resource fit is an estimate; 8/16 GiB Macs have not been
+hardware-validated, and speed or stability is not guaranteed. If startup fails,
+follow the error's recovery steps and reopen `boubou` to check again and resume
+downloads. Set `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb`
+print help. The developer entry accepts a model name or run command.
 Source builds also support `boubou run LFM3-Omni-2B` for English voice chat
 (about 1.62 GB on first use). Ask a local image or short video a text question:
 
@@ -35,8 +47,7 @@ Images: PNG/JPEG, up to 2048 × 2048 pixels. Videos: MP4/MOV with constant frame
 rate, up to 10 seconds, 512 × 512 pixels and 60 fps; install `ffmpeg` and `ffprobe`
 for video. Files are limited to 64 MiB. This mode returns text and does not open
 the microphone. See [media limits and errors](spec/0009-omni-media-questions.md).
-Omni, the menu and the unified `boubou` command will ship in the next npm release;
-the published beta still supports only Audio through the explicit command above.
+These source and candidate-package capabilities do not imply an npm release.
 
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.

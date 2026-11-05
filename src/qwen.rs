@@ -68,11 +68,7 @@ fn version(text: &str) -> Result<(u32, u32, u32)> {
     Ok((major, minor, patch))
 }
 
-fn check_host(runner: &Runner) -> Result<()> {
-    ensure!(
-        cfg!(all(target_os = "macos", target_arch = "aarch64")),
-        "Qwen requires an Apple Silicon Mac."
-    );
+pub fn macos_version() -> Result<(u32, u32, u32)> {
     let os = Command::new("/usr/bin/sw_vers")
         .arg("-productVersion")
         .output()?;
@@ -80,8 +76,16 @@ fn check_host(runner: &Runner) -> Result<()> {
         os.status.success(),
         "Cannot determine the installed macOS version"
     );
+    version(std::str::from_utf8(&os.stdout)?)
+}
+
+fn check_host(runner: &Runner) -> Result<()> {
     ensure!(
-        version(std::str::from_utf8(&os.stdout)?)? >= version(&runner.min_macos)?,
+        cfg!(all(target_os = "macos", target_arch = "aarch64")),
+        "Qwen requires an Apple Silicon Mac."
+    );
+    ensure!(
+        macos_version()? >= version(&runner.min_macos)?,
         "This Qwen runner requires macOS {} or later.",
         runner.min_macos
     );
@@ -185,8 +189,7 @@ impl ModelFile {
     }
 }
 
-// None checks the cache in place. Some(offline) performs verified preparation.
-fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Result<()> {
+fn model_files(id: &str, dir: &Path) -> Result<Vec<ModelFile>> {
     let files: Vec<ModelFile> = serde_json::from_slice(&fs::read(dir.join("models.json"))?)?;
     ensure!(
         files.iter().any(|f| {
@@ -194,6 +197,62 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
         }),
         "Missing Qwen model profile {id}"
     );
+    Ok(files)
+}
+
+pub struct Requirements {
+    pub min_macos: (u32, u32, u32),
+    pub download: u64,
+    pub disk: u64,
+}
+
+pub fn requirements(id: &str, cache: &Path) -> Result<Requirements> {
+    estimate(id, cache, &release_dir()?)
+}
+
+// Estimates use sizes only. Preparation still verifies every selected file by SHA-256.
+fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
+    let runner = runner(dir)?;
+    let files = model_files(id, dir)?;
+    let root = cache.join("qwen");
+    let mut download = 0;
+    for file in files.iter().filter(|file| file.applies_to(id)) {
+        integrity::safe_destination(&root, &file.path)?;
+        if !root
+            .join(&file.path)
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.len() == file.size)
+        {
+            download += file.size;
+        }
+    }
+    let engine = runtime_dir(&root, &runner)?;
+    if runner.url.is_some()
+        && !engine
+            .join("runner.tar.gz")
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.len() == runner.size)
+    {
+        download += runner.size;
+    }
+    // Allow unpacking and staging when the interpreter is not installed. A corrupt
+    // cached runtime may still need repair; preparation remains authoritative.
+    let disk = download
+        + if engine.join("installed/bin/python3").is_file() {
+            0
+        } else {
+            8 * runner.size
+        };
+    Ok(Requirements {
+        min_macos: version(&runner.min_macos)?,
+        download,
+        disk,
+    })
+}
+
+// None checks the cache in place. Some(offline) performs verified preparation.
+fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Result<()> {
+    let files = model_files(id, dir)?;
     let mut ready = true;
     let mut selected = Vec::new();
     for f in files.iter().filter(|f| f.applies_to(id)) {
@@ -247,7 +306,7 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
         let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
         chat::Server::start(command, &stopped)?
     };
-    let result = chat::converse(&mut server, &mut session, cache, &stopped);
+    let result = chat::converse(&mut server, &mut session, cache, &stopped, &language(id));
     crate::check_cancel(&stopped)?;
     result
 }
@@ -260,7 +319,7 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::ModelFile;
+    use super::*;
 
     #[test]
     fn asset_ownership_accepts_legacy_and_grouped_profiles() {
@@ -277,5 +336,50 @@ mod tests {
         assert!(grouped.applies_to("chattts:whisper"));
         assert!(grouped.applies_to("qwen3-tts:0.6b-customvoice-whisper"));
         assert!(!grouped.applies_to("chattts:en"));
+    }
+
+    #[test]
+    fn resource_estimates_select_only_the_requested_pipeline_without_downloading() -> Result<()> {
+        let root = env::temp_dir().join(format!("boubou-qwen-estimate-{}", std::process::id()));
+        fs::create_dir(&root)?;
+        let result = (|| -> Result<()> {
+            let cache = root.join("cache");
+            let digest = "a".repeat(64);
+            let manifest = |url| serde_json::json!({"url": url, "size": 100, "sha256": digest, "min_macos": "15.0"});
+            fs::write(
+                root.join("runtime.json"),
+                manifest(serde_json::Value::Null).to_string(),
+            )?;
+            fs::write(root.join("models.json"), serde_json::json!([
+                {"path":"shared", "url":"https://example.invalid/shared", "size":200, "sha256":digest},
+                {"path":"whisper", "url":"https://example.invalid/whisper", "size":300, "sha256":digest, "profiles":["chinese"]},
+                {"path":"parakeet", "url":"https://example.invalid/parakeet", "size":400, "sha256":digest, "profile":"english"}
+            ]).to_string())?;
+            let chinese = estimate("chinese", &cache, &root)?;
+            assert_eq!(chinese.min_macos, (15, 0, 0));
+            assert_eq!(chinese.download, 500);
+            assert_eq!(chinese.disk, 1300);
+            assert!(
+                !cache.exists(),
+                "Estimation must not create or download assets"
+            );
+            assert!(estimate("missing", &cache, &root).is_err());
+            fs::create_dir_all(cache.join("qwen"))?;
+            fs::write(cache.join("qwen/shared"), vec![0; 200])?;
+            assert_eq!(estimate("chinese", &cache, &root)?.download, 300);
+            assert_eq!(estimate("english", &cache, &root)?.download, 400);
+            fs::write(
+                root.join("runtime.json"),
+                manifest(serde_json::json!("https://example.invalid/runner.tar.gz")).to_string(),
+            )?;
+            let remote = estimate("chinese", &cache, &root)?;
+            assert_eq!(remote.download, 400);
+            assert_eq!(remote.disk, 1200);
+            fs::remove_file(root.join("runtime.json"))?;
+            assert!(estimate("chinese", &cache, &root).is_err());
+            Ok(())
+        })();
+        fs::remove_dir_all(root)?;
+        result
     }
 }
