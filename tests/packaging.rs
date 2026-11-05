@@ -205,17 +205,22 @@ impl Drop for Prompt {
 fn guided_start_navigates_recommendations_and_restores_the_terminal() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&["Recommend a model for my Mac"]);
-    assert!(prompt.output.contains("Use a model I already chose"));
+    prompt.expect(&["Choose your conversation language"]);
+    assert!(prompt.output.contains("Chinese"));
+    assert!(prompt.output.contains("Developer: choose a model"));
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
     prompt.send(b"\r");
     prompt.expect(&[
-        "Recommended for your Mac",
-        "No suitable model found",
+        "Recommended voice setup",
+        "This voice cannot start on this Mac",
         "Device check unavailable",
     ]);
+    assert!(
+        !prompt.output.contains("LFM3"),
+        "Ordinary setup exposed a model name"
+    );
     prompt.send(b"\x1b");
-    prompt.expect(&["How would you like to start?"]);
+    prompt.expect(&["Choose your conversation language"]);
     prompt.send(b"\x03");
     assert_eq!(prompt.finish().code(), Some(130));
     assert!(!package.0.join("menu-cache").exists());
@@ -225,15 +230,16 @@ fn guided_start_navigates_recommendations_and_restores_the_terminal() {
 fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&["Recommend a model for my Mac"]);
+    prompt.expect(&["Choose your conversation language"]);
     assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
-    prompt.send(b"\x1b[B\r");
+    prompt.send(b"\x1b[B\x1b[B\r");
     prompt.expect(&["Paste a model name"]);
     prompt.send(b"unknown\r");
     prompt.expect(&["Model not supported"]);
     assert!(!package.0.join("menu-cache").exists());
     prompt.send(b"\x15\x1b[200~npx --yes --cache \"$HOME/a cache\" boubou@beta run LFM3-Audio-2B --offline\x1b[201~\r");
     prompt.expect(&["offline mode is enabled"]);
+    assert!(prompt.output.contains("run `boubou` again"));
     assert_eq!(prompt.finish().code(), Some(1));
     assert!(!package.0.join("menu-cache/native").exists());
     assert!(!package.0.join("menu-cache/models").exists());
@@ -243,12 +249,57 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&["Recommend a model for my Mac"]);
+    prompt.expect(&["Choose your conversation language"]);
     assert_eq!(
         unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
         0
     );
     assert_eq!(prompt.finish().signal(), Some(15));
+    assert!(!package.0.join("menu-cache").exists());
+}
+
+#[test]
+fn chinese_setup_checks_the_packaged_pipeline_before_any_download() {
+    let package = Package::new();
+    let mut prompt = Prompt::new(&package, true, &[]);
+    prompt.expect(&["Choose your conversation language"]);
+    prompt.send(b"\x1b[B\r");
+    prompt.expect(&["This voice setup is unavailable"]);
+    prompt.send(b"\r");
+    prompt.expect(&["Choose your conversation language"]);
+    prompt.send(b"\x03");
+    assert_eq!(prompt.finish().code(), Some(130));
+
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(
+        release.join("runtime.json"),
+        serde_json::json!({
+            "url":"https://example.invalid/runner.tar.gz", "size":1,
+            "sha256":"a".repeat(64), "min_macos":"99.0"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        release.join("models.json"),
+        serde_json::json!([{
+            "profile":"qwen3-tts:0.6b-customvoice-whisper", "path":"models/chinese.bin",
+            "url":"https://example.invalid/chinese.bin", "size":1, "sha256":"b".repeat(64)
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let mut prompt = Prompt::new(&package, true, &[]);
+    prompt.expect(&["Choose your conversation language"]);
+    prompt.send(b"\x1b[B\r");
+    prompt.expect(&["This voice cannot start on this Mac"]);
+    prompt.expect(&["macOS 99.0.0"]);
+    assert!(!prompt.output.contains("qwen3-tts:"));
+    prompt.send(b"\x1b");
+    prompt.expect(&["Choose your conversation language"]);
+    prompt.send(b"\x03");
+    assert_eq!(prompt.finish().code(), Some(130));
     assert!(!package.0.join("menu-cache").exists());
 }
 

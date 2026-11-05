@@ -173,6 +173,8 @@ fn trace(event: &'static str, details: std::fmt::Arguments<'_>) {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    #[cfg(target_os = "macos")]
+    let guided = cli.command.is_none();
     let cache = cli
         .cache_dir
         .or_else(|| dirs::cache_dir().map(|p| p.join("boubou")))
@@ -205,7 +207,7 @@ fn run() -> Result<()> {
             );
         }
     };
-    match command {
+    let result = (|| match command {
         Action::List => {
             for model in profiles::Model::all() {
                 println!("{}", model.id());
@@ -326,7 +328,12 @@ fn run() -> Result<()> {
             check_cancel(&stopped)?;
             result
         }
+    })();
+    #[cfg(target_os = "macos")]
+    if guided {
+        return result.map_err(onboarding::explain_failure);
     }
+    result
 }
 
 fn read_wav(path: &Path) -> Result<Vec<i16>> {

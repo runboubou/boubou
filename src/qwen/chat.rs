@@ -353,6 +353,7 @@ pub(super) fn converse(
     session: &mut Session,
     cache: &std::path::Path,
     stopped: &AtomicBool,
+    language: &str,
 ) -> Result<()> {
     use crate::audio::{Audio, CaptureFrame};
     use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
@@ -366,7 +367,7 @@ pub(super) fn converse(
         let _progress = crate::progress::Progress::new("Opening microphone and speakers", None);
         Audio::start(cache, true, stopped)?
     };
-    eprintln!("Ready. Speak English.");
+    eprintln!("Ready. Speak {}.", language.trim_end_matches(" (Whisper)"));
     let _terminal = crate::Terminal::enter()?;
     eprint!(
         "\r\nListening · pause to send · speak to interrupt · Esc pauses · Enter resumes · Ctrl+C exits\r\n"

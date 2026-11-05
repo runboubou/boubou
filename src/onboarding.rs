@@ -1,6 +1,7 @@
 use crate::{
     Cancelled,
     profiles::{self, Model, Profile},
+    qwen,
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -38,6 +39,8 @@ pub struct Selection {
 }
 
 struct Device {
+    apple_silicon: bool,
+    macos: (u32, u32, u32),
     memory: u64,
     available: u64,
     disk: u64,
@@ -45,10 +48,6 @@ struct Device {
 
 impl Device {
     fn detect(cache: &Path) -> Result<Self> {
-        ensure!(
-            cfg!(target_arch = "aarch64"),
-            "Boubou currently requires an Apple Silicon Mac."
-        );
         let mut memory = 0_u64;
         let mut length = size_of_val(&memory);
         let mut stats = unsafe { std::mem::zeroed::<libc::vm_statistics64>() };
@@ -95,32 +94,103 @@ impl Device {
             "Cannot check free space on the model cache volume."
         );
         Ok(Self {
+            apple_silicon: cfg!(target_arch = "aarch64"),
+            macos: qwen::macos_version()?,
             memory,
             available: available.min(memory),
             disk: u64::from(volume.f_bavail).saturating_mul(volume.f_frsize),
         })
     }
 
-    fn check(&self, model: &Profile, cache: &Path) -> Result<()> {
-        let budget = model
-            .memory_budget
-            .context("This model does not have a profiled memory budget yet.")?;
+    fn check(&self, setup: &Setup) -> Result<()> {
         ensure!(
-            self.memory >= budget && self.available >= budget,
-            "Needs about {:.0} GB free memory. Close other apps and try again.",
-            budget as f64 / GIB as f64
+            self.apple_silicon,
+            "Voice chat requires an Apple Silicon Mac."
+        );
+        let (major, minor, patch) = setup.resources.min_macos;
+        ensure!(
+            self.macos >= setup.resources.min_macos,
+            "This voice needs macOS {major}.{minor}.{patch} or later. Update macOS and retry."
         );
         ensure!(
-            self.disk >= space_needed(model, cache),
-            "Not enough cache disk space. Free some space and try again."
+            self.memory >= setup.memory + 2 * GIB,
+            "This voice needs about {:.0} GiB for speech and conversation, plus macOS.",
+            setup.memory as f64 / GIB as f64
+        );
+        ensure!(
+            self.available >= setup.memory,
+            "Needs about {:.0} GiB available memory. Close other apps and check again.",
+            setup.memory as f64 / GIB as f64
+        );
+        ensure!(
+            self.disk >= setup.resources.disk,
+            "Needs about {:.2} GB free cache disk space. Free some space and check again.",
+            setup.resources.disk as f64 / 1_000_000_000.0
         );
         Ok(())
     }
+
+    fn summary(&self) -> Vec<String> {
+        let chip = if self.apple_silicon {
+            "Apple Silicon"
+        } else {
+            "Unsupported architecture"
+        };
+        let (major, minor, patch) = self.macos;
+        vec![
+            format!(
+                "{chip} / macOS {major}.{minor}.{patch} / {:.0} GiB memory",
+                self.memory as f64 / GIB as f64
+            ),
+            format!(
+                "About {:.1} GiB available memory / {:.1} GB free cache disk",
+                self.available as f64 / GIB as f64,
+                self.disk as f64 / 1_000_000_000.0
+            ),
+        ]
+    }
 }
 
-fn space_needed(model: &Profile, cache: &Path) -> u64 {
+#[derive(Clone, Copy)]
+enum Language {
+    English,
+    Chinese,
+}
+
+struct Setup {
+    model: Model,
+    voice: &'static str,
+    memory: u64,
+    resources: qwen::Requirements,
+}
+
+impl Setup {
+    fn for_language(language: Language, cache: &Path) -> Result<Self> {
+        match language {
+            Language::English => Ok(Self {
+                model: Model::Liquid(&profiles::DEFAULT),
+                voice: "English / default voice",
+                memory: profiles::DEFAULT
+                    .memory_budget
+                    .context("No memory estimate for this voice")?,
+                resources: liquid_requirements(&profiles::DEFAULT, cache),
+            }),
+            Language::Chinese => Ok(Self {
+                model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
+                voice: "Chinese / Vivian voice (also understands English)",
+                // Short whole-pipeline runs used about 8 GiB server RSS on a 128 GiB Mac.
+                // Reserve 12 GiB for STT + LLM + TTS and headroom; smaller Macs are unverified.
+                memory: 12 * GIB,
+                resources: qwen::requirements("qwen3-tts:0.6b-customvoice-whisper", cache)
+                    .context("Cannot check the Chinese voice setup")?,
+            }),
+        }
+    }
+}
+
+fn liquid_requirements(model: &Profile, cache: &Path) -> qwen::Requirements {
     let folder = cache.join(model.model_directory);
-    let mut bytes = 0;
+    let mut download = 0;
     let downloads = cache.join("downloads");
     for (asset, directory) in model
         .model_assets()
@@ -130,20 +200,25 @@ fn space_needed(model: &Profile, cache: &Path) -> u64 {
         if !directory
             .join(asset.name)
             .metadata()
-            .is_ok_and(|m| m.len() == asset.size)
+            .is_ok_and(|m| m.is_file() && m.len() == asset.size)
         {
-            bytes += asset.size;
+            download += asset.size;
         }
     }
-    if !cache
+    let staging = if cache
         .join(model.runtime.directory)
         .join(model.runtime.server)
         .is_file()
     {
-        // Allow the unpacked runtime and its staging copy as well as the archive.
-        bytes += 4 * model.runtime.archive.size;
+        0
+    } else {
+        4 * model.runtime.archive.size
+    };
+    qwen::Requirements {
+        min_macos: (13, 3, 0),
+        download,
+        disk: download + staging,
     }
-    bytes
 }
 
 fn parse_selection(text: &str) -> Result<Selection> {
@@ -197,100 +272,131 @@ fn parse_selection(text: &str) -> Result<Selection> {
 }
 
 pub fn start(cache: &Path) -> Result<Selection> {
-    ensure!(
-        cfg!(target_arch = "aarch64"),
-        "Boubou currently requires an Apple Silicon Mac."
-    );
     let mut screen = Screen::enter()?;
     loop {
-        let route = screen.choose(
-            "How would you like to start?",
-            &[],
+        let language = match screen.choose(
+            "Choose your conversation language",
+            &["Boubou will check this Mac before downloading anything.".into()],
             &[
-                "Recommend a model for my Mac".into(),
-                "Use a model I already chose".into(),
+                "English".into(),
+                "Chinese".into(),
+                "Developer: choose a model or paste a command".into(),
             ],
-        )?;
-        let Some(route) = route else {
-            return Err(Cancelled.into());
-        };
-        if route == 0 {
-            let device = match Device::detect(cache) {
-                Ok(device) => device,
-                Err(error) => {
-                    screen.choose(
-                        "Device check unavailable",
-                        &[
-                            error.to_string(),
-                            "You can still enter a model from the library.".into(),
-                        ],
-                        &["Back".into()],
-                    )?;
-                    continue;
+        )? {
+            Some(0) => Language::English,
+            Some(1) => Language::Chinese,
+            Some(_) => {
+                let mut text = String::new();
+                let mut notice = String::new();
+                while screen.input(&mut text, &notice)? {
+                    match parse_selection(&text) {
+                        Ok(selection) => return Ok(selection),
+                        Err(error) => notice = error.to_string(),
+                    }
                 }
-            };
-            let models: Vec<_> = profiles::PROFILES
-                .iter()
-                .copied()
-                .filter(|p| device.check(p, cache).is_ok())
-                .take(2)
-                .collect();
-            let summary = format!(
-                "Apple Silicon  /  {:.0} GB memory  /  about {:.1} GB available",
-                device.memory as f64 / GIB as f64,
-                device.available as f64 / GIB as f64
-            );
-            if models.is_empty() {
-                let reason = profiles::PROFILES
-                    .iter()
-                    .find_map(|p| device.check(p, cache).err())
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "No models are registered.".into());
+                continue;
+            }
+            None => return Err(Cancelled.into()),
+        };
+        let setup = match Setup::for_language(language, cache) {
+            Ok(setup) => setup,
+            Err(error) => {
+                let mut details: Vec<_> = error.chain().map(ToString::to_string).collect();
+                details
+                    .push("Use a package with Chinese voice chat, or fix the cache error.".into());
+                details.push("Then select the language again.".into());
                 screen.choose(
-                    "No suitable model found right now",
-                    &[summary, reason],
-                    &["Back".into()],
+                    "This voice setup is unavailable",
+                    &details,
+                    &["Change language".into()],
                 )?;
                 continue;
             }
-            let rows: Vec<_> = models
-                .iter()
-                .map(|p| {
-                    format!(
-                        "{}\n  {} voice chat  /  up to {:.2} GB additional disk space",
-                        p.id,
-                        p.voice_chat_language,
-                        space_needed(p, cache) as f64 / 1_000_000_000.0
-                    )
-                })
-                .collect();
-            if let Some(index) = screen.choose(
-                "Recommended for your Mac",
-                &[
-                    summary,
-                    "Memory fit is estimated; speed varies by chip and other apps.".into(),
-                ],
-                &rows,
-            )? {
-                return Ok(Selection {
-                    model: Model::Liquid(models[index]),
-                    offline: false,
-                });
-            }
-        } else {
-            let mut text = String::new();
-            let mut notice = String::new();
-            loop {
-                if !screen.input(&mut text, &notice)? {
+        };
+        loop {
+            let device = match Device::detect(cache) {
+                Ok(device) => device,
+                Err(error) => {
+                    if screen.choose(
+                        "Device check unavailable",
+                        &[error.to_string()],
+                        &["Check again".into(), "Change language".into()],
+                    )? == Some(0)
+                    {
+                        continue;
+                    }
                     break;
                 }
-                match parse_selection(&text) {
-                    Ok(selection) => return Ok(selection),
-                    Err(error) => notice = error.to_string(),
+            };
+            let mut details = device.summary();
+            if let Err(error) = device.check(&setup) {
+                details.push(error.to_string());
+                details.push(
+                    "No download has started. Choose a different voice or check again.".into(),
+                );
+                if screen.choose(
+                    "This voice cannot start on this Mac right now",
+                    &details,
+                    &["Check again".into(), "Change language".into()],
+                )? == Some(0)
+                {
+                    continue;
                 }
+                break;
             }
+            details.extend([
+                setup.voice.into(),
+                format!(
+                    "Estimated speech + conversation memory: {:.0} GiB",
+                    setup.memory as f64 / GIB as f64
+                ),
+                format!(
+                    "Estimated download: {:.2} GB / free disk needed: {:.2} GB",
+                    setup.resources.download as f64 / 1_000_000_000.0,
+                    setup.resources.disk as f64 / 1_000_000_000.0
+                ),
+                "8/16 GiB Macs: estimated fit only, not hardware-validated.".into(),
+                "Speed and stability vary. Cached files are verified before use.".into(),
+                "Downloads need internet; speech processing stays on this Mac.".into(),
+            ]);
+            if screen.choose(
+                "Recommended voice setup",
+                &details,
+                &[
+                    "Download, verify and start".into(),
+                    "Change language".into(),
+                ],
+            )? != Some(0)
+            {
+                break;
+            }
+            // A user may leave the confirmation screen open while other apps consume memory.
+            if let Err(error) = Device::detect(cache).and_then(|device| device.check(&setup)) {
+                screen.choose(
+                    "Resources changed before startup",
+                    &[error.to_string()],
+                    &["Check again".into()],
+                )?;
+                continue;
+            }
+            return Ok(Selection {
+                model: setup.model,
+                offline: false,
+            });
         }
     }
+}
+
+pub fn explain_failure(error: anyhow::Error) -> anyhow::Error {
+    if error.is::<Cancelled>() {
+        return error;
+    }
+    error.context(
+        "Voice chat could not start or continue. Close other apps if memory is low. \
+         Check the connection for download failures, or microphone access in System Settings \
+         > Privacy & Security > Microphone. Then run `boubou` again to recheck this Mac \
+         and resume verified downloads. Details below",
+    )
 }
 
 extern "C" fn interrupt(_: libc::c_int) {
@@ -538,32 +644,108 @@ mod tests {
     }
 
     #[test]
-    fn only_recommends_profiles_that_fit_memory_and_disk() {
+    fn english_fit_respects_architecture_os_memory_and_cache_space() {
         let cache =
             std::env::temp_dir().join(format!("boubou-missing-cache-{}", std::process::id()));
-        let budget = DEFAULT.memory_budget.unwrap();
-        let space = space_needed(&DEFAULT, &cache);
+        let setup = Setup::for_language(Language::English, &cache).unwrap();
+        assert_eq!(setup.model.id(), DEFAULT.id);
         let mut device = Device {
-            memory: 16 * GIB,
-            available: budget,
-            disk: space,
+            apple_silicon: true,
+            macos: (13, 3, 0),
+            memory: 8 * GIB,
+            available: setup.memory,
+            disk: setup.resources.disk,
         };
-        assert!(device.check(&DEFAULT, &cache).is_ok());
-        device.available = budget - 1;
-        assert!(device.check(&DEFAULT, &cache).is_err());
-        device.available = budget;
-        device.memory = budget - 1;
-        assert!(device.check(&DEFAULT, &cache).is_err());
+        assert!(
+            device.check(&setup).is_ok(),
+            "Estimated 8 GiB fit at the boundary"
+        );
+        device.apple_silicon = false;
+        assert!(
+            device
+                .check(&setup)
+                .unwrap_err()
+                .to_string()
+                .contains("Apple Silicon")
+        );
+        device.apple_silicon = true;
+        device.macos = (13, 2, 9);
+        assert!(
+            device
+                .check(&setup)
+                .unwrap_err()
+                .to_string()
+                .contains("macOS")
+        );
+        device.macos = (13, 3, 0);
+        device.available = setup.memory - 1;
+        assert!(
+            device
+                .check(&setup)
+                .unwrap_err()
+                .to_string()
+                .contains("Close other apps")
+        );
+        device.available = setup.memory;
+        device.memory -= 1;
+        assert!(device.check(&setup).is_err(), "Keep room for macOS");
+        device.memory = 8 * GIB;
+        device.disk -= 1;
+        assert!(
+            device
+                .check(&setup)
+                .unwrap_err()
+                .to_string()
+                .contains("Free some space")
+        );
+        assert!(!cache.exists(), "Planning must not create the cache");
+    }
+
+    #[test]
+    fn whole_pipeline_budget_filters_small_and_busy_macs() {
+        let setup = Setup {
+            model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
+            voice: "Chinese / Vivian",
+            memory: 12 * GIB,
+            resources: qwen::Requirements {
+                min_macos: (15, 0, 0),
+                download: 1,
+                disk: 1,
+            },
+        };
+        let mut device = Device {
+            apple_silicon: true,
+            macos: (15, 0, 0),
+            memory: 8 * GIB,
+            available: 8 * GIB,
+            disk: 1,
+        };
+        assert!(device.check(&setup).is_err());
         device.memory = 16 * GIB;
-        device.disk = space - 1;
-        assert!(device.check(&DEFAULT, &cache).is_err());
-        let unknown = Profile {
-            memory_budget: None,
-            ..DEFAULT
-        };
-        device.disk = u64::MAX;
-        assert!(device.check(&unknown, &cache).is_err());
-        assert!(!cache.exists(), "Eligibility must not create the cache");
+        assert!(
+            device.check(&setup).is_err(),
+            "Total memory alone cannot establish fit"
+        );
+        device.available = 12 * GIB;
+        assert!(
+            device.check(&setup).is_ok(),
+            "Estimated fit, not hardware validation"
+        );
+        device.macos = (14, 7, 0);
+        assert!(
+            device.check(&setup).is_err(),
+            "The packaged MLX backend needs macOS 15"
+        );
+    }
+
+    #[test]
+    fn guided_failure_keeps_the_cause_and_an_actionable_restart() {
+        let error = explain_failure(anyhow::anyhow!("Not enough memory to load speech"));
+        let text = format!("{error:#}");
+        assert!(text.contains("Close other apps"));
+        assert!(text.contains("run `boubou` again"));
+        assert!(text.contains("Not enough memory to load speech"));
+        assert!(explain_failure(Cancelled.into()).is::<Cancelled>());
     }
 
     #[test]
