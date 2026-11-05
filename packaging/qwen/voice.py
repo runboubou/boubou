@@ -59,6 +59,8 @@ TTS = {
     # A voice file path keeps MLX Audio from resolving the voice on the Hub.
     "kokoro": lambda path: ["--tts", "kokoro", "--kokoro_model_name", path, "--kokoro_lang_code", "a",
                             "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
+    # 0.1 and 0.2 checkpoints name voices only by ID. On 0.8 this ID is Bruno, the upstream default.
+    "kitten-tts": lambda path: ["--tts", "kitten", "--kitten_model_name", path, "--kitten_voice", "expr-voice-3-m"],
     "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
     "pocket-tts": pocket,
     "supertonic": supertonic,
@@ -135,7 +137,7 @@ def run(command, model, cache, manifest, *extra):
                 filter(None, (os.environ.get(key), "127.0.0.1,localhost,::1"))
             )
         options = arguments(model, cache, manifest, work)
-        if model.startswith("kokoro:"):
+        if model.startswith(("kokoro:", "kitten-tts:")):
             link_espeak_data(work)
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         # Upstream v1.1.0 sets this to its package directory during import.

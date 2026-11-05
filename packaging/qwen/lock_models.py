@@ -69,6 +69,19 @@ POCKET_CONFIGS = [
 POCKET_VOICES = {"english": "alba", "dutch": "daan", "french": "estelle", "german": "juergen",
                  "italian": "giovanni", "portuguese": "rafael", "spanish": "lola"}
 POCKET_VOICE_REVISION = "a7056f505a4a8ca72d8b5fb1440071d6f1a35739"
+# KittenTTS ONNX checkpoints: every file but .gitattributes. The config names the weights and voices.
+KITTEN = [
+    (f"KittenML/kitten-tts-{name}", revision, {"README.md", "config.json", weights, "voices.npz"}, f"kitten-tts:{name}")
+    for name, revision, weights in [
+        ("mini-0.8", "c02725660cea441db4c383af69f1f26f5cd00947", "kitten_tts_mini_v0_8.onnx"),
+        ("micro-0.8", "1ccf72b2c2048fd17efac7de2fab32d10e225084", "kitten_tts_micro_v0_8.onnx"),
+        ("nano-0.8-fp32", "e73cfb095bd949c786ccdcf3b8ab04eb36c47442", "kitten_tts_nano_v0_8.onnx"),
+        ("nano-0.8-int8", "84781d74e29ee25217551556398b42f80593a813", "kitten_tts_nano_v0_8.onnx"),
+        ("mini-0.1", "01d5d9ef9d365444e6d3669f7f3fe8a20bad9439", "kitten_tts_mini_v0_1.onnx"),
+        ("nano-0.1", "7d99aae46867223af52d5ea16d076d8839ce1a2e", "kitten_tts_nano_v0_1.onnx"),
+        ("nano-0.2", "9c81564aa56c6fb79f83780e87099357b88d6617", "kitten_tts_nano_v0_2.onnx"),
+    ]
+]
 
 
 def snapshot(repo, revision, destination, profile, only=None):
@@ -165,7 +178,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS]:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())

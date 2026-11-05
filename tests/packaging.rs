@@ -360,6 +360,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("chattts:en", "English"),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
+        ("kitten-tts:nano-0.8-int8", "English"),
     ];
     let files: Vec<_> = ids
         .iter()
@@ -379,6 +380,8 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     let model_list = String::from_utf8(models.stdout).unwrap();
     let pocket = model_list.lines().filter(|l| l.starts_with("pocket-tts:"));
     assert_eq!(pocket.count(), 26);
+    let kitten = model_list.lines().filter(|l| l.starts_with("kitten-tts:"));
+    assert_eq!(kitten.count(), 7);
     let cache = package.0.join("unused-cache");
     for (id, language) in ids {
         assert!(model_list.lines().any(|line| line == id));
@@ -690,6 +693,7 @@ owned = {
     "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
                                    ["--qwen3_tts_speaker", "Aiden", "--qwen3_tts_language", "english"]),
     "kokoro:82m": ("kokoro", "mlx-community--Kokoro-82M-bf16", ["--kokoro_lang_code", "a"]),
+    "kitten-tts:nano-0.1": ("kitten", "KittenML--kitten-tts-nano-0.1", ["--kitten_voice", "expr-voice-3-m"]),
     "phonon:31m-en": ("phonon", "gradium--phonon-31m-en", ["--phonon_tts_language", "en"]),
 }
 snapshot = "hub/models--{}/snapshots/pinned".format
