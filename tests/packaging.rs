@@ -352,12 +352,21 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     )
     .unwrap();
     let ids = [
+        ("qwen3-tts:1.7b-customvoice", "English"),
+        ("qwen3-tts:0.6b-customvoice", "English"),
         ("kokoro:82m", "English"),
         ("phonon:31m-en", "English"),
         ("supertonic:3", "English"),
-        ("chattts:default", "Multilingual (auto)"),
-        ("qwen3-tts:1.7b-customvoice", "Multilingual (auto)"),
-        ("qwen3-tts:0.6b-customvoice", "Multilingual (auto)"),
+        ("chattts:en", "English"),
+        ("chattts:whisper", "Chinese / English (Whisper)"),
+        (
+            "qwen3-tts:1.7b-customvoice-whisper",
+            "Chinese / English (Whisper)",
+        ),
+        (
+            "qwen3-tts:0.6b-customvoice-whisper",
+            "Chinese / English (Whisper)",
+        ),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
         ("kitten-tts:nano-0.8-int8", "English"),
@@ -410,7 +419,7 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
         "kokoro:82m",
         "phonon:31m-en",
         "supertonic:3",
-        "chattts:default",
+        "chattts:en",
     ] {
         let output = package.run(&[
             "--cache-dir",
@@ -691,7 +700,7 @@ from tempfile import TemporaryDirectory
 arguments = runpy.run_path(sys.argv[1])["arguments"]
 owned = {
     "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
-                                   ["--qwen3_tts_speaker", "Vivian", "--qwen3_tts_language", "auto"]),
+                                   ["--qwen3_tts_speaker", "Aiden", "--qwen3_tts_language", "english"]),
     "kokoro:82m": ("kokoro", "mlx-community--Kokoro-82M-bf16", ["--kokoro_lang_code", "a"]),
     "kitten-tts:nano-0.1": ("kitten", "KittenML--kitten-tts-nano-0.1", ["--kitten_voice", "expr-voice-3-m"]),
     "phonon:31m-en": ("phonon", "gradium--phonon-31m-en", ["--phonon_tts_language", "en"]),
@@ -717,7 +726,7 @@ with TemporaryDirectory() as folder:
         if tts == "kokoro":
             assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
         # Shared speech recognition and language models, plus only this profile's speech model.
-        assert len(list(work.iterdir())) == (4 if tts == "qwen3" else 3), argv
+        assert len(list(work.iterdir())) == 3, argv
 "#,
         )
         .arg(concat!(
@@ -799,20 +808,19 @@ snapshot = "hub/models--{}/snapshots/pinned".format
 entries = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
            for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
 assets = f"{snapshot('2Noise--ChatTTS')}/asset"
-entries += [{"path": f"{assets}/{name}", "profile": "chattts:default"} for name in ("DVAE.safetensors", "gpt/config.json")]
+entries += [{"path": f"{assets}/{name}", "profile": "chattts:en"} for name in ("DVAE.safetensors", "gpt/config.json")]
 with TemporaryDirectory() as folder:
     cache = Path(folder).resolve()
     manifest = cache / "models.json"
     manifest.write_text(json.dumps(entries))
     work = cache / "chattts"
     work.mkdir()
-    argv = arguments("chattts:default", cache, manifest, work)
+    argv = arguments("chattts:en", cache, manifest, work)
     tts = ["--tts", "chatTTS", "--chat_tts_device", "cpu", "--stream_batch_sentences", "1"]
-    assert argv[argv.index("--tts"):argv.index("--tts") + len(tts)] == tts, argv
-    assert argv[argv.index("--language") + 1] == "auto", argv
+    assert argv[argv.index("--tts"):] == tts, argv
     # ChatTTS reads asset/ from the working directory, which must not be the verified snapshot.
     assert Path.cwd() == work and os.readlink("asset") == str(cache / assets), argv
-    assert len(list(work.iterdir())) == 4, argv
+    assert len(list(work.iterdir())) == 3, argv
     # ChatTTS would drop the digits; the handler's Chat spells them out.
     language, normalize = sys.modules["ChatTTS"].Chat().normalizer.registered
     assert language == "en"
@@ -876,51 +884,53 @@ with TemporaryDirectory() as folder:
 }
 
 #[test]
-fn multilingual_profiles_select_whisper_and_other_profiles_keep_parakeet() {
+fn dual_entries_select_their_recognizer_and_share_tts_assets() {
     let output = Command::new("python3")
         .args(["-I", "-B", "-c"])
-        .arg(r#"import json, os, runpy, sys
+        .arg(r#"import json, os, runpy, sys, types
 from pathlib import Path
 from tempfile import TemporaryDirectory
+sys.modules["ChatTTS"] = types.SimpleNamespace(Chat=type("Chat", (), {}))
 arguments = runpy.run_path(sys.argv[1])["arguments"]
 snapshot = "hub/models--{}/snapshots/pinned".format
-english = "kokoro:82m"
-multilingual = "qwen3-tts:0.6b-customvoice"
-whisper = "mlx-community--whisper-large-v3-turbo"
-processor = "openai--whisper-large-v3"
-speech = "mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"
+pairs = [("qwen3-tts:0.6b-customvoice", "qwen3-tts:0.6b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"),
+         ("qwen3-tts:1.7b-customvoice", "qwen3-tts:1.7b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit"),
+         ("chattts:en", "chattts:whisper", "2Noise--ChatTTS")]
+defaults = [p[0] for p in pairs]
+optional = [p[1] for p in pairs]
 files = [{"path": snapshot("mlx-community--Qwen3.5-4B-4bit") + "/config.json"},
-         {"path": snapshot("mlx-community--parakeet-tdt-0.6b-v3") + "/config.json", "profiles": [english]},
-         {"path": snapshot(speech) + "/config.json", "profile": multilingual}]
-files += [{"path": snapshot("mlx-community--Kokoro-82M-bf16") + "/config.json", "profile": english}]
-files += [{"path": snapshot(whisper) + "/" + name, "profiles": [multilingual]}
+         {"path": snapshot("mlx-community--parakeet-tdt-0.6b-v3") + "/config.json", "profiles": defaults}]
+for default, whisper, repo in pairs:
+    name = "/asset/gpt/config.json" if repo == "2Noise--ChatTTS" else "/config.json"
+    files.append({"path": snapshot(repo) + name, "profiles": [default, whisper]})
+files += [{"path": snapshot("mlx-community--whisper-large-v3-turbo") + "/" + name, "profiles": optional}
           for name in ["config.json", "weights.safetensors", "README.md"]]
-files += [{"path": snapshot(processor) + "/" + name, "profiles": [multilingual]}
+files += [{"path": snapshot("openai--whisper-large-v3") + "/" + name, "profiles": optional}
           for name in ["preprocessor_config.json", "tokenizer.json", "README.md"]]
 with TemporaryDirectory() as folder:
     root = Path(folder)
     manifest = root / "models.json"
     manifest.write_text(json.dumps(files))
-    for model in [english, multilingual]:
-        work = root / model.replace(":", "-")
-        work.mkdir()
-        argv = arguments(model, root / "cache", manifest, work)
-        stt = argv[argv.index("--stt") + 1]
-        assert stt == ("mlx-audio-whisper" if model == multilingual else "parakeet-tdt"), argv
-        if model == multilingual:
-            assert argv[argv.index("--language") + 1] == "auto", argv
-            assert argv[argv.index("--qwen3_tts_language") + 1] == "auto", argv
-            assert argv[argv.index("--qwen3_tts_speaker") + 1] == "Vivian", argv
-            assert "Reply in the language of the user's latest message." in argv[-1], argv
-            assert not (work / "parakeet-tdt-0.6b-v3").exists()
-            overlay = work / "whisper"
-            assert sorted(p.name for p in overlay.iterdir()) == ["config.json", "preprocessor_config.json", "tokenizer.json", "weights.safetensors"]
-            for path in overlay.iterdir():
-                target = os.readlink(path)
-                assert str(root / "cache") in target, target
-        else:
-            assert not (work / "whisper").exists()
-            assert argv[argv.index("--tts") + 1] == "kokoro", argv
+    for default, whisper, repo in pairs:
+        targets = []
+        for model in [default, whisper]:
+            work = root / model.replace(":", "-")
+            work.mkdir()
+            argv = arguments(model, root / "cache", manifest, work)
+            assert argv[argv.index("--stt") + 1] == ("mlx-audio-whisper" if model == whisper else "parakeet-tdt"), argv
+            assert (work / "parakeet-tdt-0.6b-v3").is_symlink() == (model == default)
+            assert (work / "whisper").is_dir() == (model == whisper)
+            if model == whisper:
+                assert argv[argv.index("--language") + 1] == "auto", argv
+                assert "Reply in the language of the user's latest message." in argv[-1], argv
+                assert sorted(p.name for p in (work / "whisper").iterdir()) == ["config.json", "preprocessor_config.json", "tokenizer.json", "weights.safetensors"]
+            if repo == "2Noise--ChatTTS":
+                targets.append(os.readlink(work / "asset"))
+            else:
+                targets.append(os.readlink(argv[argv.index("--qwen3_tts_model_name") + 1]))
+                assert argv[argv.index("--qwen3_tts_language") + 1] == ("auto" if model == whisper else "english"), argv
+                assert argv[argv.index("--qwen3_tts_speaker") + 1] == ("Vivian" if model == whisper else "Aiden"), argv
+        assert targets[0] == targets[1], targets
 "#)
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen/voice.py"))
         .output().unwrap();

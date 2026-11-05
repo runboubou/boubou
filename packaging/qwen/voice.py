@@ -72,7 +72,7 @@ def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
-    multilingual = model_id.startswith("qwen3-tts:") or model_id == "chattts:default"
+    multilingual = model_id.endswith("-whisper") or model_id == "chattts:whisper"
     recognizer = ("models--mlx-community--whisper-large-v3-turbo" if multilingual
                   else "models--mlx-community--parakeet-tdt-0.6b-v3")
     snapshots, owned = {}, []
