@@ -2,12 +2,15 @@
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
+from urllib.request import urlopen
 
 # Model files are stored as normal Git blobs or Git LFS pointers on the Hub.
 LFS = re.compile(
@@ -40,6 +43,20 @@ PHONON = [
      {"README.md", "config.json", "default-voice.safetensors", "model.q8.gguf", "tokenizer.json"}, "phonon:31m-en"),
     ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3", {"voices.jsonl"}, "phonon:31m-en"),
 ]
+# Every Pocket TTS stock config except `english`, an alias of english_2026-10.
+POCKET = "kyutai/pocket-tts-without-voice-cloning"
+POCKET_CONFIGS = [
+    "english_2026-10", "english_2026-09_2", "english_2026-09", "english_2026-09_24l",
+    "english_drifting_26-09", "english_2026-04", "english_2026-04_24l", "english_2026-01",
+    "english_18m_2026-10", "english_18m_refl_2026-10", "english_7m_2026-10",
+    "english_7m_refl_2026-10", "english_2m_2026-10", "english_2m_refl_2026-10",
+    "dutch", "dutch_24l", "french", "french_24l", "german", "german_24l",
+    "italian", "italian_24l", "portuguese", "portuguese_24l", "spanish", "spanish_24l",
+]
+# The SDK's default preset voice for each language, from the revision the SDK reads them at.
+POCKET_VOICES = {"english": "alba", "dutch": "daan", "french": "estelle", "german": "juergen",
+                 "italian": "giovanni", "portuguese": "rafael", "spanish": "lola"}
+POCKET_VOICE_REVISION = "a7056f505a4a8ca72d8b5fb1440071d6f1a35739"
 
 
 def snapshot(repo, revision, destination, profile, only=None):
@@ -87,6 +104,45 @@ def snapshot(repo, revision, destination, profile, only=None):
             raise ValueError(f"Missing files in {repo}: {sorted(missing)}")
 
 
+def pocket_configs():
+    """Read the stock configs from the hash-locked SDK wheel that the runner installs."""
+    lock = (Path(__file__).resolve().parent / "requirements-macos.lock").read_text()
+    version, digest = re.search(r"^pocket-tts==(\S+) --hash=sha256:([0-9a-f]{64})$", lock, re.M).groups()
+    url = f"https://files.pythonhosted.org/packages/py3/p/pocket_tts/pocket_tts-{version}-py3-none-any.whl"
+    with urlopen(url, timeout=90) as response:
+        wheel = response.read()
+    if hashlib.sha256(wheel).hexdigest() != digest:
+        raise ValueError("The Pocket TTS wheel does not match the runner lock")
+    with zipfile.ZipFile(io.BytesIO(wheel)) as z:
+        return {config: z.read(f"pocket_tts/config/{config}.yaml").decode() for config in POCKET_CONFIGS}
+
+
+def pocket():
+    # Profiles share revisions and some files; each profile lists every file it reads.
+    needed = {}
+    for config, text in pocket_configs().items():
+        profile = f"pocket-tts:{config}"
+        voice = POCKET_VOICES[config.split("_")[0]]
+        files = [(f"languages/{config}/embeddings/{voice}.safetensors", POCKET_VOICE_REVISION)]
+        for key, ref in re.findall(r"^\s*(\w+): hf://(\S+)$", text, re.M):
+            if key == "weights_path" and ref.startswith("kyutai/pocket-tts/"):
+                continue  # Gated voice-cloning weights. Offline, the SDK loads the public ones.
+            if not ref.startswith(f"{POCKET}/"):
+                raise ValueError(f"Unexpected Pocket TTS asset in {config}: {key}")
+            files.append(tuple(ref.removeprefix(f"{POCKET}/").split("@")))
+        for name, revision in files:
+            needed.setdefault(revision, {}).setdefault(name, []).append(profile)
+    for revision, names in needed.items():
+        directory = f"hub/models--{POCKET.replace('/', '--')}/snapshots/{revision}"
+        for file in snapshot(POCKET, revision, directory, None, set(names)):
+            for profile in names[file["path"].removeprefix(f"{directory}/")]:
+                yield {**file, "profile": profile}
+    for file in snapshot(POCKET, POCKET_VOICE_REVISION, f"licenses/{POCKET}/{POCKET_VOICE_REVISION}",
+                         None, {"README.md"}):
+        for config in POCKET_CONFIGS:
+            yield {**file, "profile": f"pocket-tts:{config}"}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="output path for models.json")
@@ -100,6 +156,7 @@ def main():
     for repo, revision, only, profile in PHONON:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
+    files.extend(pocket())
     files.extend(snapshot(
         "pipecat-ai/smart-turn-v3", "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
         "smart-turn", None, {"README.md", "smart-turn-v3.2-cpu.onnx"},

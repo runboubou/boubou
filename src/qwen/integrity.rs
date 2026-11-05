@@ -66,10 +66,14 @@ fn include_path(expected: &mut HashSet<PathBuf>, path: &Path) {
     );
 }
 
-// Walk without following links. Also count visited entries so a missing subtree cannot pass.
-fn tree_matches(root: &Path, expected: &HashSet<PathBuf>, allow_links: bool) -> Result<bool> {
+// Walk without following links. Returns how many entries were visited, or None for an unexpected one.
+fn tree_entries(
+    root: &Path,
+    expected: &HashSet<PathBuf>,
+    allow_links: bool,
+) -> Result<Option<usize>> {
     if !metadata(root)?.is_some_and(|m| m.is_dir()) {
-        return Ok(false);
+        return Ok(None);
     }
     let root = root.canonicalize()?;
     let mut directories = vec![root.clone()];
@@ -83,7 +87,7 @@ fn tree_matches(root: &Path, expected: &HashSet<PathBuf>, allow_links: bool) -> 
                     "Unexpected entry in the verified Qwen cache: {}",
                     path.display()
                 );
-                return Ok(false);
+                return Ok(None);
             }
             count += 1;
             let kind = entry.file_type()?;
@@ -96,14 +100,14 @@ fn tree_matches(root: &Path, expected: &HashSet<PathBuf>, allow_links: bool) -> 
                         .canonicalize()
                         .is_ok_and(|target| target.starts_with(&root))
                 {
-                    return Ok(false);
+                    return Ok(None);
                 }
             } else if !kind.is_file() {
-                return Ok(false);
+                return Ok(None);
             }
         }
     }
-    Ok(count == expected.len())
+    Ok(Some(count))
 }
 
 pub(super) fn runtime_tree(archive: &Path, installed: &Path) -> Result<bool> {
@@ -123,30 +127,46 @@ pub(super) fn runtime_tree(archive: &Path, installed: &Path) -> Result<bool> {
         let relative: PathBuf = path.iter().filter(|c| *c != OsStr::new(".")).collect();
         include_path(&mut expected, &relative);
     }
-    tree_matches(installed, &expected, true)
+    // Count the entries too, so a missing subtree cannot pass.
+    Ok(tree_entries(installed, &expected, true)? == Some(expected.len()))
 }
 
-pub(super) fn model_snapshots(root: &Path, selected_files: &[&Path]) -> Result<()> {
+fn split_snapshot(path: &Path) -> Result<(PathBuf, &Path)> {
+    ensure!(
+        path.iter().nth(2) == Some(OsStr::new("snapshots")) && path.iter().count() >= 5,
+        "Invalid Qwen snapshot path: {}",
+        path.display()
+    );
+    let snapshot: PathBuf = path.iter().take(4).collect();
+    let suffix = path.strip_prefix(&snapshot)?;
+    Ok((snapshot, suffix))
+}
+
+/// Checks each snapshot holding a selected file; selected files were already verified by hash.
+/// Profiles can share a snapshot, which may then also hold other listed files and their partials.
+pub(super) fn model_snapshots(root: &Path, listed: &[&Path], selected: &[&Path]) -> Result<()> {
     let mut snapshots = HashMap::<PathBuf, HashSet<PathBuf>>::new();
-    for &path in selected_files.iter().filter(|p| p.starts_with("hub")) {
+    for &path in selected.iter().filter(|p| p.starts_with("hub")) {
         safe_destination(root, path)?;
-        let snapshot: PathBuf = path.iter().take(4).collect();
-        ensure!(
-            path.iter().nth(2) == Some(OsStr::new("snapshots")) && path.iter().count() >= 5,
-            "Invalid Qwen snapshot path: {}",
-            path.display()
-        );
-        let suffix = path.strip_prefix(&snapshot)?;
-        include_path(snapshots.entry(snapshot).or_default(), suffix);
+        snapshots.entry(split_snapshot(path)?.0).or_default();
     }
     ensure!(
         !snapshots.is_empty(),
         "Packaged Qwen model manifest contains no snapshots"
     );
+    for &path in listed.iter().filter(|p| p.starts_with("hub")) {
+        let (snapshot, suffix) = split_snapshot(path)?;
+        if let Some(expected) = snapshots.get_mut(&snapshot) {
+            include_path(expected, suffix);
+            let mut partial = suffix.as_os_str().to_owned();
+            partial.push(".part");
+            expected.insert(partial.into());
+        }
+    }
     for (snapshot, expected) in snapshots {
         let dir = root.join(snapshot);
         ensure!(
-            tree_matches(&dir, &expected, false)?,
+            tree_entries(&dir, &expected, false)?.is_some(),
             "Qwen snapshot has missing or unexpected files. Remove {} and pull the model again.",
             dir.display()
         );
@@ -213,10 +233,10 @@ mod tests {
             fs::create_dir_all(root.join(config.parent().unwrap()))?;
             fs::write(root.join(&config), "{}")?;
             fs::create_dir_all(root.join("hub/models--org--tts/snapshots/other"))?;
-            model_snapshots(root, &selected)?;
+            model_snapshots(root, &selected, &selected)?;
             let extra = root.join(snapshot).join("tokenizer.json");
             fs::write(&extra, "{}")?;
-            assert!(model_snapshots(root, &selected).is_err());
+            assert!(model_snapshots(root, &selected, &selected).is_err());
             fs::remove_file(extra)?;
             let partial = root.join(&config).with_file_name("config.json.part");
             symlink("config.json", &partial)?;
@@ -229,6 +249,29 @@ mod tests {
             symlink("speech_tokenizer", link)?;
             assert!(safe_destination(root, &snapshot.join("redirect/config.json")).is_err());
             assert!(safe_destination(root, Path::new("../outside")).is_err());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn shared_snapshots_accept_only_other_listed_files() -> Result<()> {
+        fixture(|root| {
+            let snapshot = Path::new("hub/models--org--voices/snapshots/shared");
+            let mine = snapshot.join("languages/french/model.safetensors");
+            let theirs = snapshot.join("languages/german/model.safetensors");
+            let listed = [mine.as_path(), theirs.as_path()];
+            for path in listed {
+                fs::create_dir_all(root.join(path.parent().unwrap()))?;
+            }
+            fs::write(root.join(&mine), "fr")?;
+            // Another profile's download was interrupted, then completed.
+            let partial = root.join(&theirs).with_file_name("model.safetensors.part");
+            fs::write(&partial, "d")?;
+            model_snapshots(root, &listed, &listed[..1])?;
+            fs::rename(partial, root.join(&theirs))?;
+            model_snapshots(root, &listed, &listed[..1])?;
+            fs::write(root.join(snapshot).join("languages/german/injected.py"), "")?;
+            assert!(model_snapshots(root, &listed, &listed[..1]).is_err());
             Ok(())
         })
     }

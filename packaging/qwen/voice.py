@@ -6,6 +6,20 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+# The upstream v1.1.0 default system prompt.
+PROMPT = ("You are a helpful and friendly AI assistant. You are polite, respectful, "
+          "and aim to provide concise responses of less than 20 words.")
+
+
+def pocket(voice):
+    # The voice state sits at languages/<config>/embeddings/<voice>.safetensors.
+    config = Path(voice).parent.parent.name
+    # Each stock config speaks one language, named first: french_24l is French.
+    language = config.split("_")[0].capitalize()
+    return ["--tts", "pocket", "--pocket_tts_language", config, "--pocket_tts_voice", voice,
+            "--init_chat_prompt", f"{PROMPT} Always reply in {language}."]
+
+
 # Speech options per profile family, given the speech model that profile owns.
 TTS = {
     "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
@@ -14,6 +28,7 @@ TTS = {
     "kokoro": lambda path: ["--tts", "kokoro", "--kokoro_model_name", path, "--kokoro_lang_code", "a",
                             "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
     "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
+    "pocket-tts": pocket,
 }
 
 
@@ -32,6 +47,9 @@ def arguments(model_id, cache, manifest, work):
             snapshots[parts[1]] = str(alias)
             if "profile" in entry:
                 owned.append(str(alias))
+        elif entry.get("profile") == model_id and parts[-2] == "embeddings":
+            # Pocket TTS loads its weights by Hub path; its preset voice state is the owned file.
+            owned.append(str(cache.joinpath(*parts)))
     (tts,) = owned
     os.environ.update({
         "HF_HOME": str(cache / "hf"),

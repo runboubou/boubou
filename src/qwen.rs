@@ -125,9 +125,23 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     Ok(installed)
 }
 
+/// Pocket TTS profiles speak the language that starts their config name; the others speak English.
+fn language(id: &str) -> String {
+    let Some(config) = id.strip_prefix("pocket-tts:") else {
+        return "English".into();
+    };
+    let mut name = config.split('_').next().unwrap_or(config).chars();
+    name.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(name).collect()
+    })
+}
+
 pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     let dir = release_dir()?;
-    println!("Profile: {id} · English voice chat · speech-to-speech");
+    println!(
+        "Profile: {id} · {} voice chat · speech-to-speech",
+        language(id)
+    );
     let runner = runner(&dir)?;
     check_host(&runner)?;
     let root = cache.join("qwen");
@@ -196,7 +210,8 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
         }
     }
     ensure!(ready, "Run `boubou pull {id}` while online.");
-    integrity::model_snapshots(root, &selected)
+    let listed: Vec<&Path> = files.iter().map(|f| f.path.as_path()).collect();
+    integrity::model_snapshots(root, &listed, &selected)
 }
 
 #[cfg(target_os = "macos")]

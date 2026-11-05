@@ -69,7 +69,7 @@ def main():
         moved = stage / "relocated runtime"
         root.rename(moved)
         # Phonemize an unlisted word as Kokoro does: spaCy's English model, then espeak-ng.
-        check = """import runpy, sys, tempfile, mlx.core, sounddevice, speech_to_speech.cli
+        check = """import runpy, sys, tempfile, mlx.core, pocket_tts, sounddevice, speech_to_speech.cli
 from pathlib import Path
 from misaki import en, espeak
 with tempfile.TemporaryDirectory() as work:
