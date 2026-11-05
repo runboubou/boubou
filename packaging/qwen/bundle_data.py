@@ -22,6 +22,23 @@ def install(root):
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             z.extractall(root / "nltk_data" / subdir)
 
+    # The espeakng-loader wheel bundles espeak-ng 1.52.0 without either license text.
+    for name, url, digest in [
+        ("espeak-ng/COPYING",
+         "https://raw.githubusercontent.com/espeak-ng/espeak-ng/4870adfa25b1a32b4361592f1be8a40337c58d6c/COPYING",
+         "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"),
+        ("espeakng-loader/LICENSE",
+         "https://raw.githubusercontent.com/thewh1teagle/espeakng-loader/0ddc87adf77e5850d7eeb542ac8a87d421b64daa/LICENSE",
+         "b05c73bb1335b4320ec97edff106b3991c12d0acdc6e899c96f061a15039119f"),
+    ]:
+        with urlopen(url, timeout=90) as response:
+            text = response.read()
+        if hashlib.sha256(text).hexdigest() != digest:
+            raise ValueError(f"Invalid license text: {name}")
+        path = root / "licenses" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text)
+
     revision = "066409f3d9db45a30d21dfcbf9147826ffdd7052"
     with tempfile.TemporaryDirectory() as tmp:
         def git(*args):
@@ -38,4 +55,5 @@ def install(root):
             path = root / "silero" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(git("show", f"{revision}:{name}"))
-    return {"nltk_data_revision": nltk, "silero_revision": revision}
+    return {"nltk_data_revision": nltk, "silero_revision": revision,
+            "espeak_ng_source": "https://github.com/espeak-ng/espeak-ng/tree/4870adfa25b1a32b4361592f1be8a40337c58d6c"}

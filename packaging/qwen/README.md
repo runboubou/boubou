@@ -10,12 +10,13 @@ cargo fetch --locked
 python3 -B packaging/build-macos.py --qwen "$candidate"
 ```
 
-The resulting npm tarball includes the interpreter, native wheels, Silero and NLTK data. The first `pull` fetches verified speech and language model weights. Both CustomVoice sizes reuse the same runner, speech recognizer and language model. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK and Kokoro phonemizer data. The first `pull` fetches verified speech and language model weights. All profiles reuse the same runner, speech recognizer and language model; `kokoro:82m` speaks with the American English `af_heart` voice. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
-Test the tarball from outside the checkout on an idle Mac. Use the same new cache for both commands. Grant microphone access and test multi-turn English conversation, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Record the machine and measurements in [#29](https://github.com/entropyai-labs/boubou/issues/29).
+Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn English conversation, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Record the machine and measurements in [#29](https://github.com/entropyai-labs/boubou/issues/29) for CustomVoice and [#34](https://github.com/entropyai-labs/boubou/issues/34) for Kokoro.
 
 ```sh
 export BOUBOU_HOME="$(mktemp -d)"
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run qwen3-tts:1.7b-customvoice
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run qwen3-tts:0.6b-customvoice
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run kokoro:82m
 ```

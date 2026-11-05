@@ -338,7 +338,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
 }
 
 #[test]
-fn qwen_package_lists_both_models_and_doctor_is_read_only() {
+fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     let package = Package::new();
     let release = package.0.join("qwen");
     fs::create_dir(&release).unwrap();
@@ -351,7 +351,11 @@ fn qwen_package_lists_both_models_and_doctor_is_read_only() {
         .to_string(),
     )
     .unwrap();
-    let ids = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+    let ids = [
+        "qwen3-tts:1.7b-customvoice",
+        "qwen3-tts:0.6b-customvoice",
+        "kokoro:82m",
+    ];
     let files: Vec<_> = ids
         .iter()
         .map(|id| {
@@ -386,7 +390,11 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     fs::write(release.join("runtime.json"), "{}").unwrap();
     fs::write(release.join("models.json"), "[]").unwrap();
     let cache = package.0.join("qwen-cache");
-    for id in ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"] {
+    for id in [
+        "qwen3-tts:1.7b-customvoice",
+        "qwen3-tts:0.6b-customvoice",
+        "kokoro:82m",
+    ] {
         let output = package.run(&[
             "--cache-dir",
             cache.to_str().unwrap(),
@@ -627,9 +635,11 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
             cache = Path(folder)
             manifest = cache / "models.json"
             manifest.write_text(json.dumps([
-                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
-                for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit",
-                             "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit")
+                {"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json",
+                 **profile}
+                for name, profile in (("parakeet-tdt-0.6b-v3", {}), ("Qwen3.5-4B-4bit", {}),
+                                      ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
+                                       {"profile": "qwen3-tts:1.7b-customvoice"}))
             ]))
             runpy.run_path(sys.argv[1])["run"](
                 "serve", "qwen3-tts:1.7b-customvoice", cache, manifest
@@ -637,6 +647,57 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
     finally:
         server.shutdown()
         thread.join()
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn voice_profiles_load_only_their_own_speech_model() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+speech = {"qwen3-tts:1.7b-customvoice": "Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
+          "kokoro:82m": "Kokoro-82M-bf16"}
+entries = [{"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json"}
+           for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+entries += [{"path": f"hub/models--mlx-community--{name}/snapshots/pinned/config.json",
+             "profile": profile} for profile, name in speech.items()]
+with TemporaryDirectory() as folder:
+    cache = Path(folder).resolve()
+    manifest = cache / "models.json"
+    manifest.write_text(json.dumps(entries))
+    for profile, name in speech.items():
+        work = cache / profile.replace(":", "-")
+        work.mkdir()
+        argv = arguments(profile, cache, manifest, work)
+        option = lambda key: argv[argv.index(key) + 1]
+        tts = work / name
+        assert tts.resolve() == cache / f"hub/models--mlx-community--{name}/snapshots/pinned", tts
+        assert sorted(p.name for p in work.iterdir()) == sorted(
+            ["parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit", name]), list(work.iterdir())
+        if profile == "kokoro:82m":
+            assert option("--tts") == "kokoro" and option("--kokoro_model_name") == str(tts)
+            assert option("--kokoro_voice") == str(tts / "voices/af_heart.safetensors")
+            assert option("--kokoro_lang_code") == "a"
+        else:
+            assert option("--tts") == "qwen3" and option("--qwen3_tts_model_name") == str(tts)
+            assert "--kokoro_voice" not in argv
 "#,
         )
         .arg(concat!(

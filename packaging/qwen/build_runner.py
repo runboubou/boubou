@@ -68,9 +68,16 @@ def main():
                     path.unlink()
         moved = stage / "relocated runtime"
         root.rename(moved)
-        subprocess.run([moved / "bin/python3", "-I", "-B", "-c",
-                        "import mlx.core, sounddevice, speech_to_speech.cli; print(mlx.core.default_device())"],
-                       cwd=stage, check=True)
+        # Phonemize an unlisted word as Kokoro does: spaCy's English model, then espeak-ng.
+        check = """import runpy, sys, tempfile, mlx.core, sounddevice, speech_to_speech.cli
+from pathlib import Path
+from misaki import en, espeak
+with tempfile.TemporaryDirectory() as work:
+    runpy.run_path(sys.argv[1])["link_espeak_data"](Path(work))
+    assert en.G2P(fallback=espeak.EspeakFallback(british=False))("Boubou")[0]
+print(mlx.core.default_device())
+"""
+        subprocess.run([moved / "bin/python3", "-I", "-B", "-c", check, moved / "voice.py"], cwd=stage, check=True)
         bundle = stage / "runner.tar.gz"
         with tarfile.open(bundle, "w:gz", compresslevel=3) as tar:
             for path in sorted(moved.rglob("*")):

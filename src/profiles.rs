@@ -216,7 +216,13 @@ pub enum Model {
     Qwen(&'static str),
 }
 
-pub const QWEN_IDS: [&str; 2] = ["qwen3-tts:1.7b-customvoice", "qwen3-tts:0.6b-customvoice"];
+/// Profiles of the packaged Qwen voice pipeline. They share its speech recognizer and language
+/// model; each one selects its own speech model.
+pub const QWEN_IDS: [&str; 3] = [
+    "qwen3-tts:1.7b-customvoice",
+    "qwen3-tts:0.6b-customvoice",
+    "kokoro:82m",
+];
 
 impl Model {
     pub fn id(self) -> &'static str {

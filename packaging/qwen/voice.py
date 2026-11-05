@@ -7,6 +7,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
+def speech(model_id, tts):
+    if model_id.startswith("qwen3-tts:"):
+        return ["--tts", "qwen3", "--qwen3_tts_model_name", tts, "--qwen3_tts_speaker", "Aiden",
+                "--qwen3_tts_language", "english"]
+    if model_id == "kokoro:82m":
+        # A voice file path keeps MLX Audio from resolving the voice on the Hub.
+        return ["--tts", "kokoro", "--kokoro_model_name", tts,
+                "--kokoro_voice", str(Path(tts, "voices/af_heart.safetensors")), "--kokoro_lang_code", "a"]
+    raise ValueError(f"Unsupported voice profile: {model_id}")
+
+
 def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
@@ -16,11 +27,11 @@ def arguments(model_id, cache, manifest, work):
         parts = Path(entry["path"]).parts
         if (entry.get("profile", model_id) == model_id and len(parts) == 5
                 and parts[0] == "hub" and parts[2] == "snapshots" and parts[4] == "config.json"):
-            # MLX Audio infers the Parakeet architecture from the final path component.
+            # MLX Audio infers Parakeet and Kokoro architectures from the final path component.
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
-            snapshots[parts[1]] = str(alias)
-    (tts,) = (path for name, path in snapshots.items() if name.startswith("models--mlx-community--Qwen3-TTS-"))
+            # Shared snapshots serve every profile; the profile's own snapshot is its speech model.
+            snapshots["tts" if "profile" in entry else parts[1]] = str(alias)
     os.environ.update({
         "HF_HOME": str(cache / "hf"),
         "HF_HUB_CACHE": str(cache / "hub"),
@@ -33,9 +44,16 @@ def arguments(model_id, cache, manifest, work):
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
         "--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots["models--mlx-community--parakeet-tdt-0.6b-v3"],
         "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
-        "--tts", "qwen3", "--qwen3_tts_model_name", tts, "--qwen3_tts_speaker", "Aiden",
-        "--qwen3_tts_language", "english",
+        *speech(model_id, snapshots["tts"]),
     ]
+
+
+def link_espeak_data(work):
+    # espeak-ng exits when its data path exceeds 159 bytes, as the installed runtime's does.
+    import espeakng_loader
+    from misaki import espeak
+    (work / "espeak-ng-data").symlink_to(espeakng_loader.get_data_path(), target_is_directory=True)
+    espeak.EspeakWrapper.set_data_path(str(work))
 
 
 def run(command, model, cache, manifest, *extra):
@@ -59,6 +77,8 @@ def run(command, model, cache, manifest, *extra):
                 filter(None, (os.environ.get(key), "127.0.0.1,localhost,::1"))
             )
         options = arguments(model, cache, manifest, work)
+        if model.startswith("kokoro:"):
+            link_espeak_data(work)
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         # Upstream v1.1.0 sets this to its package directory during import.
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")
