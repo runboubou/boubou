@@ -20,6 +20,12 @@ def pocket(voice):
             "--init_chat_prompt", f"{PROMPT} Always reply in {language}."]
 
 
+def supertonic(path):
+    # The upstream handler loads the SDK's default model from this directory, so nothing is downloaded.
+    os.environ["SUPERTONIC_CACHE_DIR"] = path
+    return ["--tts", "supertonic", "--supertonic_tts_voice", "M1", "--supertonic_tts_lang", "en"]
+
+
 # Speech options per profile family, given the speech model that profile owns.
 TTS = {
     "qwen3-tts": lambda path: ["--tts", "qwen3", "--qwen3_tts_model_name", path, "--qwen3_tts_speaker", "Aiden",
@@ -29,6 +35,7 @@ TTS = {
                             "--kokoro_voice", str(Path(path, "voices/af_heart.safetensors"))],
     "phonon": lambda path: ["--tts", "phonon", "--phonon_tts_model_name", path, "--phonon_tts_language", "en"],
     "pocket-tts": pocket,
+    "supertonic": supertonic,
 }
 
 

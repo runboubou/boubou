@@ -51,12 +51,14 @@ jobs:
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
           "$cli" list | grep -Fx 'kokoro:82m'
           "$cli" list | grep -Fx 'phonon:31m-en'
+          "$cli" list | grep -Fx 'supertonic:3'
           test "$("$cli" list | grep -c '^pocket-tts:')" -eq 26
           "$cli" pull qwen3-tts:1.7b-customvoice
           find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > before
           "$cli" pull qwen3-tts:0.6b-customvoice
           "$cli" pull kokoro:82m
           "$cli" pull phonon:31m-en
+          "$cli" pull supertonic:3
           # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
           for id in pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french; do
             "$cli" pull "$id"
@@ -84,7 +86,7 @@ jobs:
           sw_vers -productVersion
           sysctl hw.model hw.memsize
           status=0
-          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en \
+          for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en supertonic:3 \
               pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french; do
             "$cli" pull "$id" --offline || { status=1; continue; }
             "$python" -I -B packaging/qwen/smoke.py "$id" "$root" "$manifest" || status=1

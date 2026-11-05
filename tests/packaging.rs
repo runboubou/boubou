@@ -356,6 +356,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("qwen3-tts:0.6b-customvoice", "English"),
         ("kokoro:82m", "English"),
         ("phonon:31m-en", "English"),
+        ("supertonic:3", "English"),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
     ];
@@ -404,6 +405,7 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
         "qwen3-tts:0.6b-customvoice",
         "kokoro:82m",
         "phonon:31m-en",
+        "supertonic:3",
     ] {
         let output = package.run(&[
             "--cache-dir",
@@ -710,6 +712,47 @@ with TemporaryDirectory() as folder:
             assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
+"#,
+        )
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/packaging/qwen/voice.py"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn supertonic_profile_points_the_sdk_at_its_pinned_snapshot() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, os, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+snapshot = "hub/models--{}/snapshots/pinned".format
+entries = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
+           for name in ("parakeet-tdt-0.6b-v3", "Qwen3.5-4B-4bit")]
+entries.append({"path": f"{snapshot('Supertone--supertonic-3')}/config.json", "profile": "supertonic:3"})
+with TemporaryDirectory() as folder:
+    cache = Path(folder).resolve()
+    manifest = cache / "models.json"
+    manifest.write_text(json.dumps(entries))
+    work = cache / "supertonic"
+    work.mkdir()
+    argv = arguments("supertonic:3", cache, manifest, work)
+    tts = argv[argv.index("--tts"):]
+    assert tts == ["--tts", "supertonic", "--supertonic_tts_voice", "M1", "--supertonic_tts_lang", "en"], argv
+    # The SDK downloads only when this directory lacks its ONNX files.
+    assert os.readlink(os.environ["SUPERTONIC_CACHE_DIR"]) == str(cache / snapshot("Supertone--supertonic-3"))
+    assert len(list(work.iterdir())) == 3, argv
 "#,
         )
         .arg(concat!(
