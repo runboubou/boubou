@@ -62,6 +62,9 @@ jobs:
           "$cli" pull phonon:31m-en
           "$cli" pull supertonic:3
           "$cli" pull chattts:en
+          for id in qwen3-tts:1.7b-customvoice-zh qwen3-tts:0.6b-customvoice-zh chattts:zh; do
+            "$cli" pull "$id"
+          done
           # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
           for id in pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french; do
             "$cli" pull "$id"
@@ -94,6 +97,7 @@ jobs:
           sysctl hw.model hw.memsize
           status=0
           for id in qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en supertonic:3 chattts:en \
+              qwen3-tts:1.7b-customvoice-zh qwen3-tts:0.6b-customvoice-zh chattts:zh \
               pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french \
               kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1; do
             "$cli" pull "$id" --offline || { status=1; continue; }

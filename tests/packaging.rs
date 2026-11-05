@@ -358,6 +358,9 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("phonon:31m-en", "English"),
         ("supertonic:3", "English"),
         ("chattts:en", "English"),
+        ("chattts:zh", "Chinese"),
+        ("qwen3-tts:1.7b-customvoice-zh", "Chinese"),
+        ("qwen3-tts:0.6b-customvoice-zh", "Chinese"),
         ("pocket-tts:english_2m_2026-10", "English"),
         ("pocket-tts:french_24l", "French"),
         ("kitten-tts:nano-0.8-int8", "English"),
@@ -867,6 +870,61 @@ with TemporaryDirectory() as folder:
         ))
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn chinese_profiles_select_whisper_and_only_their_local_assets() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(r#"import json, os, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+snapshot = "hub/models--{}/snapshots/pinned".format
+english = "qwen3-tts:0.6b-customvoice"
+chinese = english + "-zh"
+whisper = "mlx-community--whisper-large-v3-turbo"
+processor = "openai--whisper-large-v3"
+speech = "mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"
+files = [{"path": snapshot("mlx-community--Qwen3.5-4B-4bit") + "/config.json"},
+         {"path": snapshot("mlx-community--parakeet-tdt-0.6b-v3") + "/config.json", "profiles": [english]},
+         {"path": snapshot(speech) + "/config.json", "profiles": [english, chinese]}]
+files += [{"path": snapshot(whisper) + "/" + name, "profiles": [chinese]}
+          for name in ["config.json", "weights.safetensors", "README.md"]]
+files += [{"path": snapshot(processor) + "/" + name, "profiles": [chinese]}
+          for name in ["preprocessor_config.json", "tokenizer.json", "README.md"]]
+with TemporaryDirectory() as folder:
+    root = Path(folder)
+    manifest = root / "models.json"
+    manifest.write_text(json.dumps(files))
+    for model in [english, chinese]:
+        work = root / model.replace(":", "-")
+        work.mkdir()
+        argv = arguments(model, root / "cache", manifest, work)
+        stt = argv[argv.index("--stt") + 1]
+        assert stt == ("mlx-audio-whisper" if model == chinese else "parakeet-tdt"), argv
+        if model == chinese:
+            assert argv[argv.index("--language") + 1] == "zh", argv
+            assert argv[argv.index("--qwen3_tts_language") + 1] == "chinese", argv
+            assert argv[argv.index("--qwen3_tts_speaker") + 1] == "Vivian", argv
+            assert "Always reply in Chinese." in argv[-1], argv
+            assert not (work / "parakeet-tdt-0.6b-v3").exists()
+            overlay = work / "whisper"
+            assert sorted(p.name for p in overlay.iterdir()) == ["config.json", "preprocessor_config.json", "tokenizer.json", "weights.safetensors"]
+            for path in overlay.iterdir():
+                target = os.readlink(path)
+                assert str(root / "cache") in target, target
+        else:
+            assert not (work / "whisper").exists()
+            assert argv[argv.index("--qwen3_tts_language") + 1] == "english", argv
+"#)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen/voice.py"))
+        .output().unwrap();
     assert!(
         output.status.success(),
         "{}",

@@ -72,21 +72,26 @@ def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
+    chinese = model_id.endswith("-zh") or model_id == "chattts:zh"
+    recognizer = ("models--mlx-community--whisper-large-v3-turbo" if chinese
+                  else "models--mlx-community--parakeet-tdt-0.6b-v3")
     snapshots, owned = {}, []
     for entry in files:
+        if entry.get("profile", model_id) != model_id or model_id not in entry.get("profiles", [model_id]):
+            continue
         parts = Path(entry["path"]).parts
-        if (entry.get("profile", model_id) == model_id and len(parts) == 5
+        if (len(parts) == 5
                 and parts[0] == "hub" and parts[2] == "snapshots" and parts[4] == "config.json"):
             # MLX Audio infers Parakeet and Kokoro architectures from the final path component.
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
             snapshots[parts[1]] = str(alias)
-            if "profile" in entry:
+            if ("profile" in entry or "profiles" in entry) and parts[1] != recognizer:
                 owned.append(str(alias))
         elif entry.get("profile") == model_id and parts[-2] == "embeddings":
             # Pocket TTS loads its weights by Hub path; its preset voice state is the owned file.
             owned.append(str(cache.joinpath(*parts)))
-        elif entry.get("profile") == model_id and parts[4:] == ("asset", "gpt", "config.json"):
+        elif parts[4:] == ("asset", "gpt", "config.json"):
             # Keep ChatTTS's working directory temporary, so nothing is written into the verified snapshot.
             (work / "asset").symlink_to(cache.joinpath(*parts[:5]), target_is_directory=True)
             owned.append(str(work))
@@ -98,12 +103,31 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "NLTK_DATA": str(bundle / "nltk_data"),
     })
+    if chinese:
+        # MLX's Whisper conversion omits its processor. Combine the two pinned snapshots
+        # in temporary storage, keeping the verified cache and installed runtime unchanged.
+        whisper = work / "whisper"
+        whisper.mkdir()
+        for entry in files:
+            parts = Path(entry["path"]).parts
+            if (len(parts) == 5 and parts[1] in (recognizer, "models--openai--whisper-large-v3")
+                    and parts[-1] != "README.md"):
+                (whisper / parts[-1]).symlink_to(cache / entry["path"])
+        stt = ["--stt", "mlx-audio-whisper", "--mlx_audio_whisper_model_name", str(whisper), "--language", "zh"]
+    else:
+        stt = ["--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots[recognizer]]
+    speech = TTS[model_id.split(":")[0]](tts)
+    if chinese:
+        if model_id.startswith("qwen3-tts:"):
+            speech[speech.index("--qwen3_tts_language") + 1] = "chinese"
+            speech[speech.index("--qwen3_tts_speaker") + 1] = "Vivian"
+        speech += ["--init_chat_prompt", f"{PROMPT} Always reply in Chinese."]
     return [
         "--mac-optimal-settings",
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
-        "--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots["models--mlx-community--parakeet-tdt-0.6b-v3"],
+        *stt,
         "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
-        *TTS[model_id.split(":")[0]](tts),
+        *speech,
     ]
 
 
