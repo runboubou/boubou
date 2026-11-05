@@ -250,6 +250,13 @@ pub const QWEN_IDS: &[&str] = &[
     "pocket-tts:portuguese_24l",
     "pocket-tts:spanish",
     "pocket-tts:spanish_24l",
+    "kitten-tts:mini-0.8",
+    "kitten-tts:micro-0.8",
+    "kitten-tts:nano-0.8-fp32",
+    "kitten-tts:nano-0.8-int8",
+    "kitten-tts:mini-0.1",
+    "kitten-tts:nano-0.1",
+    "kitten-tts:nano-0.2",
 ];
 
 impl Model {
