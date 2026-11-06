@@ -17,11 +17,13 @@ Selecting `LFM3-Audio-2B` downloads about 1.42 GB of verified assets on first
 use and asks for microphone access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
 resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 
-For the guided start, use a source build or a package built from this checkout:
+After installing a package built from this checkout, open the guided interface:
 
 ```sh
-boubou
+bobo
 ```
+
+`boubou` opens the same interface. Source builds can use `cargo run --locked`.
 
 Boubou checks this Mac and opens an English voice menu. With the shared runner
 packaged, it prefers Qwen's fixed Aiden voice with Qwen3.5-4B when resources

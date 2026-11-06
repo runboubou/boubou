@@ -258,7 +258,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
             "Use a model name or a boubou run command."
         );
         args = &args[1..];
-    } else if args.first().is_some_and(|s| s == "boubou") {
+    } else if args.first().is_some_and(|s| s == "boubou" || s == "bobo") {
         ensure!(
             args.get(1).is_some_and(|s| s == "run"),
             "Use a model name or a boubou run command."
@@ -763,6 +763,7 @@ mod tests {
         for command in [
             "LFM3-Audio-2B",
             "boubou run LFM3-Audio-2B",
+            "bobo run LFM3-Audio-2B",
             "npx boubou@beta run LFM3-Audio-2B",
             "npx --yes --cache \"$HOME/a cache\" boubou@beta run LFM3-Audio-2B",
         ] {
