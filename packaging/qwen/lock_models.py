@@ -70,6 +70,19 @@ CHATTTS = ("2Noise/ChatTTS", "1a3c04a8b0651689bd9242fbb55b1f4b5a9aef84",
             "asset/Vocos.safetensors", "asset/gpt/config.json", "asset/gpt/model.safetensors",
             "asset/tokenizer/special_tokens_map.json", "asset/tokenizer/tokenizer_config.json",
             "asset/tokenizer/tokenizer.json"}, "chattts:en")
+# English entry points; wider language coverage is tracked separately in Issue #34.
+MMS = ("facebook/mms-tts-eng", "c71de0fe7204c83f1c10820a7d696d0b450048ba",
+       {"README.md", "config.json", "model.safetensors", "special_tokens_map.json",
+        "tokenizer_config.json", "vocab.json"}, "mms-tts:eng")
+OMNIVOICE = ("k2-fsa/OmniVoice", "c5fdb5ccb189668d56333f77ba2629f4cd7535f4",
+             {"README.md", "chat_template.jinja", "config.json", "model.safetensors",
+              "tokenizer.json", "tokenizer_config.json", "audio_tokenizer/LICENSE",
+              "audio_tokenizer/README.md", "audio_tokenizer/config.json",
+              "audio_tokenizer/model.safetensors", "audio_tokenizer/preprocessor_config.json"},
+             "omnivoice:0.6b")
+DRAMA3 = ("mlx-community/fish-audio-drama-3-4bit", "1ac1b2108b63c2ef5bade463a121569363e293ce",
+          {"README.md", "LICENSE", "NOTICE", "config.json", "tokenizer.json", "codec.safetensors",
+           *(f"model-{part:05}.safetensors" for part in range(1, 7))}, "drama3:4bit")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -253,7 +266,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN]:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN, MMS, OMNIVOICE, DRAMA3]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())
@@ -266,6 +279,13 @@ def main():
         "url": "https://raw.githubusercontent.com/creativecommons/cc-legal-tools-data/a0dac18d1a773b4cdb7d8dd5d9bf4efab7901030/docs/licenses/by/4.0/legalcode.txt",
         "size": 18657,
         "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
+    })
+    files.append({
+        "path": "licenses/mms/CC-BY-NC-4.0.txt",
+        "url": "https://raw.githubusercontent.com/creativecommons/cc-legal-tools-data/a0dac18d1a773b4cdb7d8dd5d9bf4efab7901030/docs/licenses/by-nc/4.0/legalcode.txt",
+        "size": 19347,
+        "sha256": "41003d4a74749c0220e33dd415042164b5a1093ed401f36277234f772d22d3d0",
+        "profile": "mms-tts:eng",
     })
     args.output.write_text(json.dumps(with_runtime_profiles(with_whisper_profiles(files)), indent=2) + "\n")
 

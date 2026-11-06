@@ -1,6 +1,6 @@
 # Apple Silicon Qwen candidate
 
-From a clean checkout on macOS 15 or newer, use Python 3.11 or newer to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
+From a clean checkout on macOS 15 or newer, use Python 3.11 or newer, CMake 3.24+ and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
 
 ```sh
 candidate="$(mktemp -d)"
@@ -27,6 +27,32 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run supe
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run chattts:en
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pocket-tts:french_24l
 ```
+
+## Additional English TTS entries
+
+These explicit developer entries keep Parakeet TDT v3 and Qwen3.5-4B-4bit.
+They do not change the guided menu or its recommendations.
+
+| ID | Local TTS engine | Weight terms |
+| --- | --- | --- |
+| `mms-tts:eng` | Transformers VITS on CPU | CC-BY-NC 4.0 |
+| `omnivoice:0.6b` | OmniVoice on MPS; its audio codec runs on CPU | Noncommercial, per the pinned model card |
+| `drama3:4bit` | Native MLX Drama-3 service on the same Mac | Fish Audio Community License |
+
+Use `boubou pull ID`, `boubou doctor ID`, then `boubou run ID --offline`.
+The package includes the Drama-3 executable and its libraries; BOUBOU starts it
+on an allocated loopback port and stops it with the conversation. No separate
+server installation or hosted API is needed.
+
+Drama-3 downloads about 29.4 GB including the shared STT and 4B LLM.
+Its upstream native implementation recommends at least 48 GB of unified memory
+for the TTS checkpoint alone. That is not an established minimum for the complete
+BOUBOU conversation. Smaller-Mac validation and recommendation placement remain
+separate acceptance work. MMS currently exposes only the English checkpoint;
+this does not establish support for the full MMS language catalog in Issue #34.
+Model cards, license texts supplied upstream and the Drama-3 conversion notice
+are retained with the pinned weights. Review their terms before redistribution
+or commercial use.
 
 ## Choose a speech recognizer
 

@@ -3,7 +3,10 @@
 import json
 import os
 import re
+import selectors
+import subprocess
 import sys
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -65,6 +68,11 @@ TTS = {
     "pocket-tts": pocket,
     "supertonic": supertonic,
     "chattts": chattts,
+    "mms-tts": lambda path: ["--tts", "facebookMMS", "--facebook_mms_model_name", path,
+                              "--facebook_mms_device", "cpu", "--tts_language", "en"],
+    "omnivoice": lambda path: ["--tts", "omnivoice", "--omnivoice_model_name", path,
+                               "--omnivoice_device", "mps", "--omnivoice_language", "en"],
+    "drama3": lambda path: ["--tts", "drama3", "--drama3_model", "fishaudio/drama-3"],
 }
 
 
@@ -94,7 +102,7 @@ def arguments(model_id, cache, manifest, work):
             snapshots[parts[1]] = str(alias)
             if ("profile" in entry or "profiles" in entry) and parts[1] not in (recognizer, llm):
                 owned.append(str(alias))
-        elif entry.get("profile") == model_id and parts[-2] == "embeddings":
+        elif ("profile" in entry or "profiles" in entry) and parts[-2] == "embeddings":
             # Pocket TTS loads its weights by Hub path; its preset voice state is the owned file.
             owned.append(str(cache.joinpath(*parts)))
         elif parts[4:] == ("asset", "gpt", "config.json"):
@@ -150,9 +158,40 @@ def link_espeak_data(work):
     espeak.EspeakWrapper.set_data_path(str(work))
 
 
+@contextmanager
+def drama3_server(model):
+    """Own the native MLX service for exactly one conversation."""
+    binary = Path(__file__).resolve().parent / "drama3/fishaudio_drama3_server"
+    child = subprocess.Popen([binary, "--model-path", model, "--model-name", "fishaudio/drama-3",
+                              "--supervised", "--host", "127.0.0.1", "--port", "0"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        with selectors.DefaultSelector() as ready:
+            ready.register(child.stdout, selectors.EVENT_READ)
+            if not ready.select(timeout=240):
+                raise TimeoutError("The Drama-3 service did not become ready within 240 seconds")
+            line = child.stdout.readline()
+        event = json.loads(line) if line else {}
+        if event.get("event") != "ready":
+            raise RuntimeError(f"The Drama-3 service failed to start: {event}")
+        if event["host"] != "127.0.0.1" or not 0 < event["port"] < 65536:
+            raise RuntimeError("The Drama-3 service returned an invalid loopback address")
+        yield f"http://127.0.0.1:{event['port']}/v1"
+    finally:
+        # EOF stops the native service even if its parent dies before this block runs.
+        child.stdin.close()
+        if child.poll() is None:
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        child.stdout.close()
+
+
 def run(command, model, cache, manifest, *extra):
     # Keep model-name aliases and compiled caches outside the verified package.
-    with TemporaryDirectory(prefix="boubou-qwen-") as work:
+    with TemporaryDirectory(prefix="boubou-qwen-") as work, ExitStack() as resources:
         work = Path(work)
         hub = work / "torch/hub"
         hub.mkdir(parents=True)
@@ -173,6 +212,9 @@ def run(command, model, cache, manifest, *extra):
         options = arguments(model, cache, manifest, work)
         if model.startswith(("kokoro:", "kitten-tts:")):
             link_espeak_data(work)
+        if model == "drama3:4bit":
+            url = resources.enter_context(drama3_server(work / "fish-audio-drama-3-4bit"))
+            options += ["--drama3_base_url", url, "--drama3_api_key", ""]
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         # Upstream v1.1.0 sets this to its package directory during import.
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")

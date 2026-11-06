@@ -986,6 +986,15 @@ with TemporaryDirectory() as folder:
     assert option("--pocket_tts_voice") == str(cache / languages / config / "embeddings" / f"{voice}.safetensors")
     assert option("--init_chat_prompt").endswith(" Always reply in French.")
     assert sorted(p.name for p in work.iterdir()) == ["Qwen3.5-4B-4bit", "parakeet-tdt-0.6b-v3"]
+    # The production lock groups ownership after sharing recipe assets.
+    entries[-1]["profiles"] = [entries[-1].pop("profile")]
+    entries.append({"path": f"{languages}/english_2026-10/embeddings/alba.safetensors",
+                    "profiles": ["pocket-tts:english_2026-10"]})
+    manifest.write_text(json.dumps(entries))
+    grouped = cache / "grouped"
+    grouped.mkdir()
+    argv = arguments(f"pocket-tts:{config}", cache, manifest, grouped)
+    assert argv[argv.index("--pocket_tts_voice") + 1] == str(cache / languages / config / "embeddings" / f"{voice}.safetensors")
 "#,
         )
         .arg(concat!(
@@ -994,6 +1003,114 @@ with TemporaryDirectory() as folder:
         ))
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn remaining_families_select_only_their_pinned_local_assets() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(r#"import json, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+arguments = runpy.run_path(sys.argv[1])["arguments"]
+snapshot = lambda repo: f"hub/models--{repo}/snapshots/pinned"
+cases = [
+    ("mms-tts:eng", "facebook--mms-tts-eng", "facebookMMS", "--facebook_mms_model_name", "--facebook_mms_device", "cpu"),
+    ("omnivoice:0.6b", "k2-fsa--OmniVoice", "omnivoice", "--omnivoice_model_name", "--omnivoice_device", "mps"),
+    ("drama3:4bit", "mlx-community--fish-audio-drama-3-4bit", "drama3", None, None, None),
+]
+files = [{"path": f"{snapshot('mlx-community--' + name)}/config.json"}
+         for name in ("Qwen3.5-4B-4bit", "parakeet-tdt-0.6b-v3")]
+files += [{"path": f"{snapshot(repo)}/{name}", "profiles": [id]}
+          for id, repo, *_ in cases for name in ("config.json", "audio_tokenizer/config.json")]
+with TemporaryDirectory() as folder:
+    root = Path(folder)
+    manifest = root / "models.json"
+    manifest.write_text(json.dumps(files))
+    for id, repo, handler, model_arg, device_arg, device in cases:
+        work = root / id
+        work.mkdir()
+        argv = arguments(id, root / "cache", manifest, work)
+        option = lambda key: argv[argv.index(key) + 1]
+        assert option("--tts") == handler, argv
+        if model_arg:
+            assert Path(option(model_arg)).resolve() == (root / "cache" / snapshot(repo)).resolve()
+            assert option(device_arg) == device
+        else:
+            assert option("--drama3_model") == "fishaudio/drama-3"
+        assert len(list(work.iterdir())) == 3, argv
+        assert option("--llm_backend") == "mlx-lm"
+        assert Path(option("--model_name")).name == "Qwen3.5-4B-4bit"
+"#)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen/voice.py"))
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn drama3_service_is_owned_across_startup_and_conversation_failures() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(r#"import json, os, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+with TemporaryDirectory() as folder:
+    root = Path(folder)
+    (root / "drama3").mkdir()
+    (root / "voice.py").write_bytes(Path(sys.argv[1]).read_bytes())
+    serve = runpy.run_path(str(root / "voice.py"))["drama3_server"]
+    binary = root / "drama3/fishaudio_drama3_server"
+    binary.write_text(f'''#!{sys.executable}
+import json, os, socket, sys
+from pathlib import Path
+model = Path(sys.argv[sys.argv.index("--model-path") + 1])
+model.write_text(str(os.getpid()))
+if model.name == "fail":
+    print(json.dumps({{"event": "failed", "reason": "invalid model"}}), flush=True)
+    sys.exit(3)
+assert sys.argv[sys.argv.index("--host") + 1] == "127.0.0.1"
+assert sys.argv[sys.argv.index("--port") + 1] == "0"
+assert "--supervised" in sys.argv
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(json.dumps({{"event": "ready", "host": "127.0.0.1", "port": listener.getsockname()[1]}}), flush=True)
+    assert sys.stdin.read() == ""
+    model.with_suffix(".stopped").touch()
+''')
+    binary.chmod(0o700)
+    for name in ("normal", "broken", "fail"):
+        model = root / name
+        try:
+            with serve(model) as url:
+                assert url.startswith("http://127.0.0.1:") and url.endswith("/v1"), url
+                assert name != "fail", "Failed service reached the conversation"
+                if name == "broken":
+                    raise ValueError("conversation failed")
+        except ValueError:
+            assert name == "broken"
+        except RuntimeError as error:
+            assert name == "fail" and "invalid model" in str(error)
+        try:
+            os.kill(int(model.read_text()), 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError("Drama-3 child was not reaped")
+        assert model.with_suffix(".stopped").exists() == (name != "fail")
+"#)
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen/voice.py"))
+        .output().unwrap();
     assert!(
         output.status.success(),
         "{}",
