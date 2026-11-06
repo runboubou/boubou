@@ -1,6 +1,6 @@
 ## Change
 
-What changes, and why? Link a Spec when needed. Mention material risks only.
+What changes, and why? Mention material behavior, interface, asset or privacy changes and relevant risks.
 
 ## Checks
 
