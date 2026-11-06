@@ -78,8 +78,16 @@ def main():
         check = """import runpy, sys, tempfile, kittenml.kittentts_legacy.onnx_model, mlx.core, omnivoice, pocket_tts, sounddevice, speech_to_speech.cli
 from pathlib import Path
 from misaki import en, espeak
+from speech_to_speech.LLM.chat import Chat, make_user_message
+runner = runpy.run_path(sys.argv[1])
+runner["preserve_qwen_user_turns"]()
+chat = Chat(8)
+for text in ("Tell me a long story.", "Stop. What is the capital of France?"):
+    chat.add_item(make_user_message(text))
+assert [message["role"] for message in chat.to_transformers_chat()] == ["user", "user"]
+assert len(chat.buffer) == 2
 with tempfile.TemporaryDirectory() as work:
-    runpy.run_path(sys.argv[1])["link_espeak_data"](Path(work))
+    runner["link_espeak_data"](Path(work))
     assert en.G2P(fallback=espeak.EspeakFallback(british=False))("Boubou")[0]
 print(mlx.core.default_device())
 """

@@ -10,7 +10,17 @@ cargo fetch --locked
 python3 -B packaging/build-macos.py --qwen "$candidate"
 ```
 
-The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK and Kokoro phonemizer data. The first `pull` fetches only the selected profile's verified speech and language model weights. Profiles reuse the same runner; original profiles retain Qwen3.5-4B-4bit. The [curated English runtimes](runtimes.json) select fixed 2B, 4B, 9B or 27B LLMs with their STT and TTS. That catalog is shared by the client, asset locking and runner argument construction. Its `guided` flag controls ordinary menu visibility; Kokoro 9B/27B variants remain available through explicit developer commands. Modular options are trials, not accepted upgrades in voice quality. Its recommended memory groups and reserved-memory budgets are estimates, not validated hardware minima or quality rankings.
+The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK
+and phonemizer data. The first `pull` fetches only the selected profile's verified
+weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
+shared by the client, asset locking and runner arguments. Its `guided` entries
+are Qwen 0.6B CustomVoice with fixed Aiden and Meta MMS English, both using
+Parakeet and Qwen3.5-4B. The client also offers Liquid's integrated voice.
+
+Guided startup uses English. Other voices, Whisper language modes and the 2B,
+9B and 27B LLM combinations require explicit developer selection. Memory groups
+and budgets are estimates for device testing. More parameters do not imply
+better replies or voice quality.
 
 `kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses a CPU speaker sampled at startup. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
@@ -28,10 +38,11 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run chat
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pocket-tts:french_24l
 ```
 
-## Additional English TTS entries
+## Other English TTS families
 
-These explicit developer entries keep Parakeet TDT v3 and Qwen3.5-4B-4bit.
-They do not change the guided menu or its recommendations.
+These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit. MMS is also offered in the
+guided menu. OmniVoice and Drama-3 require explicit developer selection; their
+current profiles do not fix a speaker identity.
 
 | ID | Local TTS engine | Weight terms |
 | --- | --- | --- |
@@ -47,8 +58,8 @@ server installation or hosted API is needed.
 Drama-3 downloads about 29.4 GB including the shared STT and 4B LLM.
 Its upstream native implementation recommends at least 48 GB of unified memory
 for the TTS checkpoint alone. That is not an established minimum for the complete
-BOUBOU conversation. Smaller-Mac validation and recommendation placement remain
-separate acceptance work. MMS currently exposes only the English checkpoint;
+BOUBOU conversation. Smaller-Mac validation and acceptance remain
+separate work. MMS currently exposes only the English checkpoint;
 this does not establish support for the full MMS language catalog in Issue #34.
 Model cards, license texts supplied upstream and the Drama-3 conversion notice
 are retained with the pinned weights. Review their terms before redistribution

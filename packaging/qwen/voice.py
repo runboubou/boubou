@@ -189,6 +189,17 @@ def drama3_server(model):
         child.stdout.close()
 
 
+def preserve_qwen_user_turns():
+    # SDK 1.1.0 merges unanswered user turns for strict alternating-role templates.
+    # Our fixed Qwen LLM accepts separate turns and needs that boundary after barge-in.
+    from speech_to_speech.LLM import chat
+
+    def append_user_message(messages, content):
+        messages.append(chat.TransformersUserMessage(content=content))
+
+    chat._append_user_message = append_user_message
+
+
 def run(command, model, cache, manifest, *extra):
     # Keep model-name aliases and compiled caches outside the verified package.
     with TemporaryDirectory(prefix="boubou-qwen-") as work, ExitStack() as resources:
@@ -216,6 +227,7 @@ def run(command, model, cache, manifest, *extra):
             url = resources.enter_context(drama3_server(work / "fish-audio-drama-3-4bit"))
             options += ["--drama3_base_url", url, "--drama3_api_key", ""]
         from speech_to_speech.s2s_pipeline import run_pipeline_command
+        preserve_qwen_user_turns()
         # Upstream v1.1.0 sets this to its package directory during import.
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")
         run_pipeline_command(command, [*options, *extra])

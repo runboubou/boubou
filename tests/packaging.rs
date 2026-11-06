@@ -131,7 +131,8 @@ impl Prompt {
     }
 
     fn expect(&mut self, choices: &[&str]) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // Parallel fixtures launch fresh Node/native copies on busy macOS workers.
+        let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             let mut buffer = [0; 8192];
             match self.master.read(&mut buffer) {
@@ -144,7 +145,8 @@ impl Prompt {
             }
             assert!(
                 Instant::now() < deadline,
-                "Missing {choices:?}: {}",
+                "Missing {choices:?} (launcher status: {:?}): {}",
+                self.child.try_wait().unwrap(),
                 self.output
             );
             thread::sleep(Duration::from_millis(10));
@@ -202,25 +204,27 @@ impl Drop for Prompt {
 }
 
 #[test]
-fn guided_start_navigates_recommendations_and_restores_the_terminal() {
+fn guided_start_opens_english_voices_and_restores_the_terminal() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&["Choose your conversation language"]);
-    assert!(prompt.output.contains("Chinese"));
-    assert!(prompt.output.contains("Developer: choose a model"));
-    assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
-    prompt.send(b"\r");
     prompt.expect(&[
-        "Choose a runtime for this Mac",
-        "This voice cannot start on this Mac",
+        "Choose an English voice for this Mac",
+        "No English voice fits",
         "Device check unavailable",
     ]);
-    assert!(
-        !prompt.output.contains("LFM3"),
-        "Ordinary setup exposed a model name"
-    );
+    assert!(!prompt.output.contains("Chinese"));
+    assert!(!prompt.output.contains("Choose your conversation language"));
+    assert!(prompt.output.contains("Developer: choose a model"));
+    assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
+    // The developer entry is last regardless of the number of eligible voices.
+    prompt.send(b"\x1b[A\r");
+    prompt.expect(&["Paste a model name"]);
     prompt.send(b"\x1b");
-    prompt.expect(&["Choose your conversation language"]);
+    prompt.expect(&[
+        "Choose an English voice for this Mac",
+        "No English voice fits",
+        "Device check unavailable",
+    ]);
     prompt.send(b"\x03");
     assert_eq!(prompt.finish().code(), Some(130));
     assert!(!package.0.join("menu-cache").exists());
@@ -230,9 +234,13 @@ fn guided_start_navigates_recommendations_and_restores_the_terminal() {
 fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&["Choose your conversation language"]);
+    prompt.expect(&[
+        "Choose an English voice for this Mac",
+        "No English voice fits",
+        "Device check unavailable",
+    ]);
     assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
-    prompt.send(b"\x1b[B\x1b[B\r");
+    prompt.send(b"\x1b[A\r");
     prompt.expect(&["Paste a model name"]);
     prompt.send(b"unknown\r");
     prompt.expect(&["Model not supported"]);
@@ -249,7 +257,11 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&["Choose your conversation language"]);
+    prompt.expect(&[
+        "Choose an English voice for this Mac",
+        "No English voice fits",
+        "Device check unavailable",
+    ]);
     assert_eq!(
         unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
         0
@@ -259,17 +271,8 @@ fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
 }
 
 #[test]
-fn chinese_setup_checks_the_packaged_pipeline_before_any_download() {
+fn guided_start_filters_incompatible_packaged_voices_before_download() {
     let package = Package::new();
-    let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&["Choose your conversation language"]);
-    prompt.send(b"\x1b[B\r");
-    prompt.expect(&["This voice setup is unavailable"]);
-    prompt.send(b"\r");
-    prompt.expect(&["Choose your conversation language"]);
-    prompt.send(b"\x03");
-    assert_eq!(prompt.finish().code(), Some(130));
-
     let release = package.0.join("qwen");
     fs::create_dir(&release).unwrap();
     fs::write(
@@ -281,24 +284,20 @@ fn chinese_setup_checks_the_packaged_pipeline_before_any_download() {
         .to_string(),
     )
     .unwrap();
-    fs::write(
-        release.join("models.json"),
-        serde_json::json!([{
-            "profile":"qwen3-tts:0.6b-customvoice-whisper", "path":"models/chinese.bin",
-            "url":"https://example.invalid/chinese.bin", "size":1, "sha256":"b".repeat(64)
-        }])
-        .to_string(),
-    )
-    .unwrap();
+    fs::write(release.join("models.json"), serde_json::json!([
+        {"profile":"qwen3-tts:0.6b-customvoice", "path":"models/qwen.bin", "url":"https://example.invalid/qwen.bin", "size":1, "sha256":"b".repeat(64)},
+        {"profile":"mms-tts:eng", "path":"models/mms.bin", "url":"https://example.invalid/mms.bin", "size":1, "sha256":"c".repeat(64)}
+    ]).to_string()).unwrap();
     let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&["Choose your conversation language"]);
-    prompt.send(b"\x1b[B\r");
-    prompt.expect(&["This voice cannot start on this Mac"]);
-    prompt.expect(&["macOS 99.0.0"]);
-    assert!(!prompt.output.contains("qwen3-tts:"));
+    prompt.expect(&[
+        "Choose an English voice for this Mac",
+        "No English voice fits",
+        "Device check unavailable",
+    ]);
+    assert!(!prompt.output.contains("Qwen / Aiden"));
+    assert!(!prompt.output.contains("Meta MMS / English"));
+    assert!(!prompt.output.contains("Chinese"));
     prompt.send(b"\x1b");
-    prompt.expect(&["Choose your conversation language"]);
-    prompt.send(b"\x03");
     assert_eq!(prompt.finish().code(), Some(130));
     assert!(!package.0.join("menu-cache").exists());
 }
@@ -668,7 +667,7 @@ fn npm_launcher_waits_for_cleanup_before_propagating_termination() {
 }
 
 #[test]
-fn qwen_runner_reaches_loopback_with_a_proxy_and_preserves_bypasses() {
+fn qwen_runner_preserves_user_turns_and_reaches_loopback_with_a_proxy() {
     let output = Command::new("python3")
         .args(["-I", "-B", "-c"])
         .arg(
@@ -697,6 +696,13 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
     try:
         def run_pipeline(command, argv):
             assert command == "serve"
+            messages = []
+            for text in ("Tell me a long story.", "Stop. What is the capital of France?"):
+                chat._append_user_message(messages, text)
+            assert [message.role for message in messages] == ["user", "user"], messages
+            assert [message.content for message in messages] == [
+                "Tell me a long story.", "Stop. What is the capital of France?"
+            ], messages
             with urllib.request.urlopen(
                 f"http://127.0.0.1:{server.server_port}/v1/realtime", timeout=2
             ) as response:
@@ -708,8 +714,26 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
         package.__path__ = []
         pipeline = types.ModuleType("speech_to_speech.s2s_pipeline")
         pipeline.run_pipeline_command = run_pipeline
+        llm = types.ModuleType("speech_to_speech.LLM")
+        llm.__path__ = []
+        chat = types.ModuleType("speech_to_speech.LLM.chat")
+        class UserMessage:
+            role = "user"
+            def __init__(self, content):
+                self.content = content
+        def append_user_message(messages, content):
+            # The pinned SDK coalesces adjacent user turns for strict chat templates.
+            if messages and messages[-1].role == "user":
+                messages[-1].content += "\n" + content
+            else:
+                messages.append(UserMessage(content))
+        chat.TransformersUserMessage = UserMessage
+        chat._append_user_message = append_user_message
+        llm.chat = chat
         sys.modules["speech_to_speech"] = package
         sys.modules["speech_to_speech.s2s_pipeline"] = pipeline
+        sys.modules["speech_to_speech.LLM"] = llm
+        sys.modules["speech_to_speech.LLM.chat"] = chat
         with TemporaryDirectory() as folder:
             cache = Path(folder)
             manifest = cache / "models.json"
@@ -758,13 +782,14 @@ for preset in presets:
     assert preset['memory_gib'] + 2 <= preset['recommended_memory_gib']
 
 snapshot = lambda repo: f'hub/models--{repo}/snapshots/pinned/config.json'
-legacy = ['kokoro:82m', 'qwen3-tts:1.7b-customvoice', 'qwen3-tts:0.6b-customvoice']
+legacy = ['kokoro:82m', 'qwen3-tts:1.7b-customvoice', 'qwen3-tts:0.6b-customvoice', 'mms-tts:eng']
 files = [
     {'path': snapshot('mlx-community--parakeet-tdt-0.6b-v3'), 'profiles': legacy},
     *[{'path': snapshot(f'mlx-community--Qwen3.5-{n}B-4bit')} for n in [2, 4, 9, 27]],
     {'path': snapshot('mlx-community--Kokoro-82M-bf16'), 'profile': legacy[0]},
     {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit'), 'profile': legacy[1]},
     {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit'), 'profile': legacy[2]},
+    {'path': snapshot('facebook--mms-tts-eng'), 'profile': legacy[3]},
 ]
 lock = runpy.run_path(str(root / 'lock_models.py'))['with_runtime_profiles']
 lock.__globals__['snapshot'] = lambda *args: iter([{'path': snapshot('openai--whisper-tiny')}])
@@ -789,7 +814,7 @@ with TemporaryDirectory() as folder:
             assert Path(argv[argv.index('--stt_model_name') + 1]).name == 'models--openai--whisper-tiny'
         else:
             assert argv[argv.index('--stt') + 1] == 'parakeet-tdt'
-        assert argv[argv.index('--tts') + 1] == ('kokoro' if preset['tts'].startswith('kokoro:') else 'qwen3')
+        assert argv[argv.index('--tts') + 1] == {'kokoro': 'kokoro', 'qwen3-tts': 'qwen3', 'mms-tts': 'facebookMMS'}[preset['tts'].split(':')[0]]
         assert len(list(work.iterdir())) == 3
     for id in legacy:
         selected = [f for f in files if id in f['profiles']]

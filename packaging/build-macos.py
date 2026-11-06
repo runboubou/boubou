@@ -118,6 +118,7 @@ def main():
                     raise SystemExit("Qwen archive does not match its release manifest")
                 shutil.copyfile(runner, folder / "qwen/runner.tar.gz")
         shutil.copy2(ROOT / "README.md", folder / "README.md")
+        shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
         (folder / "licenses").mkdir()
         for filename, url, expected in LICENSES:
             path = folder / "licenses" / filename

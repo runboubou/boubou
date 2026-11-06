@@ -160,46 +160,25 @@ impl Device {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Language {
-    English,
-    Chinese,
-}
-
 struct Setup {
     model: Model,
     voice: &'static str,
     memory: u64,
     resources: qwen::Requirements,
     recommended_memory_gib: u64,
-    guided: bool,
 }
 
 impl Setup {
-    fn for_language(language: Language, cache: &Path) -> Result<Self> {
-        match language {
-            Language::English => Ok(Self {
-                model: Model::Liquid(&profiles::DEFAULT),
-                voice: "Liquid / integrated English voice",
-                memory: profiles::DEFAULT
-                    .memory_budget
-                    .context("No memory estimate for this voice")?,
-                resources: liquid_requirements(&profiles::DEFAULT, cache),
-                recommended_memory_gib: 16,
-                guided: true,
-            }),
-            Language::Chinese => Ok(Self {
-                model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
-                voice: "Chinese / Vivian voice (also understands English)",
-                // Short whole-pipeline runs used about 8 GiB server RSS on a 128 GiB Mac.
-                // Reserve 12 GiB for STT + LLM + TTS and headroom; smaller Macs are unverified.
-                memory: 12 * GIB,
-                resources: qwen::requirements("qwen3-tts:0.6b-customvoice-whisper", cache)
-                    .context("Cannot check the Chinese voice setup")?,
-                recommended_memory_gib: 16,
-                guided: true,
-            }),
-        }
+    fn liquid(cache: &Path) -> Result<Self> {
+        Ok(Self {
+            model: Model::Liquid(&profiles::DEFAULT),
+            voice: "Liquid / integrated English voice",
+            memory: profiles::DEFAULT
+                .memory_budget
+                .context("No memory estimate for this voice")?,
+            resources: liquid_requirements(&profiles::DEFAULT, cache),
+            recommended_memory_gib: 8,
+        })
     }
 }
 
@@ -207,19 +186,11 @@ fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> 
     let mut choices: Vec<_> = setups
         .iter()
         .filter(|setup| {
-            setup.guided
-                && (device.memory >= setup.recommended_memory_gib * GIB
-                    || matches!(setup.model, Model::Liquid(_)))
-                && device.check(setup).is_ok()
+            device.memory >= setup.recommended_memory_gib * GIB && device.check(setup).is_ok()
         })
         .collect();
-    // Keep the baseline first. Capacity orders trial options, not voice quality.
-    choices.sort_by_key(|setup| {
-        (
-            matches!(setup.model, Model::Qwen(_)),
-            std::cmp::Reverse(setup.recommended_memory_gib),
-        )
-    });
+    // Prefer the accepted 4B conversation when it fits; Liquid serves smaller Macs.
+    choices.sort_by_key(|setup| matches!(setup.model, Model::Liquid(_)));
     choices
 }
 
@@ -306,187 +277,148 @@ fn parse_selection(text: &str) -> Result<Selection> {
     })
 }
 
+fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
+    let mut text = String::new();
+    let mut notice = String::new();
+    while screen.input(&mut text, &notice)? {
+        match parse_selection(&text) {
+            Ok(selection) => return Ok(Some(selection)),
+            Err(error) => notice = error.to_string(),
+        }
+    }
+    Ok(None)
+}
+
 pub fn start(cache: &Path) -> Result<Selection> {
     let mut screen = Screen::enter()?;
-    'language: loop {
-        let language = match screen.choose(
-            "Choose your conversation language",
-            &["Boubou will check this Mac before downloading anything.".into()],
-            &[
-                "English".into(),
-                "Chinese".into(),
-                "Developer: choose a model or paste a command".into(),
-            ],
-        )? {
-            Some(0) => Language::English,
-            Some(1) => Language::Chinese,
-            Some(_) => {
-                let mut text = String::new();
-                let mut notice = String::new();
-                while screen.input(&mut text, &notice)? {
-                    match parse_selection(&text) {
-                        Ok(selection) => return Ok(selection),
-                        Err(error) => notice = error.to_string(),
-                    }
-                }
-                continue;
-            }
-            None => return Err(Cancelled.into()),
-        };
-        loop {
-            let device = match Device::detect(cache) {
-                Ok(device) => device,
-                Err(error) => {
-                    if screen.choose(
-                        "Device check unavailable",
-                        &[error.to_string()],
-                        &["Check again".into(), "Change language".into()],
-                    )? == Some(0)
-                    {
+    loop {
+        let device = match Device::detect(cache) {
+            Ok(device) => device,
+            Err(error) => {
+                match screen.choose(
+                    "Device check unavailable",
+                    &[error.to_string()],
+                    &[
+                        "Check again".into(),
+                        "Developer: choose a model or paste a command".into(),
+                    ],
+                )? {
+                    Some(0) => continue,
+                    Some(_) => {
+                        if let Some(selection) = choose_model(&mut screen)? {
+                            return Ok(selection);
+                        }
                         continue;
                     }
-                    break;
-                }
-            };
-            let setup = match Setup::for_language(language, cache) {
-                Ok(setup) => setup,
-                Err(error) => {
-                    let mut details: Vec<_> = error.chain().map(ToString::to_string).collect();
-                    details.push(
-                        "Use a package with Chinese voice chat, or fix the cache error.".into(),
-                    );
-                    details.push("Then select the language again.".into());
-                    screen.choose(
-                        "This voice setup is unavailable",
-                        &details,
-                        &["Change language".into()],
-                    )?;
-                    continue 'language;
-                }
-            };
-            let mut setups = vec![setup];
-            let mut unavailable = Vec::new();
-            if matches!(language, Language::English) && qwen::packaged() {
-                for preset in profiles::presets() {
-                    match qwen::requirements(preset.id, cache) {
-                        Ok(resources) => setups.push(Setup {
-                            model: Model::Qwen(preset.id),
-                            voice: preset.label,
-                            memory: preset.memory_gib * GIB,
-                            resources,
-                            recommended_memory_gib: preset.recommended_memory_gib,
-                            guided: preset.guided,
-                        }),
-                        Err(error) => unavailable.push(format!("{}: {error}", preset.id)),
-                    }
+                    None => return Err(Cancelled.into()),
                 }
             }
-            let mut details = device.summary();
-            let choices = available_setups(&device, &setups);
-            if choices.is_empty() {
-                if let Err(error) = device.check(&setups[0]) {
-                    details.push(error.to_string());
+        };
+        let mut setups = vec![Setup::liquid(cache)?];
+        let mut unavailable = Vec::new();
+        if qwen::packaged() {
+            for preset in profiles::presets().iter().filter(|preset| preset.guided) {
+                match qwen::requirements(preset.id, cache) {
+                    Ok(resources) => setups.push(Setup {
+                        model: Model::Qwen(preset.id),
+                        voice: preset.label,
+                        memory: preset.memory_gib * GIB,
+                        resources,
+                        recommended_memory_gib: preset.recommended_memory_gib,
+                    }),
+                    Err(error) => unavailable.push(format!("{}: {error}", preset.label)),
                 }
-                details.push(
-                    "No download has started. Choose a different voice or check again.".into(),
-                );
-                if screen.choose(
-                    "This voice cannot start on this Mac right now",
-                    &details,
-                    &["Check again".into(), "Change language".into()],
-                )? == Some(0)
-                {
-                    continue;
-                }
-                break;
             }
-            details.push("Estimated fit for this Mac's memory group and current resources.".into());
-            details.push(
-                "Trial combinations need listening tests; larger models are not quality scores."
-                    .into(),
-            );
-            if let Some(error) = unavailable.first() {
-                details.push(format!("Some packaged options are unavailable: {error}"));
-            }
-            let rows: Vec<_> = choices
-                .iter()
-                .map(|setup| {
-                    format!(
-                        "{}: {}",
-                        if matches!(setup.model, Model::Liquid(_)) {
-                            "Baseline"
-                        } else {
-                            "Trial"
-                        },
-                        setup.voice
-                    )
-                })
-                .collect();
-            let Some(selected) = screen.choose("Choose a runtime for this Mac", &details, &rows)?
-            else {
-                break;
-            };
-            let setup = choices[selected];
-            let mut details = device.summary();
-            if let Some(preset) = profiles::presets()
-                .iter()
-                .find(|preset| preset.id == setup.model.id())
-            {
-                details.extend([
-                    format!("STT: {} / LLM: {}", preset.stt, preset.llm),
-                    format!("TTS: {} / English", preset.tts),
-                ]);
-            } else if matches!(setup.model, Model::Liquid(_)) {
-                details.push("Liquid handles speech input, conversation and speech output.".into());
-            }
-            details.extend([
-                setup.voice.into(),
-                format!(
-                    "Recommended Mac memory: {} GiB or more",
-                    setup.recommended_memory_gib
-                ),
-                format!(
-                    "Estimated speech + conversation memory: {:.0} GiB",
-                    setup.memory as f64 / GIB as f64
-                ),
-                format!(
-                    "Estimated download: {:.2} GB / free disk needed: {:.2} GB",
-                    setup.resources.download as f64 / 1_000_000_000.0,
-                    setup.resources.disk as f64 / 1_000_000_000.0
-                ),
-                "Memory budgets are estimates; smaller Macs are not hardware-validated.".into(),
-                if matches!(setup.model, Model::Qwen(_)) {
-                    "Trial configuration: voice quality has not been accepted.".into()
-                } else {
-                    "Speed and stability vary. Cached files are verified before use.".into()
-                },
-                "Downloads need internet; speech processing stays on this Mac.".into(),
-            ]);
-            if screen.choose(
-                "Review this runtime",
-                &details,
-                &[
-                    "Download, verify and start".into(),
-                    "Back to runtime choices".into(),
-                ],
-            )? != Some(0)
-            {
-                continue;
-            }
-            // A user may leave the confirmation screen open while other apps consume memory.
-            if let Err(error) = Device::detect(cache).and_then(|device| device.check(setup)) {
-                screen.choose(
-                    "Resources changed before startup",
-                    &[error.to_string()],
-                    &["Check again".into()],
-                )?;
-                continue;
-            }
-            return Ok(Selection {
-                model: setup.model,
-                offline: false,
-            });
         }
+        let mut details = device.summary();
+        let choices = available_setups(&device, &setups);
+        let title = if choices.is_empty() {
+            if let Err(error) = device.check(&setups[0]) {
+                details.push(error.to_string());
+            }
+            "No English voice fits this Mac right now"
+        } else {
+            "Choose an English voice for this Mac"
+        };
+        details.push("Memory needs are estimates; smaller Macs still need device testing.".into());
+        if let Some(error) = unavailable.first() {
+            details.push(format!("Some packaged voices are unavailable: {error}"));
+        }
+        let mut rows: Vec<_> = choices.iter().map(|setup| setup.voice.to_owned()).collect();
+        if choices.is_empty() {
+            rows.push("Check again".into());
+        }
+        rows.push("Developer: choose a model or paste a command".into());
+        let Some(selected) = screen.choose(title, &details, &rows)? else {
+            return Err(Cancelled.into());
+        };
+        if selected == rows.len() - 1 {
+            if let Some(selection) = choose_model(&mut screen)? {
+                return Ok(selection);
+            }
+            continue;
+        }
+        if choices.is_empty() {
+            continue;
+        }
+        let setup = choices[selected];
+        let mut details = device.summary();
+        if let Some(preset) = profiles::presets()
+            .iter()
+            .find(|preset| preset.id == setup.model.id())
+        {
+            details.extend([
+                format!("STT: {} / LLM: {}", preset.stt, preset.llm),
+                format!("TTS: {} / English", preset.tts),
+            ]);
+        } else {
+            details.push("Liquid handles speech input, conversation and speech output.".into());
+        }
+        if setup.model.id() == "mms-tts:eng" {
+            details.push("Meta MMS weights allow non-commercial use (CC BY-NC 4.0).".into());
+        }
+        details.extend([
+            setup.voice.into(),
+            format!(
+                "Suggested Mac memory: {} GiB or more",
+                setup.recommended_memory_gib
+            ),
+            format!(
+                "Estimated speech + conversation memory: {:.0} GiB",
+                setup.memory as f64 / GIB as f64
+            ),
+            format!(
+                "Estimated download: {:.2} GB / free disk needed: {:.2} GB",
+                setup.resources.download as f64 / 1_000_000_000.0,
+                setup.resources.disk as f64 / 1_000_000_000.0
+            ),
+            "Speed and stability vary. Cached files are verified before use.".into(),
+            "Downloads need internet; speech processing stays on this Mac.".into(),
+        ]);
+        if screen.choose(
+            "Review this runtime",
+            &details,
+            &[
+                "Download, verify and start".into(),
+                "Back to voice choices".into(),
+            ],
+        )? != Some(0)
+        {
+            continue;
+        }
+        // A user may leave the confirmation screen open while other apps consume memory.
+        if let Err(error) = Device::detect(cache).and_then(|device| device.check(setup)) {
+            screen.choose(
+                "Resources changed before startup",
+                &[error.to_string()],
+                &["Check again".into()],
+            )?;
+            continue;
+        }
+        return Ok(Selection {
+            model: setup.model,
+            offline: false,
+        });
     }
 }
 
@@ -722,58 +654,52 @@ mod tests {
     use crate::profiles::DEFAULT;
 
     fn catalog_setups() -> Vec<Setup> {
-        let mut setups = vec![
-            Setup::for_language(Language::English, Path::new("/nonexistent-boubou-cache")).unwrap(),
-        ];
-        setups.extend(profiles::presets().iter().map(|preset| Setup {
-            model: Model::Qwen(preset.id),
-            voice: preset.label,
-            memory: preset.memory_gib * GIB,
-            resources: qwen::Requirements {
-                min_macos: (15, 0, 0),
-                download: GIB,
-                disk: GIB,
-            },
-            recommended_memory_gib: preset.recommended_memory_gib,
-            guided: preset.guided,
-        }));
+        let mut setups = vec![Setup::liquid(Path::new("/nonexistent-boubou-cache")).unwrap()];
+        setups.extend(
+            profiles::presets()
+                .iter()
+                .filter(|preset| preset.guided)
+                .map(|preset| Setup {
+                    model: Model::Qwen(preset.id),
+                    voice: preset.label,
+                    memory: preset.memory_gib * GIB,
+                    resources: qwen::Requirements {
+                        min_macos: (15, 0, 0),
+                        download: GIB,
+                        disk: GIB,
+                    },
+                    recommended_memory_gib: preset.recommended_memory_gib,
+                }),
+        );
         setups
     }
 
     #[test]
-    fn offers_baseline_and_eligible_trials_without_promoting_capacity_to_quality() {
+    fn offers_only_accepted_english_voices_with_the_4b_default_when_it_fits() {
         let setups = catalog_setups();
-        for (total, expected_first, expected_count) in [
-            (16, DEFAULT.id, 2),
-            (18, DEFAULT.id, 2),
-            (24, DEFAULT.id, 2),
-            (32, DEFAULT.id, 4),
-            (36, DEFAULT.id, 4),
-            (48, DEFAULT.id, 4),
-            (64, DEFAULT.id, 5),
-            (96, DEFAULT.id, 5),
-            (128, DEFAULT.id, 6),
-        ] {
-            for chip in ["Apple M1", "Apple M2", "Apple M4"] {
-                let device = Device {
-                    chip: Some(chip.into()),
-                    apple_silicon: true,
-                    macos: (15, 0, 0),
-                    memory: total * GIB,
-                    available: (total - 4) * GIB,
-                    disk: 100 * GIB,
-                };
-                let choices = available_setups(&device, &setups);
-                assert_eq!(choices.len(), expected_count, "{total} GiB / {chip}");
-                assert_eq!(choices[0].model.id(), expected_first);
-                assert!(choices.iter().any(|setup| setup.model.id() == DEFAULT.id));
-                assert!(
-                    !choices.iter().any(|setup| matches!(
-                        setup.model.id(),
-                        "kokoro:82m-9b" | "kokoro:82m-27b"
-                    ))
-                );
-            }
+        for total in [8, 16, 24, 32, 64, 128] {
+            let device = Device {
+                chip: Some("Apple Silicon".into()),
+                apple_silicon: true,
+                macos: (15, 0, 0),
+                memory: total * GIB,
+                available: if total == 8 {
+                    6 * GIB
+                } else {
+                    (total - 4) * GIB
+                },
+                disk: 100 * GIB,
+            };
+            let actual: Vec<_> = available_setups(&device, &setups)
+                .iter()
+                .map(|setup| setup.model.id())
+                .collect();
+            let expected = if total == 8 {
+                vec![DEFAULT.id]
+            } else {
+                vec!["qwen3-tts:0.6b-customvoice", "mms-tts:eng", DEFAULT.id]
+            };
+            assert_eq!(actual, expected, "{total} GiB");
         }
     }
 
@@ -788,7 +714,15 @@ mod tests {
             available: 15 * GIB,
             disk: 100 * GIB,
         };
-        assert_eq!(available_setups(&device, &setups)[0].model.id(), DEFAULT.id);
+        assert_eq!(
+            available_setups(&device, &setups)[0].model.id(),
+            "qwen3-tts:0.6b-customvoice"
+        );
+        device.available = 11 * GIB;
+        assert_eq!(
+            available_setups(&device, &setups)[0].model.id(),
+            "mms-tts:eng"
+        );
         device.available = 7 * GIB;
         let choices = available_setups(&device, &setups);
         assert_eq!(choices.len(), 1);
@@ -820,7 +754,7 @@ mod tests {
         device.disk = GIB;
         assert_eq!(
             available_setups(&device, &setups)[0].model.id(),
-            "qwen3-tts:1.7b-customvoice-27b"
+            "qwen3-tts:0.6b-customvoice"
         );
     }
 
@@ -867,7 +801,7 @@ mod tests {
     fn english_fit_respects_architecture_os_memory_and_cache_space() {
         let cache =
             std::env::temp_dir().join(format!("boubou-missing-cache-{}", std::process::id()));
-        let setup = Setup::for_language(Language::English, &cache).unwrap();
+        let setup = Setup::liquid(&cache).unwrap();
         assert_eq!(setup.model.id(), DEFAULT.id);
         let mut device = Device {
             chip: None,
@@ -925,10 +859,9 @@ mod tests {
     #[test]
     fn whole_pipeline_budget_filters_small_and_busy_macs() {
         let setup = Setup {
-            model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
-            voice: "Chinese / Vivian",
+            model: Model::Qwen("qwen3-tts:0.6b-customvoice"),
+            voice: "Qwen / Aiden",
             recommended_memory_gib: 16,
-            guided: true,
             memory: 12 * GIB,
             resources: qwen::Requirements {
                 min_macos: (15, 0, 0),
