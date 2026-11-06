@@ -22,6 +22,18 @@ LFS = re.compile(
 MODELS = [
     ("parakeet-tdt-0.6b-v3", "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15", None, None),
     ("Qwen3.5-4B-4bit", "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", None, None),
+    ("Qwen3.5-2B-4bit", "674aaa7240b91e8012fcad5d791b7dfe5ba90207", None, None),
+    ("Qwen3.5-9B-4bit", "8b2b98c00a6b4d291155e4890773ca8f769aee53", None,
+     {"README.md", "chat_template.jinja", "config.json", "model-00001-of-00002.safetensors",
+      "model-00002-of-00002.safetensors", "model.safetensors.index.json",
+      "preprocessor_config.json", "processor_config.json", "tokenizer.json",
+      "tokenizer_config.json", "video_preprocessor_config.json", "vocab.json"}),
+    ("Qwen3.5-27B-4bit", "45797d2985a12c55e6473686e9ea91b95e959553", None,
+     {"README.md", "chat_template.jinja", "config.json", "generation_config.json",
+      "model-00001-of-00003.safetensors", "model-00002-of-00003.safetensors",
+      "model-00003-of-00003.safetensors", "model.safetensors.index.json",
+      "preprocessor_config.json", "processor_config.json", "tokenizer.json",
+      "tokenizer_config.json", "video_preprocessor_config.json", "vocab.json"}),
     ("Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit", "7dc92af14613355896fcab13b268c19ede233139", "qwen3-tts:0.6b-customvoice", None),
     ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit", "1c6c0ff58c43afa8df571facde2efa077efd85e2", "qwen3-tts:1.7b-customvoice", None),
     ("Kokoro-82M-bf16", "a71e4d38b236d968966a2002c4c895dbd12b1c3c", "kokoro:82m",
@@ -31,6 +43,9 @@ MODELS = [
 ORIGINALS = [
     ("nvidia/parakeet-tdt-0.6b-v3", "541d1f99c6b0c3cd0b11a95167540bb8edefd82b", {"README.md"}, None),
     ("Qwen/Qwen3.5-4B", "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a", {"LICENSE", "README.md"}, None),
+    ("Qwen/Qwen3.5-2B", "15852e8c16360a2fea060d615a32b45270f8a8fc", {"LICENSE", "README.md"}, None),
+    ("Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a", {"LICENSE", "README.md"}, None),
+    ("Qwen/Qwen3.5-27B", "fc05daec18b0a78c049392ed2e771dde82bdf654", {"LICENSE", "README.md"}, None),
     ("Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", "85e237c12c027371202489a0ec509ded67b5e4b5", {"README.md"}, "qwen3-tts:0.6b-customvoice"),
     ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe", {"README.md"}, "qwen3-tts:1.7b-customvoice"),
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987", {"README.md"}, "kokoro:82m"),
@@ -55,6 +70,19 @@ CHATTTS = ("2Noise/ChatTTS", "1a3c04a8b0651689bd9242fbb55b1f4b5a9aef84",
             "asset/Vocos.safetensors", "asset/gpt/config.json", "asset/gpt/model.safetensors",
             "asset/tokenizer/special_tokens_map.json", "asset/tokenizer/tokenizer_config.json",
             "asset/tokenizer/tokenizer.json"}, "chattts:en")
+# English entry points; wider language coverage is tracked separately in Issue #34.
+MMS = ("facebook/mms-tts-eng", "c71de0fe7204c83f1c10820a7d696d0b450048ba",
+       {"README.md", "config.json", "model.safetensors", "special_tokens_map.json",
+        "tokenizer_config.json", "vocab.json"}, "mms-tts:eng")
+OMNIVOICE = ("k2-fsa/OmniVoice", "c5fdb5ccb189668d56333f77ba2629f4cd7535f4",
+             {"README.md", "chat_template.jinja", "config.json", "model.safetensors",
+              "tokenizer.json", "tokenizer_config.json", "audio_tokenizer/LICENSE",
+              "audio_tokenizer/README.md", "audio_tokenizer/config.json",
+              "audio_tokenizer/model.safetensors", "audio_tokenizer/preprocessor_config.json"},
+             "omnivoice:0.6b")
+DRAMA3 = ("mlx-community/fish-audio-drama-3-4bit", "1ac1b2108b63c2ef5bade463a121569363e293ce",
+          {"README.md", "LICENSE", "NOTICE", "config.json", "tokenizer.json", "codec.safetensors",
+           *(f"model-{part:05}.safetensors" for part in range(1, 7))}, "drama3:4bit")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -199,6 +227,35 @@ def with_whisper_profiles(files):
     return result
 
 
+def with_runtime_profiles(files):
+    presets = json.loads((Path(__file__).parent / "runtimes.json").read_text())
+    legacy = {profile for file in files
+              for profile in file.get("profiles", [file["profile"]] if "profile" in file else [])}
+    tiny_profiles = [preset["id"] for preset in presets if preset["stt"] == "whisper-tiny"]
+    repo, revision = "openai/whisper-tiny", "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
+    names = {"README.md", "added_tokens.json", "config.json", "generation_config.json",
+             "merges.txt", "model.safetensors", "normalizer.json", "preprocessor_config.json",
+             "special_tokens_map.json", "tokenizer.json", "tokenizer_config.json", "vocab.json"}
+    files = [*files, *({**file, "profiles": tiny_profiles} for file in snapshot(
+        repo, revision, f"hub/models--openai--whisper-tiny/snapshots/{revision}", None, names))]
+    result = []
+    for file in files:
+        owners = set(file.get("profiles", [file["profile"]] if "profile" in file else legacy))
+        owners.update(preset["id"] for preset in presets if preset["tts"] in owners)
+        llm = re.match(r"(?:hub/models--mlx-community--|licenses/Qwen/)(Qwen3\.5-(?:2|4|9|27)B)(?:-4bit)?/", file["path"])
+        if llm:
+            name = llm[1] + "-4bit"
+            owners = (legacy if name == "Qwen3.5-4B-4bit" else set()) | {
+                preset["id"] for preset in presets if preset["llm"] == name}
+        elif file["path"].startswith("hub/models--mlx-community--parakeet-tdt-0.6b-v3/"):
+            owners -= {preset["id"] for preset in presets if preset["stt"] != "parakeet-tdt-0.6b-v3"}
+        if not owners:
+            raise ValueError(f"No runtime owns {file['path']}")
+        result.append({**{key: value for key, value in file.items() if key not in ("profile", "profiles")},
+                       "profiles": sorted(owners)})
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="output path for models.json")
@@ -209,7 +266,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN]:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN, MMS, OMNIVOICE, DRAMA3]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())
@@ -223,7 +280,14 @@ def main():
         "size": 18657,
         "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411",
     })
-    args.output.write_text(json.dumps(with_whisper_profiles(files), indent=2) + "\n")
+    files.append({
+        "path": "licenses/mms/CC-BY-NC-4.0.txt",
+        "url": "https://raw.githubusercontent.com/creativecommons/cc-legal-tools-data/a0dac18d1a773b4cdb7d8dd5d9bf4efab7901030/docs/licenses/by-nc/4.0/legalcode.txt",
+        "size": 19347,
+        "sha256": "41003d4a74749c0220e33dd415042164b5a1093ed401f36277234f772d22d3d0",
+        "profile": "mms-tts:eng",
+    })
+    args.output.write_text(json.dumps(with_runtime_profiles(with_whisper_profiles(files)), indent=2) + "\n")
 
 
 if __name__ == "__main__":

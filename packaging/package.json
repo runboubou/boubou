@@ -6,11 +6,12 @@
   "engines": { "node": ">=18" },
   "os": ["darwin"],
   "cpu": ["arm64"],
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": "github:entropyai-labs/boubou",
   "files": [
     "boubou",
     "cli.cjs",
+    "LICENSE",
     "qwen/runtime.json",
     "qwen/models.json",
     "qwen/runner.tar.gz",

@@ -1,6 +1,6 @@
 # Apple Silicon Qwen candidate
 
-From a clean checkout on macOS 15 or newer, use Python 3.11 or newer to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
+From a clean checkout on macOS 15 or newer, use Python 3.11 or newer, CMake 3.24+ and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
 
 ```sh
 candidate="$(mktemp -d)"
@@ -10,7 +10,19 @@ cargo fetch --locked
 python3 -B packaging/build-macos.py --qwen "$candidate"
 ```
 
-The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK and Kokoro phonemizer data. The first `pull` fetches verified speech and language model weights. Every profile reuses the same runner and Qwen3.5-4B-4bit language model; `kokoro:82m` speaks with the American English `af_heart` voice, `phonon:31m-en` speaks on the CPU, `supertonic:3` speaks English with Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` speaks English on the CPU with a speaker that ChatTTS samples at random on each start. Each `pocket-tts:<config>` profile runs one Pocket TTS 4.0.1 stock config on the CPU with the SDK's default voice for its language, and the language model replies in that language. `boubou list` shows the 26 configs; the `english` alias is `pocket-tts:english_2026-10`. Each of the seven `kitten-tts:<checkpoint>` profiles runs one KittenTTS ONNX checkpoint on the CPU with the `expr-voice-3-m` voice. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK
+and phonemizer data. The first `pull` fetches only the selected profile's verified
+weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
+shared by the client, asset locking and runner arguments. Its `guided` entries
+are Qwen 0.6B CustomVoice with fixed Aiden and Meta MMS English, both using
+Parakeet and Qwen3.5-4B. The client also offers Liquid's integrated voice.
+
+Guided startup uses English. Other voices, Whisper language modes and the 2B,
+9B and 27B LLM combinations require explicit developer selection. Memory groups
+and budgets are estimates for device testing. More parameters do not imply
+better replies or voice quality.
+
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses a CPU speaker sampled at startup. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Record the machine and measurements in [#29](https://github.com/entropyai-labs/boubou/issues/29) for CustomVoice and [#34](https://github.com/entropyai-labs/boubou/issues/34) for the other families.
 
@@ -26,6 +38,33 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run chat
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pocket-tts:french_24l
 ```
 
+## Other English TTS families
+
+These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit. MMS is also offered in the
+guided menu. OmniVoice and Drama-3 require explicit developer selection; their
+current profiles do not fix a speaker identity.
+
+| ID | Local TTS engine | Weight terms |
+| --- | --- | --- |
+| `mms-tts:eng` | Transformers VITS on CPU | CC-BY-NC 4.0 |
+| `omnivoice:0.6b` | OmniVoice on MPS; its audio codec runs on CPU | Noncommercial, per the pinned model card |
+| `drama3:4bit` | Native MLX Drama-3 service on the same Mac | Fish Audio Community License |
+
+Use `boubou pull ID`, `boubou doctor ID`, then `boubou run ID --offline`.
+The package includes the Drama-3 executable and its libraries; BOUBOU starts it
+on an allocated loopback port and stops it with the conversation. No separate
+server installation or hosted API is needed.
+
+Drama-3 downloads about 29.4 GB including the shared STT and 4B LLM.
+Its upstream native implementation recommends at least 48 GB of unified memory
+for the TTS checkpoint alone. That is not an established minimum for the complete
+BOUBOU conversation. Smaller-Mac validation and acceptance remain
+separate work. MMS currently exposes only the English checkpoint;
+this does not establish support for the full MMS language catalog in Issue #34.
+Model cards, license texts supplied upstream and the Drama-3 conversion notice
+are retained with the pinned weights. Review their terms before redistribution
+or commercial use.
+
 ## Choose a speech recognizer
 
 The default entries keep Parakeet TDT 0.6B v3 for fast English conversations.
@@ -40,7 +79,7 @@ Choose a Whisper entry explicitly for Chinese or Chinese/English conversations:
 Whisper entries detect the input language and reply in that language. Qwen3-TTS
 uses automatic synthesis language and the `Vivian` voice in these entries;
 its default entries keep English with `Aiden`. ChatTTS samples a speaker at
-startup. Other profiles retain Parakeet.
+startup. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
 
 A profile downloads only its selected recognizer. Paired entries share TTS
 weights and the same 4-bit Qwen3.5-4B language model. Whisper adds recognition
@@ -57,6 +96,5 @@ not switch this package's STT engine.
 
 The upstream framework supports `mlx-lm`, `transformers`, `responses-api` and
 `chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` and the
-pinned 4B checkpoint. Smaller and larger checkpoints, and other inference
-backends, require a separately configured developer runtime; they are not
-additional downloads in the default package.
+pinned checkpoints selected by each complete runtime. Other component combinations
+and inference backends require a separately configured developer runtime.

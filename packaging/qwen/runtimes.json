@@ -1,0 +1,92 @@
+[
+  {
+    "id": "qwen3-tts:0.6b-customvoice",
+    "label": "Qwen / Aiden voice / Qwen 4B",
+    "tts": "qwen3-tts:0.6b-customvoice",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-4B-4bit",
+    "recommended_memory_gib": 16,
+    "memory_gib": 12,
+    "guided": true
+  },
+  {
+    "id": "mms-tts:eng",
+    "label": "Meta MMS / English voice / Qwen 4B",
+    "tts": "mms-tts:eng",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-4B-4bit",
+    "recommended_memory_gib": 16,
+    "memory_gib": 10,
+    "guided": true
+  },
+  {
+    "id": "kokoro:82m-27b",
+    "label": "Kokoro voice / Qwen 27B",
+    "tts": "kokoro:82m",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-27B-4bit",
+    "recommended_memory_gib": 128,
+    "memory_gib": 32,
+    "guided": false
+  },
+  {
+    "id": "qwen3-tts:1.7b-customvoice-27b",
+    "label": "Qwen 1.7B voice / Qwen 27B",
+    "tts": "qwen3-tts:1.7b-customvoice",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-27B-4bit",
+    "recommended_memory_gib": 128,
+    "memory_gib": 36,
+    "guided": false
+  },
+  {
+    "id": "kokoro:82m-9b",
+    "label": "Kokoro voice / Qwen 9B",
+    "tts": "kokoro:82m",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-9B-4bit",
+    "recommended_memory_gib": 64,
+    "memory_gib": 18,
+    "guided": false
+  },
+  {
+    "id": "qwen3-tts:1.7b-customvoice-9b",
+    "label": "Qwen 1.7B voice / Qwen 9B",
+    "tts": "qwen3-tts:1.7b-customvoice",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-9B-4bit",
+    "recommended_memory_gib": 64,
+    "memory_gib": 22,
+    "guided": false
+  },
+  {
+    "id": "kokoro:82m",
+    "label": "Kokoro voice / Qwen 4B",
+    "tts": "kokoro:82m",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-4B-4bit",
+    "recommended_memory_gib": 32,
+    "memory_gib": 12,
+    "guided": false
+  },
+  {
+    "id": "qwen3-tts:1.7b-customvoice",
+    "label": "Qwen 1.7B voice / Qwen 4B",
+    "tts": "qwen3-tts:1.7b-customvoice",
+    "stt": "parakeet-tdt-0.6b-v3",
+    "llm": "Qwen3.5-4B-4bit",
+    "recommended_memory_gib": 32,
+    "memory_gib": 16,
+    "guided": false
+  },
+  {
+    "id": "qwen3-tts:0.6b-customvoice-2b-tiny",
+    "label": "Qwen 0.6B voice / Qwen 2B / Whisper tiny",
+    "tts": "qwen3-tts:0.6b-customvoice",
+    "stt": "whisper-tiny",
+    "llm": "Qwen3.5-2B-4bit",
+    "recommended_memory_gib": 16,
+    "memory_gib": 8,
+    "guided": false
+  }
+]

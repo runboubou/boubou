@@ -23,18 +23,19 @@ For the guided start, use a source build or a package built from this checkout:
 boubou
 ```
 
-Choose English or Chinese, review the detected Mac, voice and estimated resource
-needs, then confirm the download and start talking. English uses the default
-voice. Chinese uses Vivian, also understands English, and requires macOS 15+
-and a [package with the shared voice runner](packaging/qwen/README.md).
-Builds without that runner offer English and explain why Chinese is unavailable.
-The menu uses arrow keys and Enter; Esc goes back and Ctrl+C exits.
-It checks architecture, macOS, total and available memory, and cache disk space
-before downloading. Resource fit is an estimate; 8/16 GiB Macs have not been
-hardware-validated, and speed or stability is not guaranteed. If startup fails,
-follow the error's recovery steps and reopen `boubou` to check again and resume
-downloads. Set `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb`
-print help. The developer entry accepts a model name or run command.
+Boubou checks this Mac and opens an English voice menu. With the shared runner
+packaged, it prefers Qwen's fixed Aiden voice with Qwen3.5-4B when resources
+permit, offers Meta MMS English as another voice, and keeps Liquid's integrated
+voice for lighter devices. Other models and LLM sizes remain available through
+`list`, direct commands and the developer entry. See [runtime packaging](packaging/qwen/README.md).
+
+The menu checks architecture, macOS, total and available memory, and cache disk
+space before downloading. Review the estimated download and memory needs before
+starting. These estimates do not establish hardware minima; smaller Macs still
+need testing. Use arrow keys and Enter, Esc to go back or exit, and Ctrl+C to
+quit. Set `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb` print
+help. A failed download can be resumed by starting again.
+
 Source builds also support `boubou run LFM3-Omni-2B` for English voice chat
 (about 1.62 GB on first use). Ask a local image or short video a text question:
 
@@ -46,15 +47,12 @@ boubou ask LFM3-Omni-2B clip.mp4 "What happens, and what can you hear?" --offlin
 Images: PNG/JPEG, up to 2048 × 2048 pixels. Videos: MP4/MOV with constant frame
 rate, up to 10 seconds, 512 × 512 pixels and 60 fps; install `ffmpeg` and `ffprobe`
 for video. Files are limited to 64 MiB. This mode returns text and does not open
-the microphone. See [media limits and errors](spec/0009-omni-media-questions.md).
+the microphone. Invalid or oversized media is rejected before inference.
 These source and candidate-package capabilities do not imply an npm release.
 
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.
 Without a model ID, `doctor` checks `LFM3-Audio-2B`.
-
-The [first MVP](spec/0001-liquid-macos-product.md) is accepted.
-Signing and notarization remain deferred.
 
 ## Develop
 
@@ -68,6 +66,11 @@ python3 packaging/build-macos.py
 
 The npm tarball, checksum and provenance are under `target/dist/<commit>/`.
 See [checks](.github/workflows/quality.yml) and [contribution rules](AGENTS.md).
-Model: [LFM Open License](https://www.liquid.ai/lfm-license).
+Boubou code: [MIT](LICENSE).
+Liquid models: [LFM Open License](https://www.liquid.ai/lfm-license).
 Backend: [llama.cpp MIT](https://github.com/ggml-org/llama.cpp/blob/b11960/LICENSE).
 Full upstream license texts are verified during packaging and included in the package.
+Meta MMS weights use [CC BY-NC 4.0](https://huggingface.co/facebook/mms-tts-eng)
+and are restricted to non-commercial use. Each model retains its own terms.
+Signing, notarization and public distribution qualification remain tracked in
+[#5](https://github.com/entropyai-labs/boubou/issues/5).

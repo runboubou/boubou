@@ -9,6 +9,7 @@ use std::{
     collections::VecDeque,
     io::{BufRead, BufReader, ErrorKind, Read},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+    os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
@@ -38,6 +39,7 @@ impl Server {
         let mut child = command
             .args(["--host", "127.0.0.1", "--port", &address.port().to_string()])
             .env("PYTHONUNBUFFERED", "1")
+            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -114,19 +116,19 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        if !matches!(self.child.try_wait(), Ok(None)) {
-            return;
-        }
-        // Let the pipeline release its models; force it only if it hangs.
-        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        // The Drama-3 runner also owns a native child. Stop its whole process group,
+        // including descendants left behind if the Python process failed at startup.
+        let group = -(self.child.id() as libc::pid_t);
+        unsafe { libc::kill(group, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if !matches!(self.child.try_wait(), Ok(None)) {
+                unsafe { libc::kill(group, libc::SIGKILL) };
                 return;
             }
             thread::sleep(Duration::from_millis(50));
         }
-        let _ = self.child.kill();
+        unsafe { libc::kill(group, libc::SIGKILL) };
         let _ = self.child.wait();
     }
 }
@@ -477,6 +479,36 @@ pub(super) fn converse(
 mod tests {
     use super::*;
     use std::sync::{Arc, atomic::Ordering};
+
+    #[test]
+    fn failed_runner_does_not_leave_its_native_child_running() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 60 >/dev/null 2>&1 & echo $!; exit 7"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let descendant: libc::pid_t = line.trim().parse().unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(7));
+        drop(Server {
+            child,
+            output: Arc::default(),
+            readers: Vec::new(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(descendant, 0) } == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let stopped = unsafe { libc::kill(descendant, 0) } < 0;
+        if !stopped {
+            unsafe { libc::kill(descendant, libc::SIGKILL) };
+        }
+        assert!(stopped, "The failed runner left its native child running");
+    }
 
     fn send(socket: &mut WebSocket<TcpStream>, value: Value) {
         socket
