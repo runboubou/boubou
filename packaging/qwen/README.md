@@ -10,7 +10,9 @@ cargo fetch --locked
 python3 -B packaging/build-macos.py --qwen "$candidate"
 ```
 
-The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK and Kokoro phonemizer data. The first `pull` fetches verified speech and language model weights. Every profile reuses the same runner and Qwen3.5-4B-4bit language model; `kokoro:82m` speaks with the American English `af_heart` voice, `phonon:31m-en` speaks on the CPU, `supertonic:3` speaks English with Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` speaks English on the CPU with a speaker that ChatTTS samples at random on each start. Each `pocket-tts:<config>` profile runs one Pocket TTS 4.0.1 stock config on the CPU with the SDK's default voice for its language, and the language model replies in that language. `boubou list` shows the 26 configs; the `english` alias is `pocket-tts:english_2026-10`. Each of the seven `kitten-tts:<checkpoint>` profiles runs one KittenTTS ONNX checkpoint on the CPU with the `expr-voice-3-m` voice. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK and Kokoro phonemizer data. The first `pull` fetches only the selected profile's verified speech and language model weights. Profiles reuse the same runner; original profiles retain Qwen3.5-4B-4bit. The [curated English runtimes](runtimes.json) select fixed 2B, 4B, 9B or 27B LLMs with their STT and TTS. That catalog is shared by the client, asset locking and runner argument construction. Its recommended memory groups and reserved-memory budgets are estimates, not validated hardware minima or quality rankings.
+
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses a CPU speaker sampled at startup. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Record the machine and measurements in [#29](https://github.com/entropyai-labs/boubou/issues/29) for CustomVoice and [#34](https://github.com/entropyai-labs/boubou/issues/34) for the other families.
 
@@ -40,7 +42,7 @@ Choose a Whisper entry explicitly for Chinese or Chinese/English conversations:
 Whisper entries detect the input language and reply in that language. Qwen3-TTS
 uses automatic synthesis language and the `Vivian` voice in these entries;
 its default entries keep English with `Aiden`. ChatTTS samples a speaker at
-startup. Other profiles retain Parakeet.
+startup. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
 
 A profile downloads only its selected recognizer. Paired entries share TTS
 weights and the same 4-bit Qwen3.5-4B language model. Whisper adds recognition
@@ -57,6 +59,5 @@ not switch this package's STT engine.
 
 The upstream framework supports `mlx-lm`, `transformers`, `responses-api` and
 `chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` and the
-pinned 4B checkpoint. Smaller and larger checkpoints, and other inference
-backends, require a separately configured developer runtime; they are not
-additional downloads in the default package.
+pinned checkpoints selected by each complete runtime. Other component combinations
+and inference backends require a separately configured developer runtime.

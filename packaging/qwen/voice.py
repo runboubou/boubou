@@ -72,9 +72,15 @@ def arguments(model_id, cache, manifest, work):
     cache = Path(cache).resolve()
     bundle = Path(__file__).resolve().parent
     files = json.loads(Path(manifest).read_text())
+    presets = json.loads((bundle / "runtimes.json").read_text())
+    preset = next((preset for preset in presets if preset["id"] == model_id), None)
+    tts_id = preset["tts"] if preset else model_id
     multilingual = model_id.endswith("-whisper") or model_id == "chattts:whisper"
-    recognizer = ("models--mlx-community--whisper-large-v3-turbo" if multilingual
-                  else "models--mlx-community--parakeet-tdt-0.6b-v3")
+    tiny = preset is not None and preset["stt"] == "whisper-tiny"
+    recognizer = ("models--openai--whisper-tiny" if tiny else
+                  "models--mlx-community--whisper-large-v3-turbo" if multilingual else
+                  "models--mlx-community--parakeet-tdt-0.6b-v3")
+    llm = "models--mlx-community--" + (preset["llm"] if preset else "Qwen3.5-4B-4bit")
     snapshots, owned = {}, []
     for entry in files:
         if entry.get("profile", model_id) != model_id or model_id not in entry.get("profiles", [model_id]):
@@ -86,7 +92,7 @@ def arguments(model_id, cache, manifest, work):
             alias = work / parts[1].removeprefix("models--mlx-community--")
             alias.symlink_to(cache.joinpath(*parts[:4]), target_is_directory=True)
             snapshots[parts[1]] = str(alias)
-            if ("profile" in entry or "profiles" in entry) and parts[1] != recognizer:
+            if ("profile" in entry or "profiles" in entry) and parts[1] not in (recognizer, llm):
                 owned.append(str(alias))
         elif entry.get("profile") == model_id and parts[-2] == "embeddings":
             # Pocket TTS loads its weights by Hub path; its preset voice state is the owned file.
@@ -103,7 +109,11 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "NLTK_DATA": str(bundle / "nltk_data"),
     })
-    if multilingual:
+    if tiny:
+        stt = ["--stt", "whisper", "--stt_model_name", snapshots[recognizer],
+               "--stt_device", "mps", "--stt_torch_dtype", "float16",
+               "--language", "en", "--stt_gen_task", "transcribe"]
+    elif multilingual:
         # MLX's Whisper conversion omits its processor. Combine the two pinned snapshots
         # in temporary storage, keeping the verified cache and installed runtime unchanged.
         whisper = work / "whisper"
@@ -116,7 +126,7 @@ def arguments(model_id, cache, manifest, work):
         stt = ["--stt", "mlx-audio-whisper", "--mlx_audio_whisper_model_name", str(whisper), "--language", "auto"]
     else:
         stt = ["--stt", "parakeet-tdt", "--parakeet_tdt_model_name", snapshots[recognizer]]
-    speech = TTS[model_id.split(":")[0]](tts)
+    speech = TTS[tts_id.split(":")[0]](tts)
     if multilingual:
         if model_id.startswith("qwen3-tts:"):
             speech[speech.index("--qwen3_tts_language") + 1] = "auto"
@@ -126,7 +136,7 @@ def arguments(model_id, cache, manifest, work):
         "--mac-optimal-settings",
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),
         *stt,
-        "--llm_backend", "mlx-lm", "--model_name", snapshots["models--mlx-community--Qwen3.5-4B-4bit"],
+        "--llm_backend", "mlx-lm", "--model_name", snapshots[llm],
         *speech,
     ]
 

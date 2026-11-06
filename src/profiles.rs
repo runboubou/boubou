@@ -1,4 +1,26 @@
 use clap::builder::{PossibleValuesParser, TypedValueParser};
+use serde::Deserialize;
+use std::sync::OnceLock;
+
+/// Complete English speech pipelines, shared with asset locking and the packaged runner.
+#[derive(Deserialize)]
+pub struct Preset {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub tts: &'static str,
+    pub stt: &'static str,
+    pub llm: &'static str,
+    pub recommended_memory_gib: u64,
+    pub memory_gib: u64,
+}
+
+pub fn presets() -> &'static [Preset] {
+    static PRESETS: OnceLock<Vec<Preset>> = OnceLock::new();
+    PRESETS.get_or_init(|| {
+        serde_json::from_str(include_str!("../packaging/qwen/runtimes.json"))
+            .expect("valid bundled runtime catalog")
+    })
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Download<'a> {
@@ -281,6 +303,12 @@ impl Model {
             .copied()
             .map(Self::Liquid)
             .chain(qwen.iter().copied().map(Self::Qwen))
+            .chain(
+                presets()
+                    .iter()
+                    .filter(move |preset| !qwen.is_empty() && !qwen.contains(&preset.id))
+                    .map(|preset| Self::Qwen(preset.id)),
+            )
     }
 
     pub fn find(id: &str) -> Option<Self> {

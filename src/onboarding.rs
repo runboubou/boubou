@@ -39,6 +39,7 @@ pub struct Selection {
 }
 
 struct Device {
+    chip: Option<String>,
     apple_silicon: bool,
     macos: (u32, u32, u32),
     memory: u64,
@@ -94,6 +95,14 @@ impl Device {
             "Cannot check free space on the model cache volume."
         );
         Ok(Self {
+            chip: std::process::Command::new("/usr/sbin/sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty()),
             apple_silicon: cfg!(target_arch = "aarch64"),
             macos: qwen::macos_version()?,
             memory,
@@ -132,7 +141,7 @@ impl Device {
 
     fn summary(&self) -> Vec<String> {
         let chip = if self.apple_silicon {
-            "Apple Silicon"
+            self.chip.as_deref().unwrap_or("Apple Silicon")
         } else {
             "Unsupported architecture"
         };
@@ -162,6 +171,7 @@ struct Setup {
     voice: &'static str,
     memory: u64,
     resources: qwen::Requirements,
+    recommended_memory_gib: u64,
 }
 
 impl Setup {
@@ -169,11 +179,12 @@ impl Setup {
         match language {
             Language::English => Ok(Self {
                 model: Model::Liquid(&profiles::DEFAULT),
-                voice: "English / default voice",
+                voice: "Liquid / integrated English voice",
                 memory: profiles::DEFAULT
                     .memory_budget
                     .context("No memory estimate for this voice")?,
                 resources: liquid_requirements(&profiles::DEFAULT, cache),
+                recommended_memory_gib: 16,
             }),
             Language::Chinese => Ok(Self {
                 model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
@@ -183,9 +194,24 @@ impl Setup {
                 memory: 12 * GIB,
                 resources: qwen::requirements("qwen3-tts:0.6b-customvoice-whisper", cache)
                     .context("Cannot check the Chinese voice setup")?,
+                recommended_memory_gib: 16,
             }),
         }
     }
+}
+
+fn recommendations<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
+    let mut choices: Vec<_> = setups
+        .iter()
+        .filter(|setup| {
+            (device.memory >= setup.recommended_memory_gib * GIB
+                || matches!(setup.model, Model::Liquid(_)))
+                && device.check(setup).is_ok()
+        })
+        .collect();
+    // Prefer the capacity group this Mac can support; keep curated order within each group.
+    choices.sort_by_key(|setup| std::cmp::Reverse(setup.recommended_memory_gib));
+    choices
 }
 
 fn liquid_requirements(model: &Profile, cache: &Path) -> qwen::Requirements {
@@ -273,7 +299,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
 
 pub fn start(cache: &Path) -> Result<Selection> {
     let mut screen = Screen::enter()?;
-    loop {
+    'language: loop {
         let language = match screen.choose(
             "Choose your conversation language",
             &["Boubou will check this Mac before downloading anything.".into()],
@@ -298,21 +324,6 @@ pub fn start(cache: &Path) -> Result<Selection> {
             }
             None => return Err(Cancelled.into()),
         };
-        let setup = match Setup::for_language(language, cache) {
-            Ok(setup) => setup,
-            Err(error) => {
-                let mut details: Vec<_> = error.chain().map(ToString::to_string).collect();
-                details
-                    .push("Use a package with Chinese voice chat, or fix the cache error.".into());
-                details.push("Then select the language again.".into());
-                screen.choose(
-                    "This voice setup is unavailable",
-                    &details,
-                    &["Change language".into()],
-                )?;
-                continue;
-            }
-        };
         loop {
             let device = match Device::detect(cache) {
                 Ok(device) => device,
@@ -328,9 +339,44 @@ pub fn start(cache: &Path) -> Result<Selection> {
                     break;
                 }
             };
+            let setup = match Setup::for_language(language, cache) {
+                Ok(setup) => setup,
+                Err(error) => {
+                    let mut details: Vec<_> = error.chain().map(ToString::to_string).collect();
+                    details.push(
+                        "Use a package with Chinese voice chat, or fix the cache error.".into(),
+                    );
+                    details.push("Then select the language again.".into());
+                    screen.choose(
+                        "This voice setup is unavailable",
+                        &details,
+                        &["Change language".into()],
+                    )?;
+                    continue 'language;
+                }
+            };
+            let mut setups = vec![setup];
+            let mut unavailable = Vec::new();
+            if matches!(language, Language::English) && qwen::packaged() {
+                for preset in profiles::presets() {
+                    match qwen::requirements(preset.id, cache) {
+                        Ok(resources) => setups.push(Setup {
+                            model: Model::Qwen(preset.id),
+                            voice: preset.label,
+                            memory: preset.memory_gib * GIB,
+                            resources,
+                            recommended_memory_gib: preset.recommended_memory_gib,
+                        }),
+                        Err(error) => unavailable.push(format!("{}: {error}", preset.id)),
+                    }
+                }
+            }
             let mut details = device.summary();
-            if let Err(error) = device.check(&setup) {
-                details.push(error.to_string());
+            let choices = recommendations(&device, &setups);
+            if choices.is_empty() {
+                if let Err(error) = device.check(&setups[0]) {
+                    details.push(error.to_string());
+                }
                 details.push(
                     "No download has started. Choose a different voice or check again.".into(),
                 );
@@ -344,8 +390,45 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 }
                 break;
             }
+            details.push("Estimated fit for this Mac's memory group and current resources.".into());
+            details.push("Larger language models can take longer to answer.".into());
+            if let Some(error) = unavailable.first() {
+                details.push(format!("Some packaged options are unavailable: {error}"));
+            }
+            let rows: Vec<_> = choices
+                .iter()
+                .enumerate()
+                .map(|(i, setup)| {
+                    format!(
+                        "{}{}",
+                        if i == 0 { "Recommended: " } else { "" },
+                        setup.voice
+                    )
+                })
+                .collect();
+            let Some(selected) = screen.choose("Choose a runtime for this Mac", &details, &rows)?
+            else {
+                break;
+            };
+            let setup = choices[selected];
+            let mut details = device.summary();
+            if let Some(preset) = profiles::presets()
+                .iter()
+                .find(|preset| preset.id == setup.model.id())
+            {
+                details.extend([
+                    format!("STT: {} / LLM: {}", preset.stt, preset.llm),
+                    format!("TTS: {} / English", preset.tts),
+                ]);
+            } else if matches!(setup.model, Model::Liquid(_)) {
+                details.push("Liquid handles speech input, conversation and speech output.".into());
+            }
             details.extend([
                 setup.voice.into(),
+                format!(
+                    "Recommended Mac memory: {} GiB or more",
+                    setup.recommended_memory_gib
+                ),
                 format!(
                     "Estimated speech + conversation memory: {:.0} GiB",
                     setup.memory as f64 / GIB as f64
@@ -355,23 +438,23 @@ pub fn start(cache: &Path) -> Result<Selection> {
                     setup.resources.download as f64 / 1_000_000_000.0,
                     setup.resources.disk as f64 / 1_000_000_000.0
                 ),
-                "8/16 GiB Macs: estimated fit only, not hardware-validated.".into(),
+                "Memory budgets are estimates; smaller Macs are not hardware-validated.".into(),
                 "Speed and stability vary. Cached files are verified before use.".into(),
                 "Downloads need internet; speech processing stays on this Mac.".into(),
             ]);
             if screen.choose(
-                "Recommended voice setup",
+                "Review this runtime",
                 &details,
                 &[
                     "Download, verify and start".into(),
-                    "Change language".into(),
+                    "Back to runtime choices".into(),
                 ],
             )? != Some(0)
             {
-                break;
+                continue;
             }
             // A user may leave the confirmation screen open while other apps consume memory.
-            if let Err(error) = Device::detect(cache).and_then(|device| device.check(&setup)) {
+            if let Err(error) = Device::detect(cache).and_then(|device| device.check(setup)) {
                 screen.choose(
                     "Resources changed before startup",
                     &[error.to_string()],
@@ -496,8 +579,10 @@ impl Screen {
                 self.line(5 + i as u16, detail, None)?;
             }
             let first = 6 + details.len() as u16;
+            let visible = ((terminal::size()?.1.saturating_sub(first + 3)) / 2).max(1) as usize;
+            let offset = selected / visible * visible;
             let mut row_index = first;
-            for (i, row) in rows.iter().enumerate() {
+            for (i, row) in rows.iter().enumerate().skip(offset).take(visible) {
                 for (part, line) in row.lines().enumerate() {
                     self.line(
                         row_index,
@@ -510,6 +595,18 @@ impl Screen {
                     row_index += 1;
                 }
                 row_index += 1;
+            }
+            if rows.len() > visible {
+                self.line(
+                    row_index,
+                    &format!(
+                        "Showing {}-{} of {} choices",
+                        offset + 1,
+                        (offset + visible).min(rows.len()),
+                        rows.len()
+                    ),
+                    None,
+                )?;
             }
             self.line(
                 row_index + 1,
@@ -604,6 +701,105 @@ mod tests {
     use super::*;
     use crate::profiles::DEFAULT;
 
+    fn catalog_setups() -> Vec<Setup> {
+        let mut setups = vec![
+            Setup::for_language(Language::English, Path::new("/nonexistent-boubou-cache")).unwrap(),
+        ];
+        setups.extend(profiles::presets().iter().map(|preset| Setup {
+            model: Model::Qwen(preset.id),
+            voice: preset.label,
+            memory: preset.memory_gib * GIB,
+            resources: qwen::Requirements {
+                min_macos: (15, 0, 0),
+                download: GIB,
+                disk: GIB,
+            },
+            recommended_memory_gib: preset.recommended_memory_gib,
+        }));
+        setups
+    }
+
+    #[test]
+    fn recommends_distinct_complete_runtimes_for_each_memory_group() {
+        let setups = catalog_setups();
+        for (total, expected_first, expected_count) in [
+            (16, DEFAULT.id, 2),
+            (18, DEFAULT.id, 2),
+            (24, DEFAULT.id, 2),
+            (32, "kokoro:82m", 4),
+            (36, "kokoro:82m", 4),
+            (48, "kokoro:82m", 4),
+            (64, "kokoro:82m-9b", 6),
+            (96, "kokoro:82m-9b", 6),
+            (128, "kokoro:82m-27b", 8),
+        ] {
+            for chip in ["Apple M1", "Apple M2", "Apple M4"] {
+                let device = Device {
+                    chip: Some(chip.into()),
+                    apple_silicon: true,
+                    macos: (15, 0, 0),
+                    memory: total * GIB,
+                    available: (total - 4) * GIB,
+                    disk: 100 * GIB,
+                };
+                let choices = recommendations(&device, &setups);
+                assert_eq!(choices.len(), expected_count, "{total} GiB / {chip}");
+                assert_eq!(choices[0].model.id(), expected_first);
+                assert!(choices.iter().any(|setup| setup.model.id() == DEFAULT.id));
+            }
+        }
+    }
+
+    #[test]
+    fn busy_high_memory_macs_offer_only_currently_usable_choices() {
+        let setups = catalog_setups();
+        let mut device = Device {
+            chip: None,
+            apple_silicon: true,
+            macos: (15, 0, 0),
+            memory: 128 * GIB,
+            available: 15 * GIB,
+            disk: 100 * GIB,
+        };
+        assert_eq!(
+            recommendations(&device, &setups)[0].model.id(),
+            "kokoro:82m"
+        );
+        device.available = 7 * GIB;
+        let choices = recommendations(&device, &setups);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].model.id(), DEFAULT.id);
+        device.available = 5 * GIB;
+        assert!(recommendations(&device, &setups).is_empty());
+    }
+
+    #[test]
+    fn recommendation_filters_os_architecture_and_cache_disk() {
+        let setups = catalog_setups();
+        let mut device = Device {
+            chip: None,
+            apple_silicon: true,
+            macos: (14, 7, 0),
+            memory: 128 * GIB,
+            available: 100 * GIB,
+            disk: 100 * GIB,
+        };
+        assert_eq!(recommendations(&device, &setups).len(), 1);
+        device.macos = (13, 2, 9);
+        assert!(recommendations(&device, &setups).is_empty());
+        device.macos = (15, 0, 0);
+        device.apple_silicon = false;
+        assert!(recommendations(&device, &setups).is_empty());
+        device.apple_silicon = true;
+        device.disk = 0;
+        assert!(recommendations(&device, &setups).is_empty());
+        device.disk = GIB;
+        assert_eq!(
+            recommendations(&device, &setups)[0].model.id(),
+            "kokoro:82m-27b"
+        );
+    }
+
     #[test]
     fn accepts_model_and_website_commands_without_running_a_shell() {
         for command in [
@@ -650,6 +846,7 @@ mod tests {
         let setup = Setup::for_language(Language::English, &cache).unwrap();
         assert_eq!(setup.model.id(), DEFAULT.id);
         let mut device = Device {
+            chip: None,
             apple_silicon: true,
             macos: (13, 3, 0),
             memory: 8 * GIB,
@@ -706,6 +903,7 @@ mod tests {
         let setup = Setup {
             model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
             voice: "Chinese / Vivian",
+            recommended_memory_gib: 16,
             memory: 12 * GIB,
             resources: qwen::Requirements {
                 min_macos: (15, 0, 0),
@@ -714,6 +912,7 @@ mod tests {
             },
         };
         let mut device = Device {
+            chip: None,
             apple_silicon: true,
             macos: (15, 0, 0),
             memory: 8 * GIB,

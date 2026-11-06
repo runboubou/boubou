@@ -23,15 +23,21 @@ For the guided start, use a source build or a package built from this checkout:
 boubou
 ```
 
-Choose English or Chinese, review the detected Mac, voice and estimated resource
-needs, then confirm the download and start talking. English uses the default
-voice. Chinese uses Vivian, also understands English, and requires macOS 15+
+Choose English or Chinese, review the detected Mac and choose a complete runtime,
+then confirm its components, estimated resource needs and download. English
+choices grow across the 16, 32, 64 and 128 GiB memory groups, including Liquid
+and [fixed STT/LLM/TTS combinations](packaging/qwen/runtimes.json). Higher groups
+retain lighter choices. The list filters by current available memory, macOS
+and cache disk space; a busy high-memory Mac can receive a lighter recommendation.
+Chinese uses Vivian, also understands English, and requires macOS 15+
 and a [package with the shared voice runner](packaging/qwen/README.md).
 Builds without that runner offer English and explain why Chinese is unavailable.
 The menu uses arrow keys and Enter; Esc goes back and Ctrl+C exits.
 It checks architecture, macOS, total and available memory, and cache disk space
-before downloading. Resource fit is an estimate; 8/16 GiB Macs have not been
-hardware-validated, and speed or stability is not guaranteed. If startup fails,
+before downloading and rechecks resources when starting the selected runtime.
+Memory groups and runtime budgets are estimates, not measured hardware minima.
+Smaller Macs have not been hardware-validated, and larger models can take longer
+to answer. If startup fails,
 follow the error's recovery steps and reopen `boubou` to check again and resume
 downloads. Set `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb`
 print help. The developer entry accepts a model name or run command.

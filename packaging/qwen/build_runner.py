@@ -56,6 +56,7 @@ def main():
                         "--require-hashes", "--no-deps", "--no-compile", "-r", HERE / "requirements-macos.lock"], check=True)
         subprocess.run([python, "-I", "-B", "-m", "pip", "check"], check=True)
         shutil.copy2(HERE / "voice.py", root)
+        shutil.copy2(HERE / "runtimes.json", root)
         shutil.copy2(HERE / "requirements-macos.lock", root)
         provenance = install(root)
         provenance.update(python_url=PYTHON, python_sha256=PYTHON_SHA,

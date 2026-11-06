@@ -211,7 +211,7 @@ fn guided_start_navigates_recommendations_and_restores_the_terminal() {
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
     prompt.send(b"\r");
     prompt.expect(&[
-        "Recommended voice setup",
+        "Choose a runtime for this Mac",
         "This voice cannot start on this Mac",
         "Device check unavailable",
     ]);
@@ -730,6 +730,71 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
             env!("CARGO_MANIFEST_DIR"),
             "/packaging/qwen/voice.py"
         ))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn curated_runtimes_prepare_and_launch_only_their_selected_components() {
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import json, runpy, sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+root = Path(sys.argv[1])
+presets = json.loads((root / 'runtimes.json').read_text())
+assert len({p['id'] for p in presets}) == len(presets)
+assert {p['recommended_memory_gib'] for p in presets} == {16, 32, 64, 128}
+for preset in presets:
+    assert preset['memory_gib'] + 2 <= preset['recommended_memory_gib']
+
+snapshot = lambda repo: f'hub/models--{repo}/snapshots/pinned/config.json'
+legacy = ['kokoro:82m', 'qwen3-tts:1.7b-customvoice', 'qwen3-tts:0.6b-customvoice']
+files = [
+    {'path': snapshot('mlx-community--parakeet-tdt-0.6b-v3'), 'profiles': legacy},
+    *[{'path': snapshot(f'mlx-community--Qwen3.5-{n}B-4bit')} for n in [2, 4, 9, 27]],
+    {'path': snapshot('mlx-community--Kokoro-82M-bf16'), 'profile': legacy[0]},
+    {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit'), 'profile': legacy[1]},
+    {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit'), 'profile': legacy[2]},
+]
+lock = runpy.run_path(str(root / 'lock_models.py'))['with_runtime_profiles']
+lock.__globals__['snapshot'] = lambda *args: iter([{'path': snapshot('openai--whisper-tiny')}])
+files = lock(files)
+arguments = runpy.run_path(str(root / 'voice.py'))['arguments']
+with TemporaryDirectory() as folder:
+    cache = Path(folder)
+    manifest = cache / 'models.json'
+    manifest.write_text(json.dumps(files))
+    for i, preset in enumerate(presets):
+        selected = [f for f in files if preset['id'] in f['profiles']]
+        assert len(selected) == 3, (preset['id'], selected)
+        assert len([f for f in selected if 'Qwen3.5-' in f['path']]) == 1
+        work = cache / str(i)
+        work.mkdir()
+        argv = arguments(preset['id'], cache, manifest, work)
+        llm = argv[argv.index('--model_name') + 1]
+        assert Path(llm).name == preset['llm'], argv
+        if preset['stt'] == 'whisper-tiny':
+            assert argv[argv.index('--stt') + 1] == 'whisper'
+            assert '--parakeet_tdt_model_name' not in argv
+            assert Path(argv[argv.index('--stt_model_name') + 1]).name == 'models--openai--whisper-tiny'
+        else:
+            assert argv[argv.index('--stt') + 1] == 'parakeet-tdt'
+        assert argv[argv.index('--tts') + 1] == ('kokoro' if preset['tts'].startswith('kokoro:') else 'qwen3')
+        assert len(list(work.iterdir())) == 3
+    for id in legacy:
+        selected = [f for f in files if id in f['profiles']]
+        assert len(selected) == 3 and any('Qwen3.5-4B-4bit' in f['path'] for f in selected)
+"#,
+        )
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen"))
         .output()
         .unwrap();
     assert!(
