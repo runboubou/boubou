@@ -27,8 +27,10 @@ Choose English or Chinese, review the detected Mac and choose a complete runtime
 then confirm its components, estimated resource needs and download. English
 choices grow across the 16, 32, 64 and 128 GiB memory groups, including Liquid
 and [fixed STT/LLM/TTS combinations](packaging/qwen/runtimes.json). Higher groups
-retain lighter choices. The list filters by current available memory, macOS
-and cache disk space; a busy high-memory Mac can receive a lighter recommendation.
+retain lighter choices. Liquid is the baseline; modular combinations are labeled
+as trials pending listening and interaction acceptance. Memory capacity controls
+eligibility, not quality ranking. The list filters by current available memory,
+macOS and cache disk space.
 Chinese uses Vivian, also understands English, and requires macOS 15+
 and a [package with the shared voice runner](packaging/qwen/README.md).
 Builds without that runner offer English and explain why Chinese is unavailable.

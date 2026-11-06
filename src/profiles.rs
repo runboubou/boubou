@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 pub struct Preset {
     pub id: &'static str,
     pub label: &'static str,
+    pub guided: bool,
     pub tts: &'static str,
     pub stt: &'static str,
     pub llm: &'static str,

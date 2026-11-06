@@ -172,6 +172,7 @@ struct Setup {
     memory: u64,
     resources: qwen::Requirements,
     recommended_memory_gib: u64,
+    guided: bool,
 }
 
 impl Setup {
@@ -185,6 +186,7 @@ impl Setup {
                     .context("No memory estimate for this voice")?,
                 resources: liquid_requirements(&profiles::DEFAULT, cache),
                 recommended_memory_gib: 16,
+                guided: true,
             }),
             Language::Chinese => Ok(Self {
                 model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
@@ -195,22 +197,29 @@ impl Setup {
                 resources: qwen::requirements("qwen3-tts:0.6b-customvoice-whisper", cache)
                     .context("Cannot check the Chinese voice setup")?,
                 recommended_memory_gib: 16,
+                guided: true,
             }),
         }
     }
 }
 
-fn recommendations<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
+fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
     let mut choices: Vec<_> = setups
         .iter()
         .filter(|setup| {
-            (device.memory >= setup.recommended_memory_gib * GIB
-                || matches!(setup.model, Model::Liquid(_)))
+            setup.guided
+                && (device.memory >= setup.recommended_memory_gib * GIB
+                    || matches!(setup.model, Model::Liquid(_)))
                 && device.check(setup).is_ok()
         })
         .collect();
-    // Prefer the capacity group this Mac can support; keep curated order within each group.
-    choices.sort_by_key(|setup| std::cmp::Reverse(setup.recommended_memory_gib));
+    // Keep the baseline first. Capacity orders trial options, not voice quality.
+    choices.sort_by_key(|setup| {
+        (
+            matches!(setup.model, Model::Qwen(_)),
+            std::cmp::Reverse(setup.recommended_memory_gib),
+        )
+    });
     choices
 }
 
@@ -366,13 +375,14 @@ pub fn start(cache: &Path) -> Result<Selection> {
                             memory: preset.memory_gib * GIB,
                             resources,
                             recommended_memory_gib: preset.recommended_memory_gib,
+                            guided: preset.guided,
                         }),
                         Err(error) => unavailable.push(format!("{}: {error}", preset.id)),
                     }
                 }
             }
             let mut details = device.summary();
-            let choices = recommendations(&device, &setups);
+            let choices = available_setups(&device, &setups);
             if choices.is_empty() {
                 if let Err(error) = device.check(&setups[0]) {
                     details.push(error.to_string());
@@ -391,17 +401,23 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 break;
             }
             details.push("Estimated fit for this Mac's memory group and current resources.".into());
-            details.push("Larger language models can take longer to answer.".into());
+            details.push(
+                "Trial combinations need listening tests; larger models are not quality scores."
+                    .into(),
+            );
             if let Some(error) = unavailable.first() {
                 details.push(format!("Some packaged options are unavailable: {error}"));
             }
             let rows: Vec<_> = choices
                 .iter()
-                .enumerate()
-                .map(|(i, setup)| {
+                .map(|setup| {
                     format!(
-                        "{}{}",
-                        if i == 0 { "Recommended: " } else { "" },
+                        "{}: {}",
+                        if matches!(setup.model, Model::Liquid(_)) {
+                            "Baseline"
+                        } else {
+                            "Trial"
+                        },
                         setup.voice
                     )
                 })
@@ -439,7 +455,11 @@ pub fn start(cache: &Path) -> Result<Selection> {
                     setup.resources.disk as f64 / 1_000_000_000.0
                 ),
                 "Memory budgets are estimates; smaller Macs are not hardware-validated.".into(),
-                "Speed and stability vary. Cached files are verified before use.".into(),
+                if matches!(setup.model, Model::Qwen(_)) {
+                    "Trial configuration: voice quality has not been accepted.".into()
+                } else {
+                    "Speed and stability vary. Cached files are verified before use.".into()
+                },
                 "Downloads need internet; speech processing stays on this Mac.".into(),
             ]);
             if screen.choose(
@@ -715,23 +735,24 @@ mod tests {
                 disk: GIB,
             },
             recommended_memory_gib: preset.recommended_memory_gib,
+            guided: preset.guided,
         }));
         setups
     }
 
     #[test]
-    fn recommends_distinct_complete_runtimes_for_each_memory_group() {
+    fn offers_baseline_and_eligible_trials_without_promoting_capacity_to_quality() {
         let setups = catalog_setups();
         for (total, expected_first, expected_count) in [
             (16, DEFAULT.id, 2),
             (18, DEFAULT.id, 2),
             (24, DEFAULT.id, 2),
-            (32, "kokoro:82m", 4),
-            (36, "kokoro:82m", 4),
-            (48, "kokoro:82m", 4),
-            (64, "kokoro:82m-9b", 6),
-            (96, "kokoro:82m-9b", 6),
-            (128, "kokoro:82m-27b", 8),
+            (32, DEFAULT.id, 4),
+            (36, DEFAULT.id, 4),
+            (48, DEFAULT.id, 4),
+            (64, DEFAULT.id, 5),
+            (96, DEFAULT.id, 5),
+            (128, DEFAULT.id, 6),
         ] {
             for chip in ["Apple M1", "Apple M2", "Apple M4"] {
                 let device = Device {
@@ -742,10 +763,16 @@ mod tests {
                     available: (total - 4) * GIB,
                     disk: 100 * GIB,
                 };
-                let choices = recommendations(&device, &setups);
+                let choices = available_setups(&device, &setups);
                 assert_eq!(choices.len(), expected_count, "{total} GiB / {chip}");
                 assert_eq!(choices[0].model.id(), expected_first);
                 assert!(choices.iter().any(|setup| setup.model.id() == DEFAULT.id));
+                assert!(
+                    !choices.iter().any(|setup| matches!(
+                        setup.model.id(),
+                        "kokoro:82m-9b" | "kokoro:82m-27b"
+                    ))
+                );
             }
         }
     }
@@ -761,16 +788,13 @@ mod tests {
             available: 15 * GIB,
             disk: 100 * GIB,
         };
-        assert_eq!(
-            recommendations(&device, &setups)[0].model.id(),
-            "kokoro:82m"
-        );
+        assert_eq!(available_setups(&device, &setups)[0].model.id(), DEFAULT.id);
         device.available = 7 * GIB;
-        let choices = recommendations(&device, &setups);
+        let choices = available_setups(&device, &setups);
         assert_eq!(choices.len(), 1);
         assert_eq!(choices[0].model.id(), DEFAULT.id);
         device.available = 5 * GIB;
-        assert!(recommendations(&device, &setups).is_empty());
+        assert!(available_setups(&device, &setups).is_empty());
     }
 
     #[test]
@@ -784,19 +808,19 @@ mod tests {
             available: 100 * GIB,
             disk: 100 * GIB,
         };
-        assert_eq!(recommendations(&device, &setups).len(), 1);
+        assert_eq!(available_setups(&device, &setups).len(), 1);
         device.macos = (13, 2, 9);
-        assert!(recommendations(&device, &setups).is_empty());
+        assert!(available_setups(&device, &setups).is_empty());
         device.macos = (15, 0, 0);
         device.apple_silicon = false;
-        assert!(recommendations(&device, &setups).is_empty());
+        assert!(available_setups(&device, &setups).is_empty());
         device.apple_silicon = true;
         device.disk = 0;
-        assert!(recommendations(&device, &setups).is_empty());
+        assert!(available_setups(&device, &setups).is_empty());
         device.disk = GIB;
         assert_eq!(
-            recommendations(&device, &setups)[0].model.id(),
-            "kokoro:82m-27b"
+            available_setups(&device, &setups)[0].model.id(),
+            "qwen3-tts:1.7b-customvoice-27b"
         );
     }
 
@@ -904,6 +928,7 @@ mod tests {
             model: Model::Qwen("qwen3-tts:0.6b-customvoice-whisper"),
             voice: "Chinese / Vivian",
             recommended_memory_gib: 16,
+            guided: true,
             memory: 12 * GIB,
             resources: qwen::Requirements {
                 min_macos: (15, 0, 0),

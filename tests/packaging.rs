@@ -406,6 +406,8 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("qwen3-tts:1.7b-customvoice", "English"),
         ("qwen3-tts:0.6b-customvoice", "English"),
         ("kokoro:82m", "English"),
+        ("kokoro:82m-9b", "English"),
+        ("kokoro:82m-27b", "English"),
         ("phonon:31m-en", "English"),
         ("supertonic:3", "English"),
         ("chattts:en", "English"),

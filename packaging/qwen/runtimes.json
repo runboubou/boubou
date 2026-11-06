@@ -6,7 +6,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-27B-4bit",
     "recommended_memory_gib": 128,
-    "memory_gib": 32
+    "memory_gib": 32,
+    "guided": false
   },
   {
     "id": "qwen3-tts:1.7b-customvoice-27b",
@@ -15,7 +16,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-27B-4bit",
     "recommended_memory_gib": 128,
-    "memory_gib": 36
+    "memory_gib": 36,
+    "guided": true
   },
   {
     "id": "kokoro:82m-9b",
@@ -24,7 +26,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-9B-4bit",
     "recommended_memory_gib": 64,
-    "memory_gib": 18
+    "memory_gib": 18,
+    "guided": false
   },
   {
     "id": "qwen3-tts:1.7b-customvoice-9b",
@@ -33,7 +36,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-9B-4bit",
     "recommended_memory_gib": 64,
-    "memory_gib": 22
+    "memory_gib": 22,
+    "guided": true
   },
   {
     "id": "kokoro:82m",
@@ -42,7 +46,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 32,
-    "memory_gib": 12
+    "memory_gib": 12,
+    "guided": true
   },
   {
     "id": "qwen3-tts:1.7b-customvoice",
@@ -51,7 +56,8 @@
     "stt": "parakeet-tdt-0.6b-v3",
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 32,
-    "memory_gib": 16
+    "memory_gib": 16,
+    "guided": true
   },
   {
     "id": "qwen3-tts:0.6b-customvoice-2b-tiny",
@@ -60,6 +66,7 @@
     "stt": "whisper-tiny",
     "llm": "Qwen3.5-2B-4bit",
     "recommended_memory_gib": 16,
-    "memory_gib": 8
+    "memory_gib": 8,
+    "guided": true
   }
 ]
