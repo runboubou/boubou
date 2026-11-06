@@ -594,13 +594,10 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
 }
 
 #[test]
-fn npm_exposes_both_commands_through_the_same_launcher() {
+fn npm_exposes_the_product_name() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
-    assert_eq!(
-        manifest["bin"],
-        serde_json::json!({"bobo":"cli.cjs", "boubou":"cli.cjs"})
-    );
+    assert_eq!(manifest["bin"], serde_json::json!({"boubou":"cli.cjs"}));
 }
 
 #[test]

@@ -20,10 +20,10 @@ resumes and Ctrl+C exits. Use `--offline` for cached assets only.
 After installing a package built from this checkout, open the guided interface:
 
 ```sh
-bobo
+boubou
 ```
 
-`boubou` opens the same interface. Source builds can use `cargo run --locked`.
+Source builds can use `cargo run --locked`.
 
 Boubou checks this Mac and opens an English voice menu. With the shared runner
 packaged, it prefers Qwen's fixed Aiden voice with Qwen3.5-4B when resources
