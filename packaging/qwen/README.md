@@ -14,8 +14,10 @@ The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK
 and phonemizer data. The first `pull` fetches only the selected profile's verified
 weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
 shared by the client, asset locking and runner arguments. Its `guided` entries
-are Qwen 0.6B CustomVoice with fixed Aiden and Meta MMS English, both using
-Parakeet and Qwen3.5-4B. The client also offers Liquid's integrated voice.
+are Qwen 0.6B and 1.7B CustomVoice with fixed Aiden, Pocket TTS English
+(`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
+Qwen3.5-4B. The client also offers Liquid Audio and Liquid Omni integrated
+voices, preferring Audio within that family.
 
 Guided startup uses English. Other voices, Whisper language modes and the 2B,
 9B and 27B LLM combinations require explicit developer selection. Memory groups
@@ -40,9 +42,9 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pock
 
 ## Other English TTS families
 
-These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit. MMS is also offered in the
-guided menu. OmniVoice and Drama-3 require explicit developer selection; their
-current profiles do not fix a speaker identity.
+These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit and require explicit
+developer selection. MMS is excluded from guided recommendations. The current
+OmniVoice and Drama-3 profiles do not fix a speaker identity.
 
 | ID | Local TTS engine | Weight terms |
 | --- | --- | --- |

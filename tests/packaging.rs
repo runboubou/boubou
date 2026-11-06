@@ -284,17 +284,41 @@ fn guided_start_filters_incompatible_packaged_voices_before_download() {
         .to_string(),
     )
     .unwrap();
-    fs::write(release.join("models.json"), serde_json::json!([
-        {"profile":"qwen3-tts:0.6b-customvoice", "path":"models/qwen.bin", "url":"https://example.invalid/qwen.bin", "size":1, "sha256":"b".repeat(64)},
-        {"profile":"mms-tts:eng", "path":"models/mms.bin", "url":"https://example.invalid/mms.bin", "size":1, "sha256":"c".repeat(64)}
-    ]).to_string()).unwrap();
+    let files: Vec<_> = [
+        "qwen3-tts:0.6b-customvoice",
+        "qwen3-tts:1.7b-customvoice",
+        "pocket-tts:english_2026-10",
+        "phonon:31m-en",
+        "mms-tts:eng",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, id)| {
+        serde_json::json!({
+            "profile": id, "path": format!("models/{index}.bin"),
+            "url": "https://example.invalid/model.bin", "size": 1, "sha256": "b".repeat(64)
+        })
+    })
+    .collect();
+    fs::write(
+        release.join("models.json"),
+        serde_json::to_vec(&files).unwrap(),
+    )
+    .unwrap();
     let mut prompt = Prompt::new(&package, true, &[]);
     prompt.expect(&[
         "Choose an English voice for this Mac",
         "No English voice fits",
         "Device check unavailable",
     ]);
-    assert!(!prompt.output.contains("Qwen / Aiden"));
+    for label in [
+        "Qwen 0.6B / Aiden",
+        "Qwen 1.7B / Aiden",
+        "Pocket TTS English",
+        "Phonon 31M English",
+    ] {
+        assert!(!prompt.output.contains(label));
+    }
     assert!(!prompt.output.contains("Meta MMS / English"));
     assert!(!prompt.output.contains("Chinese"));
     prompt.send(b"\x1b");
@@ -785,7 +809,7 @@ for preset in presets:
     assert preset['memory_gib'] + 2 <= preset['recommended_memory_gib']
 
 snapshot = lambda repo: f'hub/models--{repo}/snapshots/pinned/config.json'
-legacy = ['kokoro:82m', 'qwen3-tts:1.7b-customvoice', 'qwen3-tts:0.6b-customvoice', 'mms-tts:eng']
+legacy = ['kokoro:82m', 'qwen3-tts:1.7b-customvoice', 'qwen3-tts:0.6b-customvoice', 'mms-tts:eng', 'phonon:31m-en', 'pocket-tts:english_2026-10']
 files = [
     {'path': snapshot('mlx-community--parakeet-tdt-0.6b-v3'), 'profiles': legacy},
     *[{'path': snapshot(f'mlx-community--Qwen3.5-{n}B-4bit')} for n in [2, 4, 9, 27]],
@@ -793,6 +817,8 @@ files = [
     {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit'), 'profile': legacy[1]},
     {'path': snapshot('mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit'), 'profile': legacy[2]},
     {'path': snapshot('facebook--mms-tts-eng'), 'profile': legacy[3]},
+    {'path': snapshot('gradium--phonon-31m-en'), 'profile': legacy[4]},
+    {'path': 'hub/models--kyutai--pocket-tts-without-voice-cloning/snapshots/pinned/languages/english_2026-10/embeddings/alba.safetensors', 'profile': legacy[5]},
 ]
 lock = runpy.run_path(str(root / 'lock_models.py'))['with_runtime_profiles']
 lock.__globals__['snapshot'] = lambda *args: iter([{'path': snapshot('openai--whisper-tiny')}])
@@ -817,8 +843,8 @@ with TemporaryDirectory() as folder:
             assert Path(argv[argv.index('--stt_model_name') + 1]).name == 'models--openai--whisper-tiny'
         else:
             assert argv[argv.index('--stt') + 1] == 'parakeet-tdt'
-        assert argv[argv.index('--tts') + 1] == {'kokoro': 'kokoro', 'qwen3-tts': 'qwen3', 'mms-tts': 'facebookMMS'}[preset['tts'].split(':')[0]]
-        assert len(list(work.iterdir())) == 3
+        assert argv[argv.index('--tts') + 1] == {'kokoro': 'kokoro', 'qwen3-tts': 'qwen3', 'mms-tts': 'facebookMMS', 'phonon': 'phonon', 'pocket-tts': 'pocket'}[preset['tts'].split(':')[0]]
+        assert len(list(work.iterdir())) == (2 if preset['tts'].startswith('pocket-tts:') else 3)
     for id in legacy:
         selected = [f for f in files if id in f['profiles']]
         assert len(selected) == 3 and any('Qwen3.5-4B-4bit' in f['path'] for f in selected)

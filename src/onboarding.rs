@@ -169,15 +169,23 @@ struct Setup {
 }
 
 impl Setup {
-    fn liquid(cache: &Path) -> Result<Self> {
+    fn liquid(profile: &'static Profile, cache: &Path) -> Result<Self> {
         Ok(Self {
-            model: Model::Liquid(&profiles::DEFAULT),
-            voice: "Liquid / integrated English voice",
-            memory: profiles::DEFAULT
+            model: Model::Liquid(profile),
+            voice: if profile.id == profiles::OMNI.id {
+                "Liquid Omni 2.17B / integrated English voice"
+            } else {
+                "Liquid Audio 2B / integrated English voice"
+            },
+            memory: profile
                 .memory_budget
                 .context("No memory estimate for this voice")?,
-            resources: liquid_requirements(&profiles::DEFAULT, cache),
-            recommended_memory_gib: 8,
+            resources: liquid_requirements(profile, cache),
+            recommended_memory_gib: if profile.id == profiles::DEFAULT.id {
+                8
+            } else {
+                16
+            },
         })
     }
 }
@@ -314,7 +322,10 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 }
             }
         };
-        let mut setups = vec![Setup::liquid(cache)?];
+        let mut setups = vec![
+            Setup::liquid(&profiles::DEFAULT, cache)?,
+            Setup::liquid(&profiles::OMNI, cache)?,
+        ];
         let mut unavailable = Vec::new();
         if qwen::packaged() {
             for preset in profiles::presets().iter().filter(|preset| preset.guided) {
@@ -373,9 +384,6 @@ pub fn start(cache: &Path) -> Result<Selection> {
             ]);
         } else {
             details.push("Liquid handles speech input, conversation and speech output.".into());
-        }
-        if setup.model.id() == "mms-tts:eng" {
-            details.push("Meta MMS weights allow non-commercial use (CC BY-NC 4.0).".into());
         }
         details.extend([
             setup.voice.into(),
@@ -654,7 +662,10 @@ mod tests {
     use crate::profiles::DEFAULT;
 
     fn catalog_setups() -> Vec<Setup> {
-        let mut setups = vec![Setup::liquid(Path::new("/nonexistent-boubou-cache")).unwrap()];
+        let mut setups = vec![
+            Setup::liquid(&profiles::DEFAULT, Path::new("/nonexistent-boubou-cache")).unwrap(),
+            Setup::liquid(&profiles::OMNI, Path::new("/nonexistent-boubou-cache")).unwrap(),
+        ];
         setups.extend(
             profiles::presets()
                 .iter()
@@ -697,7 +708,17 @@ mod tests {
             let expected = if total == 8 {
                 vec![DEFAULT.id]
             } else {
-                vec!["qwen3-tts:0.6b-customvoice", "mms-tts:eng", DEFAULT.id]
+                let mut ids = vec!["qwen3-tts:0.6b-customvoice"];
+                if total >= 32 {
+                    ids.push("qwen3-tts:1.7b-customvoice");
+                }
+                ids.extend([
+                    "pocket-tts:english_2026-10",
+                    "phonon:31m-en",
+                    DEFAULT.id,
+                    profiles::OMNI.id,
+                ]);
+                ids
             };
             assert_eq!(actual, expected, "{total} GiB");
         }
@@ -719,14 +740,16 @@ mod tests {
             "qwen3-tts:0.6b-customvoice"
         );
         device.available = 11 * GIB;
-        assert_eq!(
-            available_setups(&device, &setups)[0].model.id(),
-            "mms-tts:eng"
-        );
+        assert_eq!(available_setups(&device, &setups)[0].model.id(), DEFAULT.id);
         device.available = 7 * GIB;
         let choices = available_setups(&device, &setups);
-        assert_eq!(choices.len(), 1);
-        assert_eq!(choices[0].model.id(), DEFAULT.id);
+        assert_eq!(
+            choices
+                .iter()
+                .map(|setup| setup.model.id())
+                .collect::<Vec<_>>(),
+            vec![DEFAULT.id, profiles::OMNI.id]
+        );
         device.available = 5 * GIB;
         assert!(available_setups(&device, &setups).is_empty());
     }
@@ -742,7 +765,7 @@ mod tests {
             available: 100 * GIB,
             disk: 100 * GIB,
         };
-        assert_eq!(available_setups(&device, &setups).len(), 1);
+        assert_eq!(available_setups(&device, &setups).len(), 2);
         device.macos = (13, 2, 9);
         assert!(available_setups(&device, &setups).is_empty());
         device.macos = (15, 0, 0);
@@ -802,8 +825,11 @@ mod tests {
     fn english_fit_respects_architecture_os_memory_and_cache_space() {
         let cache =
             std::env::temp_dir().join(format!("boubou-missing-cache-{}", std::process::id()));
-        let setup = Setup::liquid(&cache).unwrap();
+        let setup = Setup::liquid(&profiles::DEFAULT, &cache).unwrap();
         assert_eq!(setup.model.id(), DEFAULT.id);
+        let omni = Setup::liquid(&profiles::OMNI, &cache).unwrap();
+        assert_eq!(omni.model.id(), profiles::OMNI.id);
+        assert!(omni.resources.download > setup.resources.download);
         let mut device = Device {
             chip: None,
             apple_silicon: true,
