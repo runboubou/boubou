@@ -126,6 +126,16 @@ described in [SECURITY.md](SECURITY.md).
 Boubou runs on Apple Silicon Macs today. Support for other platforms needs a
 native audio backend for each one; open an issue before starting on one.
 
+## Contributors
+
+Thanks to everyone who contributes to Boubou.
+
+<a href="https://github.com/runboubou/boubou/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=runboubou/boubou&amp;max=1000&amp;columns=12" alt="Boubou GitHub contributors" />
+</a>
+
+[View GitHub contributors](https://github.com/runboubou/boubou/graphs/contributors) · [Contribute to Boubou](CONTRIBUTING.md)
+
 ## License
 
 Boubou's code is released under the [MIT License](LICENSE).
