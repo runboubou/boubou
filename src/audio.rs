@@ -76,7 +76,7 @@ impl Audio {
         crate::check_cancel(stopped)?;
         let clock = HostClock::new()?;
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/boubou-audio"));
-        let hash = format!("{:x}", Sha256::digest(bytes));
+        let hash = crate::assets::hex(&Sha256::digest(bytes));
         let directory = cache_dir.join("native").join(&hash[..16]);
         fs::create_dir_all(&directory).context("Could not create the native audio cache")?;
         let executable = directory.join("boubou-audio");
