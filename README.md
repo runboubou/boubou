@@ -1,6 +1,6 @@
 # Boubou
 
-Run voice AI locally with open-source models.
+Run voice AI locally with open-source models. Bring it to any device with one command.
 
 Boubou is a command-line tool for talking with an AI out loud. Speech
 recognition, the language model and speech synthesis all run on your own
