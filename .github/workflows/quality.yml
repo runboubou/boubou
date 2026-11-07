@@ -31,4 +31,5 @@ jobs:
           cargo clippy --locked --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets --all-features
           cargo build --locked
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
           clang -O2 -fobjc-arc -mmacosx-version-min=13.0 -framework AVFoundation -framework Foundation -framework CoreAudio native/audio_tests.m -o "$RUNNER_TEMP/boubou-audio-tests"
