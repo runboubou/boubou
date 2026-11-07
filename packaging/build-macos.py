@@ -179,7 +179,7 @@ def main():
             "channel": "development",
             "profiles": output(str(folder / "boubou"), "list").splitlines(),
             "source_commit": source,
-            "source_url": f"https://github.com/entropyai-labs/boubou/commit/{source}",
+            "source_url": f"https://github.com/runboubou/boubou/commit/{source}",
             "target": "aarch64-apple-darwin",
             "rustc": output("rustc", "--version"),
             "node": output("node", "--version"),

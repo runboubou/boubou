@@ -3,7 +3,8 @@ name = "boubou"
 version = "0.1.0-beta.3"
 edition = "2024"
 rust-version = "1.88"
-description = "Local voice conversations, one command away"
+description = "Run voice AI locally with open-source models"
+repository = "https://github.com/runboubou/boubou"
 license = "MIT"
 publish = false
 

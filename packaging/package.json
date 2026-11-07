@@ -1,13 +1,16 @@
 {
   "name": "boubou",
   "version": "0.1.0-beta.3",
-  "description": "Local voice conversations on Apple Silicon Macs",
+  "description": "Run voice AI locally with open-source models",
+  "keywords": ["voice", "voice-assistant", "speech-to-speech", "local-ai", "offline", "llama.cpp"],
+  "homepage": "https://github.com/runboubou/boubou#readme",
+  "bugs": "https://github.com/runboubou/boubou/issues",
   "bin": { "boubou": "cli.cjs" },
   "engines": { "node": ">=18" },
   "os": ["darwin"],
   "cpu": ["arm64"],
   "license": "MIT",
-  "repository": "github:entropyai-labs/boubou",
+  "repository": "github:runboubou/boubou",
   "files": [
     "boubou",
     "cli.cjs",
