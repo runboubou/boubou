@@ -1,79 +1,147 @@
 # Boubou
 
-Local voice conversations on Apple Silicon Macs.
+Run voice AI locally with open-source models. Bring it to any device with one command.
 
-## Run
+Boubou is a command-line tool for talking with an AI out loud. Speech
+recognition, the language model and speech synthesis all run on your own
+machine, so your voice never leaves it. Talk over a reply and Boubou stops to
+listen, the way a person would.
 
-Requires macOS 13.3+, Apple Silicon, Node.js 18+ and npm:
+## Quick start
 
-```sh
-npx --yes --cache "$HOME/Library/Caches/boubou/npm" boubou@beta run LFM3-Audio-2B
-```
-
-The command keeps npm downloads in Boubou's user cache; no global installation,
-npm login or administrator access is needed.
-
-Selecting `LFM3-Audio-2B` downloads about 1.42 GB of verified assets on first
-use and asks for microphone access. Inference stays local. Speak to chat or interrupt; Esc pauses, Enter
-resumes and Ctrl+C exits. Use `--offline` for cached assets only.
-
-After installing a package built from this checkout, open the guided interface:
+You need an Apple Silicon Mac with macOS 13.3 or later and Node.js 18 or later.
 
 ```sh
-boubou
+npx boubou@beta run LFM3-Audio-2B
 ```
 
-Source builds can use `cargo run --locked`.
+The first run downloads about 1.4 GB and asks for microphone access. After
+that, just talk. Pause and Boubou answers. Start speaking and it stops.
+Apple's echo cancellation keeps Boubou from hearing itself, so headphones are
+optional.
 
-Boubou checks this Mac and opens an English voice menu. With the shared runner
-packaged, it prefers Qwen's fixed Aiden voice with Qwen3.5-4B when resources
-permit, with Qwen 1.7B, Pocket TTS English and Phonon 31M as further choices.
-Liquid Audio is the lighter-device default; Liquid Omni is another integrated
-option when resources permit. Other models and LLM sizes remain available through
-`list`, direct commands and the developer entry. See [runtime packaging](packaging/qwen/README.md).
+| Key | Action |
+| --- | --- |
+| Esc | Pause listening |
+| Enter | Resume |
+| Ctrl+C | Quit |
 
-The menu checks architecture, macOS, total and available memory, and cache disk
-space before downloading. Review the estimated download and memory needs before
-starting. These estimates do not establish hardware minima; smaller Macs still
-need testing. Use arrow keys and Enter, Esc to go back or exit, and Ctrl+C to
-quit. Set `NO_COLOR=1` for uncolored menus. Redirected I/O and `TERM=dumb` print
-help. A failed download can be resumed by starting again.
+## Models
 
-Source builds also support `boubou run LFM3-Omni-2B` for English voice chat
-(about 1.62 GB on first use). Ask a local image or short video a text question:
+| Model | What it does | Download |
+| --- | --- | --- |
+| `LFM3-Audio-2B` | English voice chat. The default. | 1.4 GB |
+| `LFM3-Omni-2B` | English voice chat, plus text questions about images and short videos | 1.6 GB |
+| `LFM2.5-Audio-1.5B` | Smaller English voice chat model. Interrupting it takes longer, because Boubou has to restart its server. | 1.3 GB |
+
+All three are [Liquid AI](https://huggingface.co/LiquidAI) models served by
+[llama.cpp](https://github.com/ggml-org/llama.cpp).
+
+Boubou also has a modular pipeline: Parakeet or Whisper for speech
+recognition, Qwen3.5 for replies, and a choice of voices including Qwen3-TTS,
+Kokoro, Pocket TTS and Supertonic. It runs in a prebuilt Python runtime that
+requires macOS 15 and is not in the npm package yet. To build it yourself, see
+[packaging/qwen](packaging/qwen/README.md).
+
+## Usage
+
+The published beta only includes `run LFM3-Audio-2B`. Everything below works
+from a [source build](#build-from-source) and ships in the next release
+([#5](https://github.com/runboubou/boubou/issues/5)).
+
+```sh
+boubou                          # check this machine and pick a model from a menu
+boubou list                     # list model IDs
+boubou pull LFM3-Omni-2B        # download and verify ahead of time
+boubou run LFM3-Omni-2B --offline
+boubou doctor LFM3-Omni-2B      # verify cached files without the network
+```
+
+`run --manual` switches to push-to-talk: press Enter to start and send a turn.
+`run --input turn.wav` speaks from 16 kHz mono PCM WAV files instead of the
+microphone, and `--output reply.wav` saves the spoken replies.
+
+`LFM3-Omni-2B` can answer a question about a picture or a short clip:
 
 ```sh
 boubou ask LFM3-Omni-2B photo.png "What is in this picture?"
-boubou ask LFM3-Omni-2B clip.mp4 "What happens, and what can you hear?" --offline
+boubou ask LFM3-Omni-2B clip.mp4 "What happens, and what can you hear?"
 ```
 
-Images: PNG/JPEG, up to 2048 × 2048 pixels. Videos: MP4/MOV with constant frame
-rate, up to 10 seconds, 512 × 512 pixels and 60 fps; install `ffmpeg` and `ffprobe`
-for video. Files are limited to 64 MiB. This mode returns text and does not open
-the microphone. Invalid or oversized media is rejected before inference.
-These source and candidate-package capabilities do not imply an npm release.
+Images can be PNG or JPEG up to 2048 × 2048. Videos can be MP4 or MOV with a
+constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
+`ffmpeg` and `ffprobe` installed. Files are limited to 64 MiB.
 
-Models and runtime downloads are kept in `~/Library/Caches/boubou`.
-Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.
-Without a model ID, `doctor` checks `LFM3-Audio-2B`.
+## Privacy
 
-## Develop
+- Inference runs on your machine. Boubou does not upload audio, transcripts or
+  replies, and does not save them unless you pass `--output`.
+- The network is only used to download pinned model and runtime files from
+  Hugging Face and GitHub. Each file must match a SHA-256 hash before it is
+  used. After that, `--offline` works with no network at all.
+- There is no telemetry, no account and no API key.
 
-Requires Rust 1.88+, Xcode Command Line Tools, Python 3.9+ and Node.js/npm.
-Build from a clean commit:
+## Storage
+
+Models and runtimes live in `~/Library/Caches/boubou`. Set `BOUBOU_HOME` or
+pass `--cache-dir` to use another folder. Interrupted downloads resume where
+they stopped. To remove everything, delete the folder.
+
+## How it works
+
+```
+microphone ──► audio helper ──► boubou ──► model server
+speakers   ◄── audio helper ◄── boubou ◄── model server
+```
+
+`boubou` is a Rust program that starts two child processes. A small native
+audio helper uses Apple's voice processing for echo cancellation and speech
+detection, and streams 20 ms frames over a pipe. A model server, either
+llama.cpp or the bundled Python runtime, listens on a loopback port. When you
+speak during a reply, Boubou drops the queued audio and cancels the
+generation. When the conversation fills the model's context, it starts a
+fresh session in the background.
+
+## Build from source
+
+You need Rust 1.88 or later and the Xcode Command Line Tools.
 
 ```sh
-cargo build --locked
-python3 packaging/build-macos.py
+git clone https://github.com/runboubou/boubou.git
+cd boubou
+cargo build --locked --release
+./target/release/boubou
 ```
 
-The npm tarball, checksum and provenance are under `target/dist/<commit>/`.
-See [checks](.github/workflows/quality.yml) and [contribution rules](AGENTS.md).
-Boubou code: [MIT](LICENSE).
-Liquid models: [LFM Open License](https://www.liquid.ai/lfm-license).
-Backend: [llama.cpp MIT](https://github.com/ggml-org/llama.cpp/blob/b11960/LICENSE).
-Full upstream license texts are verified during packaging and included in the package.
-Meta MMS weights use [CC BY-NC 4.0](https://huggingface.co/facebook/mms-tts-eng)
-and are restricted to non-commercial use. Each model retains its own terms.
-Signing, notarization and public distribution qualification remain tracked in
-[#5](https://github.com/entropyai-labs/boubou/issues/5).
+To build the npm package from a clean checkout, run
+`python3 packaging/build-macos.py`. It writes the tarball, checksums and build
+provenance to `target/dist/<commit>/`.
+
+## Contributing
+
+Bug reports, device reports and model requests are welcome. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first. Report security issues privately as
+described in [SECURITY.md](SECURITY.md).
+
+Boubou runs on Apple Silicon Macs today. Support for other platforms needs a
+native audio backend for each one; open an issue before starting on one.
+
+## Contributors
+
+Thanks to everyone who contributes to Boubou.
+
+<a href="https://github.com/runboubou/boubou/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=runboubou/boubou&amp;max=1000&amp;columns=12" alt="Boubou GitHub contributors" />
+</a>
+
+[View GitHub contributors](https://github.com/runboubou/boubou/graphs/contributors) · [Contribute to Boubou](CONTRIBUTING.md)
+
+## License
+
+Boubou's code is released under the [MIT License](LICENSE).
+
+Models and inference backends keep their own licenses. Liquid models use the
+[LFM Open License](https://www.liquid.ai/lfm-license), and llama.cpp is MIT.
+Some optional voices in the Python runtime, including MMS, OmniVoice, Drama-3
+and ChatTTS, are licensed for non-commercial use only. Check the model card
+before using a model commercially.
