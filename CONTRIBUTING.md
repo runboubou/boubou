@@ -34,6 +34,12 @@ Write in English. More conventions are in [AGENTS.md](AGENTS.md).
 A maintainer must approve the latest commit of your pull request before it can
 merge. A new push needs a new approval.
 
+## Releases
+
+Maintainers bump the version in `Cargo.toml` and `packaging/package.json`,
+merge, then push a matching `v<version>` tag. The Release workflow checks every
+model profile and publishes the tested tarball to npm.
+
 ## Privacy
 
 Do not attach recordings, transcripts, raw logs or personal paths to issues or
