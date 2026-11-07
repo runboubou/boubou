@@ -90,8 +90,8 @@ they stopped. To remove everything, delete the folder.
 ## How it works
 
 ```
-microphone ─► audio helper ─► boubou ─► local model server
-speakers   ◄─ audio helper ◄─ boubou ◄─┘
+microphone ──► audio helper ──► boubou ──► model server
+speakers   ◄── audio helper ◄── boubou ◄── model server
 ```
 
 `boubou` is a Rust program that starts two child processes. A small native
