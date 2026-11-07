@@ -12,7 +12,7 @@ REPO = "runboubou/boubou"
 REPO_ID = 1442506533
 MAINTAINERS = {70309026, 191080179}  # LuozhuZhang and bella-chai
 CONTEXT = "boubou/trusted-review-gate"
-SIGNAL_WORKFLOW_ID = 386447341  # Immutable ID of review-policy-signal
+SIGNAL_WORKFLOW_ID = 410210475  # Immutable ID of review-policy-signal
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 TITLE = re.compile(r"Review policy PR #([1-9][0-9]{0,8})\Z")
 
