@@ -1,7 +1,11 @@
 mod chat;
 mod integrity;
 
-use crate::{assets, profiles::Download};
+use crate::{
+    assets,
+    profiles::{self, Download},
+    progress::{self, Step},
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::{
@@ -195,19 +199,44 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     let _lock = assets::preparation_lock(&root)?;
     let engine = runtime_dir(&root, &runner)?;
     let installed = engine.join("installed");
+    // The tree digest covers every installed file, so the archive is needed only to install.
+    let current = match &runner.tree_sha256 {
+        Some(tree) => tree_matches(&installed, tree)?,
+        None => false,
+    };
+    // Download everything first, then verify everything, so startup reads as two clear steps.
+    progress::step(Step::Download);
+    if !current && runner.url.is_some() {
+        assets::prefetch(&runner.archive(), &engine, offline)?;
+    }
+    for f in model_files(id, &dir)?.iter().filter(|f| f.applies_to(id)) {
+        integrity::safe_destination(&root, &f.path)?;
+        let path = root.join(&f.path);
+        assets::prefetch(
+            &f.download()?,
+            path.parent().context("Missing asset directory")?,
+            offline,
+        )?;
+    }
+    progress::step(Step::Verify);
+    let archive = if current {
+        None
+    } else {
+        Some(archive(&runner, &dir, &engine, offline)?)
+    };
+    model_assets(id, &root, &dir, Some(offline))?;
+    progress::step(Step::Start);
+    let Some(archive) = archive else {
+        return Ok(installed);
+    };
     if let Some(tree) = &runner.tree_sha256 {
-        // The digest covers every installed file, so the archive is needed only to install.
-        if !tree_matches(&installed, tree)? {
-            let archive = archive(&runner, &dir, &engine, offline)?;
-            assets::install_runtime(&archive, &installed, true, |staging| {
-                tree_matches(staging, tree)
-            })?;
-            if runner.url.is_some() {
-                fs::remove_file(&archive)?;
-            }
+        assets::install_runtime(&archive, &installed, true, |staging| {
+            tree_matches(staging, tree)
+        })?;
+        if runner.url.is_some() {
+            fs::remove_file(&archive)?;
         }
     } else {
-        let archive = archive(&runner, &dir, &engine, offline)?;
         let refresh = !integrity::runtime_tree(&archive, &installed)?;
         assets::install_runtime(&archive, &installed, refresh, |dir| {
             assets::runtime_valid(&archive, dir, "bin/python3")
@@ -219,8 +248,55 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
             );
         }
     }
-    model_assets(id, &root, &dir, Some(offline))?;
     Ok(installed)
+}
+
+/// The checklist's download chips: speech-to-text, language model, voice and runner.
+pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
+    let dir = release_dir()?;
+    let runner = runner(&dir)?;
+    let root = cache.join("qwen");
+    let preset = profiles::presets().iter().find(|preset| preset.id == id);
+    let name = |pick: fn(&profiles::Preset) -> &'static str, fallback: &str| {
+        preset.map_or_else(|| fallback.to_owned(), |preset| pick(preset).to_owned())
+    };
+    let mut parts = vec![
+        progress::Part {
+            name: name(|p| p.stt, "Speech-to-text"),
+            files: Vec::new(),
+        },
+        progress::Part {
+            name: name(|p| p.llm, "Language model"),
+            files: Vec::new(),
+        },
+        progress::Part {
+            name: name(|p| p.tts, "Voice"),
+            files: Vec::new(),
+        },
+        progress::Part {
+            name: "Speech engine".into(),
+            files: Vec::new(),
+        },
+    ];
+    let engine = runtime_dir(&root, &runner)?;
+    // With a tree digest, an installed runner has no archive left to download or verify.
+    if runner.tree_sha256.is_none() || !engine.join("installed").is_dir() {
+        let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
+        parts[3].files.push((archive, runner.size));
+    }
+    for f in model_files(id, &dir)?.iter().filter(|f| f.applies_to(id)) {
+        let path = f.path.to_string_lossy().to_lowercase();
+        let part = if path.contains("parakeet") || path.contains("whisper") {
+            0
+        } else if path.contains("qwen3.5") || path.contains("qwen3_5") {
+            1
+        } else {
+            2
+        };
+        parts[part].files.push((root.join(&f.path), f.size));
+    }
+    parts.retain(|part| !part.files.is_empty());
+    Ok(parts)
 }
 
 /// Whisper entries recognize Chinese and English; the others use Parakeet.
@@ -287,6 +363,19 @@ struct ModelFile {
 }
 
 impl ModelFile {
+    fn download(&self) -> Result<Download<'_>> {
+        Ok(Download {
+            name: self
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("Invalid asset name")?,
+            url: &self.url,
+            size: self.size,
+            sha256: &self.sha256,
+        })
+    }
+
     fn applies_to(&self, id: &str) -> bool {
         self.profile.as_deref().is_none_or(|profile| profile == id)
             && (self.profiles.is_empty() || self.profiles.iter().any(|profile| profile == id))
@@ -366,17 +455,7 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
     for f in files.iter().filter(|f| f.applies_to(id)) {
         integrity::safe_destination(root, &f.path)?;
         selected.push(f.path.as_path());
-        let spec = Download {
-            name: f
-                .path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .context("Invalid asset name")?,
-            url: &f.url,
-            size: f.size,
-            sha256: &f.sha256,
-        };
-        specs.push((root.join(&f.path), spec));
+        specs.push((root.join(&f.path), f.download()?));
     }
     // Check the cache on several threads first; only missing or damaged files are fetched.
     let verified = assets::verified_all(&specs)?;

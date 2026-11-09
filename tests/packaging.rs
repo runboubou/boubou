@@ -57,7 +57,7 @@ impl Drop for Package {
 }
 
 const MENU: &[&str] = &[
-    "Choose an English voice for this Mac",
+    "Choose a voice for this Mac",
     "No English voice fits",
     "Device check unavailable",
 ];
@@ -242,9 +242,11 @@ fn guided_start_opens_english_voices_and_restores_the_terminal() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
     prompt.expect(MENU);
+    prompt.expect(&["ctrl+c exit"]);
     assert!(!prompt.output.contains("Chinese"));
     assert!(!prompt.output.contains("Choose your conversation language"));
-    assert!(prompt.output.contains("Developer: choose a model"));
+    assert!(prompt.output.contains("Use a model you already chose"));
+    assert!(prompt.output.contains("Run locally") || prompt.output.contains("Continue"));
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
     // The developer entry is last regardless of the number of eligible voices.
     prompt.send(b"\x1b[A\r");
@@ -375,8 +377,8 @@ fn guided_start_filters_incompatible_packaged_voices_before_download() {
     let mut prompt = Prompt::new(&package, true, &[]);
     prompt.expect(MENU);
     for label in [
-        "Qwen 0.6B / Aiden",
-        "Qwen 1.7B / Aiden",
+        "Qwen 0.6B",
+        "Qwen 1.7B",
         "Pocket TTS English",
         "Phonon 31M English",
     ] {
