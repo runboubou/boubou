@@ -116,8 +116,8 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        // The Drama-3 runner also owns a native child. Stop its whole process group,
-        // including descendants left behind if the Python process failed at startup.
+        // Stop the runner's whole process group, including descendants left behind
+        // if the Python process failed at startup.
         let group = -(self.child.id() as libc::pid_t);
         unsafe { libc::kill(group, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(10);

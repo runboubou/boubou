@@ -80,9 +80,6 @@ OMNIVOICE = ("k2-fsa/OmniVoice", "c5fdb5ccb189668d56333f77ba2629f4cd7535f4",
               "audio_tokenizer/README.md", "audio_tokenizer/config.json",
               "audio_tokenizer/model.safetensors", "audio_tokenizer/preprocessor_config.json"},
              "omnivoice:0.6b")
-DRAMA3 = ("mlx-community/fish-audio-drama-3-4bit", "1ac1b2108b63c2ef5bade463a121569363e293ce",
-          {"README.md", "LICENSE", "NOTICE", "config.json", "tokenizer.json", "codec.safetensors",
-           *(f"model-{part:05}.safetensors" for part in range(1, 7))}, "drama3:4bit")
 # Every Pocket TTS stock config except `english`, an alias of english_2026-10.
 POCKET = "kyutai/pocket-tts-without-voice-cloning"
 POCKET_CONFIGS = [
@@ -266,7 +263,7 @@ def main():
         files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN, MMS, OMNIVOICE, DRAMA3]:
+    for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN, MMS, OMNIVOICE]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
     files.extend(pocket())
