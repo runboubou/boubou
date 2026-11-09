@@ -328,7 +328,6 @@ pub const QWEN_IDS: &[&str] = &[
     "chattts:whisper",
     "mms-tts:eng",
     "omnivoice:0.6b",
-    "drama3:4bit",
     "pocket-tts:english_2026-10",
     "pocket-tts:english_2026-09_2",
     "pocket-tts:english_2026-09",
@@ -373,22 +372,27 @@ impl Model {
     }
 
     pub fn all() -> impl Iterator<Item = Self> {
-        let qwen = if crate::qwen::packaged() {
-            QWEN_IDS
-        } else {
-            &[]
-        };
+        let packaged = crate::qwen::packaged();
+        // The CUDA runner packages Parakeet and Qwen3.5-4B only: no Whisper entries and none of
+        // the macOS presets with other model sizes. Qwen3-TTS waits for upstream RTX 50 support,
+        // and ChatTTS, which takes about 9 s for its first sentence, stays on the Mac.
+        let linux = cfg!(target_os = "linux");
+        let qwen = QWEN_IDS.iter().copied().filter(move |&id| {
+            packaged
+                && !(linux
+                    && (crate::qwen::whisper(id)
+                        || id.starts_with("qwen3-tts:")
+                        || id.starts_with("chattts:")))
+        });
+        let presets = presets()
+            .iter()
+            .filter(move |preset| packaged && !linux && !QWEN_IDS.contains(&preset.id))
+            .map(|preset| preset.id);
         PROFILES
             .iter()
             .copied()
             .map(Self::Liquid)
-            .chain(qwen.iter().copied().map(Self::Qwen))
-            .chain(
-                presets()
-                    .iter()
-                    .filter(move |preset| !qwen.is_empty() && !qwen.contains(&preset.id))
-                    .map(|preset| Self::Qwen(preset.id)),
-            )
+            .chain(qwen.chain(presets).map(Self::Qwen))
     }
 
     pub fn find(id: &str) -> Option<Self> {

@@ -273,13 +273,13 @@ impl State {
         Some(index)
     }
 
-    fn advanced(&mut self, file: usize, phase: Phase, bytes: u64) {
-        match phase {
-            Phase::Download => {
+    fn advanced(&mut self, counted: Counted, bytes: u64) {
+        match counted {
+            Counted::Download(file) => {
                 self.files[file].downloaded += bytes;
                 self.download_done += bytes;
             }
-            Phase::Verify => self.verify_done += bytes,
+            Counted::Verify => self.verify_done += bytes,
         }
     }
 
@@ -432,22 +432,31 @@ fn smooth_bar(paint: Paint, done: u64, total: u64, cells: usize) -> String {
     bar
 }
 
+/// What a [`Progress`] adds its bytes to on the checklist.
+#[derive(Clone, Copy)]
+enum Counted {
+    Download(usize),
+    Verify,
+}
+
 /// One visible blocking phase. Byte totals are measured; unknown totals animate without a percentage.
 pub struct Progress {
     bytes: Arc<AtomicU64>,
     stop: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
-    /// Set when the checklist shows this phase: (file index, phase).
-    checklist: Option<(usize, Phase)>,
+    /// Set when the checklist shows this progress.
+    checklist: Option<Counted>,
 }
 
 impl Progress {
     pub fn new(label: &str, total: Option<u64>) -> Self {
         let bytes = Arc::new(AtomicU64::new(0));
         let mut shown = false;
+        let mut verifying = false;
         update(|state| {
             shown = true;
             let active = state.active;
+            verifying = active == Step::Verify && total.is_some();
             if let Some(entry) = state.steps.iter_mut().find(|(s, ..)| *s == active)
                 && matches!(active, Step::Start | Step::Check)
             {
@@ -455,11 +464,12 @@ impl Progress {
             }
         });
         if shown {
+            // Hashing several files at once still counts toward the checklist's Verify step.
             return Self {
                 bytes,
                 stop: None,
                 worker: None,
-                checklist: None,
+                checklist: verifying.then_some(Counted::Verify),
             };
         }
         let interactive = tui::interactive(&io::stderr());
@@ -521,15 +531,18 @@ impl Progress {
                 bytes: Arc::new(AtomicU64::new(0)),
                 stop: None,
                 worker: None,
-                checklist: Some((file, phase)),
+                checklist: Some(match phase {
+                    Phase::Download => Counted::Download(file),
+                    Phase::Verify => Counted::Verify,
+                }),
             },
             None => Self::new(label, Some(size)),
         }
     }
 
     pub fn advance(&self, bytes: u64) {
-        if let Some((file, phase)) = self.checklist {
-            update(|state| state.advanced(file, phase, bytes));
+        if let Some(counted) = self.checklist {
+            update(|state| state.advanced(counted, bytes));
         } else {
             self.bytes.fetch_add(bytes, Ordering::Relaxed);
         }
@@ -558,7 +571,7 @@ fn bar(paint: Paint, bytes: u64, total: Option<u64>, tick: usize) -> String {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        if let Some((file, Phase::Download)) = self.checklist {
+        if let Some(Counted::Download(file)) = self.checklist {
             update(|state| {
                 if state.downloading == Some(file) {
                     state.downloading = None;
@@ -648,7 +661,7 @@ mod tests {
         let engine = state
             .file_started(&state.files[2].path.clone(), Phase::Download)
             .unwrap();
-        state.advanced(engine, Phase::Download, 420_000_000);
+        state.advanced(Counted::Download(engine), 420_000_000);
         assert!(state.part_done(1));
         assert!(!state.part_done(0));
         let frame = visible(&state.frame(paint, width).join("\n"));
@@ -656,7 +669,7 @@ mod tests {
         assert!(frame.contains("✓ Speech engine"), "{frame}");
         assert!(frame.contains("○ LFM3-Audio-2B"), "{frame}");
         state.active = Step::Verify;
-        state.advanced(0, Phase::Verify, 4);
+        state.advanced(Counted::Verify, 4);
         let frame = state.frame(paint, width);
         assert_eq!(
             frame.len(),

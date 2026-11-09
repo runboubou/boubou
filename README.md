@@ -39,9 +39,9 @@ All three are [Liquid AI](https://huggingface.co/LiquidAI) models served by
 
 Boubou also has a modular pipeline: Parakeet or Whisper for speech
 recognition, Qwen3.5 for replies, and a choice of voices including Qwen3-TTS,
-Kokoro, Pocket TTS and Supertonic. It runs in a prebuilt Python runtime that
-requires macOS 15 and is not in the npm package yet. To build it yourself, see
-[packaging/qwen](packaging/qwen/README.md).
+Kokoro, Pocket TTS and Supertonic. It runs in a prebuilt Python runtime on
+macOS 15 or on x86-64 Linux with an NVIDIA GPU, and is not published yet. To
+build it yourself, see [packaging/qwen](packaging/qwen/README.md).
 
 ## Usage
 
@@ -88,8 +88,33 @@ PulseAudio, and cancels its own echo with WebRTC's AEC3, so headphones are
 optional. Interrupting starts to work two seconds into the first reply, once
 Boubou has learned its echo. `--manual`, `--input` and `ask` work as on a Mac.
 
-Linux uses llama.cpp's portable CPU builds. The menu and the Python runtime
-still need a Mac.
+Linux uses llama.cpp's portable CPU builds for the Liquid models. The menu
+still needs a Mac.
+
+### Modular pipeline on an NVIDIA GPU
+
+The modular pipeline also runs on x86-64 Linux with an NVIDIA GPU, with every
+voice except Qwen3-TTS, ChatTTS and the Whisper entries. You need:
+
+- An NVIDIA GPU from the Turing generation (RTX 20 series) or newer, with about
+  7.5 GB of free memory, or 8.5 GB for OmniVoice.
+- NVIDIA driver 580.65.06 or later. The runtime brings its own CUDA 13
+  libraries, so no CUDA toolkit is needed.
+- glibc 2.39 or later and OpenSSL 3, for example Ubuntu 24.04.
+- About 10 GB of disk for the runtime, plus 5.3 GB of models shared by every
+  voice and 0.02 to 3.3 GB for each voice.
+
+Build the runtime as described in [packaging/qwen](packaging/qwen/README.md#x86-64-linux-with-an-nvidia-gpu),
+then talk:
+
+```sh
+boubou pull kokoro:82m
+boubou run kokoro:82m --offline
+```
+
+On the test machine, the first `pull kokoro:82m` took 87 s at about 110 MB/s.
+Each later start verifies every file in about 2 s and is listening after about
+15 s.
 
 ## Privacy
 
@@ -166,6 +191,6 @@ Boubou's code is released under the [MIT License](LICENSE).
 
 Models and inference backends keep their own licenses. Liquid models use the
 [LFM Open License](https://www.liquid.ai/lfm-license), and llama.cpp is MIT.
-Some optional voices in the Python runtime, including MMS, OmniVoice, Drama-3
-and ChatTTS, are licensed for non-commercial use only. Check the model card
+Some optional voices in the Python runtime, including MMS, OmniVoice and
+ChatTTS, are licensed for non-commercial use only. Check the model card
 before using a model commercially.

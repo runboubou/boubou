@@ -1,5 +1,5 @@
 //! Qwen voice chat. The pinned upstream pipeline serves the Realtime API on loopback and owns
-//! turn-taking; Boubou owns the microphone, the speakers and macOS echo cancellation.
+//! turn-taking; Boubou owns the microphone, the speakers and echo cancellation.
 
 use crate::voice::{Segment, Voice};
 use anyhow::{Context, Result, bail, ensure};
@@ -116,8 +116,8 @@ impl Server {
 
 impl Drop for Server {
     fn drop(&mut self) {
-        // The Drama-3 runner also owns a native child. Stop its whole process group,
-        // including descendants left behind if the Python process failed at startup.
+        // Stop the runner's whole process group, including descendants left behind
+        // if the Python process failed at startup.
         let group = -(self.child.id() as libc::pid_t);
         unsafe { libc::kill(group, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -334,8 +334,8 @@ impl Session {
     }
 }
 
-/// Only speech macOS attributes to the local talker reaches the server. Everything else,
-/// including the assistant's own voice, is sent as silence so it cannot start a turn.
+/// Only speech the audio backend attributes to the local talker reaches the server. Everything
+/// else, including the assistant's own voice, is sent as silence so it cannot start a turn.
 fn gate(voice: &mut Voice, pcm: Vec<i16>, near_end_speech: bool) -> Result<(Vec<i16>, bool)> {
     Ok(match voice.push(pcm, near_end_speech)? {
         Some(Segment::Start(pcm)) => (pcm, true),
@@ -349,7 +349,6 @@ fn refill(backlog: &mut VecDeque<i16>, queued: usize) -> Option<Vec<i16>> {
     (room > 0).then(|| backlog.drain(..room).collect())
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn converse(
     server: &mut Server,
     session: &mut Session,
@@ -364,7 +363,9 @@ pub(super) fn converse(
     use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
     use std::sync::{atomic::Ordering, mpsc::TryRecvError};
 
-    crate::progress::say("Allow microphone access if macOS asks.");
+    if cfg!(target_os = "macos") {
+        crate::progress::say("Allow microphone access if macOS asks.");
+    }
     let (mut audio, captured) = {
         let _progress = crate::progress::Progress::new("Opening microphone and speakers", None);
         Audio::start(cache, true, stopped)?

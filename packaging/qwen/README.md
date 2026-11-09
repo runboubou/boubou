@@ -1,6 +1,6 @@
-# Apple Silicon Qwen candidate
+# Qwen runner
 
-From a clean checkout on macOS 15 or newer, use Python 3.11 or newer, CMake 3.24+ and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
+On an Apple Silicon Mac, from a clean checkout on macOS 15 or newer, use Python 3.11 or newer and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
 
 ```sh
 candidate="$(mktemp -d)"
@@ -24,7 +24,7 @@ Guided startup uses English. Other voices, Whisper language modes and the 2B,
 and budgets are estimates for device testing. More parameters do not imply
 better replies or voice quality.
 
-`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses a CPU speaker sampled at startup. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Report the machine and measurements in [#5](https://github.com/runboubou/boubou/issues/5).
 
@@ -43,29 +43,19 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pock
 ## Other English TTS families
 
 These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit and require explicit
-developer selection. MMS is excluded from guided recommendations. The current
-OmniVoice and Drama-3 profiles do not fix a speaker identity.
+developer selection. MMS is excluded from guided recommendations. OmniVoice
+speaks with one fixed voice, designed as a young American man.
 
 | ID | Local TTS engine | Weight terms |
 | --- | --- | --- |
 | `mms-tts:eng` | Transformers VITS on CPU | CC-BY-NC 4.0 |
 | `omnivoice:0.6b` | OmniVoice on MPS; its audio codec runs on CPU | Noncommercial, per the pinned model card |
-| `drama3:4bit` | Native MLX Drama-3 service on the same Mac | Fish Audio Community License |
 
 Use `boubou pull ID`, `boubou doctor ID`, then `boubou run ID --offline`.
-The package includes the Drama-3 executable and its libraries; BOUBOU starts it
-on an allocated loopback port and stops it with the conversation. No separate
-server installation or hosted API is needed.
-
-Drama-3 downloads about 29.4 GB including the shared STT and 4B LLM.
-Its upstream native implementation recommends at least 48 GB of unified memory
-for the TTS checkpoint alone. That is not an established minimum for the complete
-BOUBOU conversation. Smaller-Mac validation and acceptance remain
-separate work. MMS currently exposes only the English checkpoint;
-this does not establish support for the full MMS language catalog in Issue #34.
-Model cards, license texts supplied upstream and the Drama-3 conversion notice
-are retained with the pinned weights. Review their terms before redistribution
-or commercial use.
+MMS currently exposes only the English checkpoint; this does not establish
+support for the full MMS language catalog in Issue #34. Model cards and license
+texts supplied upstream are retained with the pinned weights. Review their terms
+before redistribution or commercial use.
 
 ## Choose a speech recognizer
 
@@ -80,8 +70,8 @@ Choose a Whisper entry explicitly for Chinese or Chinese/English conversations:
 
 Whisper entries detect the input language and reply in that language. Qwen3-TTS
 uses automatic synthesis language and the `Vivian` voice in these entries;
-its default entries keep English with `Aiden`. ChatTTS samples a speaker at
-startup. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
+its default entries keep English with `Aiden`. Both ChatTTS entries use the same
+fixed speaker. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
 
 A profile downloads only its selected recognizer. Paired entries share TTS
 weights and the same 4-bit Qwen3.5-4B language model. Whisper adds recognition
@@ -97,6 +87,55 @@ own model formats and dependencies; changing another component's backend does
 not switch this package's STT engine.
 
 The upstream framework supports `mlx-lm`, `transformers`, `responses-api` and
-`chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` and the
-pinned checkpoints selected by each complete runtime. Other component combinations
+`chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` on a Mac,
+`transformers` on Linux, and the pinned checkpoints selected by each complete runtime. Other component combinations
 and inference backends require a separately configured developer runtime.
+
+## x86-64 Linux with an NVIDIA GPU
+
+The Linux runner follows upstream's llama.cpp setup on CUDA: Parakeet TDT 0.6B
+v3 through nano-parakeet, Qwen3.5-4B as Unsloth's Q4_K_M GGUF through
+llama.cpp b11960's CUDA 13 build, and Kokoro through its PyTorch package.
+Phonon, Supertonic, MMS, OmniVoice, Pocket TTS and KittenTTS load the same
+weights as on a Mac, and OmniVoice runs on CUDA.
+llama.cpp uses the CUDA libraries installed with PyTorch, so the runner carries
+one CUDA 13 line and no CUDA toolkit is needed. `pull` checks for glibc 2.39
+and NVIDIA driver 580.65.06 before downloading anything.
+
+Build on Ubuntu 24.04 or newer with Python 3.11 or newer and Git. Put the
+runner next to a release build, where `boubou` looks for it:
+
+```sh
+cargo build --locked --release
+out=target/release/qwen
+mkdir -p "$out"
+python3 -B packaging/qwen/lock_models.py --cuda "$out/models.json"
+python3 -B packaging/qwen/build_runner.py "$out"
+target/release/boubou pull kokoro:82m
+target/release/boubou run kokoro:82m --offline
+```
+
+The runner is one 3.6 GB archive, 6.2 GB unpacked, shared by every profile.
+PyTorch and its CUDA libraries are 2.7 GB of its 3.3 GB of wheels, and all
+voice packages together are 0.17 GB, so voices are not separate downloads.
+Every profile shares 5.3 GB of models (Parakeet and Qwen3.5-4B); a voice adds
+0.02 to 3.3 GB. The runner's `runtime.json` records a digest of the unpacked
+tree, so each start hashes the installed files on several threads instead of
+re-reading the archive.
+
+Measured on Ubuntu 24.04 with an RTX 5090 (driver 595.84), a Ryzen 9 9950X and
+about 110 MB/s from Hugging Face:
+
+| Step | Result |
+| --- | --- |
+| First `pull kokoro:82m` from a source build | 87 s |
+| Verify the runner and models on each start | 1.7 s |
+| `run` until it is listening | 14–16 s |
+| Peak GPU memory | 6.3–7.3 GiB; OmniVoice 8.3 GiB |
+| First audio after a text turn (`smoke.py`) | 0.5–0.8 s for most voices; up to 1.2 s |
+
+Not on Linux: ChatTTS, which takes about 9 s to voice its first sentence on
+CUDA too. Not yet: Qwen3-TTS, whose CUDA 13 qwentts.cpp wheel lacks RTX 50
+kernels and whose PyTorch path fails with Transformers 5.18; the Whisper
+entries; the presets with other Qwen3.5 sizes or Whisper tiny; and guided
+startup.
