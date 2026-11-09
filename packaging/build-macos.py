@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# npm publish fails above about 400 MB; the package itself is a few MB.
+MAX_PACKED = 32 * 1024 * 1024
 LICENSES = [
     (
         "LFM-Open-License.txt",
@@ -112,11 +114,12 @@ def main():
             for file in ["runtime.json", "models.json"]:
                 shutil.copyfile(args.qwen / file, folder / "qwen" / file)
             runtime = json.loads((folder / "qwen/runtime.json").read_text())
-            if not runtime.get("url"):
-                runner = args.qwen / "runner.tar.gz"
-                if runner.stat().st_size != runtime["size"] or sha256(runner) != runtime["sha256"]:
-                    raise SystemExit("Qwen archive does not match its release manifest")
-                shutil.copyfile(runner, folder / "qwen/runner.tar.gz")
+            # npm cannot publish the runner (about 650 MB); users download it on first pull.
+            if not str(runtime.get("url") or "").startswith("https://"):
+                raise SystemExit("Build the Qwen runner with --url; npm cannot carry it.")
+            runner = args.qwen / "runner.tar.gz"
+            if runner.stat().st_size != runtime["size"] or sha256(runner) != runtime["sha256"]:
+                raise SystemExit("Qwen archive does not match its release manifest")
         shutil.copy2(ROOT / "README.md", folder / "README.md")
         shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
         (folder / "licenses").mkdir()
@@ -219,6 +222,11 @@ def main():
                 str(Path(temporary)),
             )
         )
+        size = (Path(temporary) / packed[0]["filename"]).stat().st_size
+        if size > MAX_PACKED:
+            raise SystemExit(
+                f"npm tarball is {size} bytes; the limit is {MAX_PACKED}. Download large files at run time."
+            )
         os.replace(Path(temporary) / packed[0]["filename"], archive)
     (destination / f"{archive.name}.sha256").write_text(
         f"{sha256(archive)}  {archive.name}\n"

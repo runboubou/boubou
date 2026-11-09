@@ -600,6 +600,19 @@ fn npm_exposes_the_product_name() {
 }
 
 #[test]
+fn npm_package_leaves_the_qwen_runner_to_the_release() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
+    let files = manifest["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .all(|file| !file.as_str().unwrap().ends_with(".tar.gz"))
+    );
+    assert!(include_str!("../packaging/build-macos.py").contains("if size > MAX_PACKED:"));
+}
+
+#[test]
 fn media_questions_reject_invalid_selection_without_cache_or_microphone_access() {
     let package = Package::new();
     let cache = package.0.join("unused-media-cache");
