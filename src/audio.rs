@@ -1,9 +1,11 @@
+#[cfg(any(target_os = "linux", test))]
+mod linux;
+
 #[cfg(target_os = "macos")]
 use anyhow::{Context, bail, ensure};
 use anyhow::{Result, anyhow};
 #[cfg(target_os = "macos")]
 use sha2::{Digest, Sha256};
-use std::io::Read;
 #[cfg(target_os = "macos")]
 use std::{
     fs,
@@ -16,19 +18,22 @@ use std::{
         mpsc::{self, Receiver, TrySendError},
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use std::{io::Read, time::Instant};
 
-#[cfg(target_os = "macos")]
+#[cfg(target_os = "linux")]
+pub use linux::Audio;
+
 pub struct CapturedAudio {
     pub samples: Vec<i16>,
     pub captured_at: Instant,
+    /// macOS's echo-aware voice activity; Linux has no detector and reports false.
     pub near_end_speech: bool,
 }
 
-#[cfg(target_os = "macos")]
 pub enum CaptureFrame {
-    /// 20 ms of echo-cancelled mono PCM16 at 16 kHz.
+    /// 20 ms of mono PCM16 at 16 kHz, echo-cancelled on macOS.
     Samples(CapturedAudio),
     Error(String),
 }
