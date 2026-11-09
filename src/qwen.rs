@@ -15,9 +15,8 @@ struct Runner {
     url: Option<String>,
     size: u64,
     sha256: String,
-    /// Digest of the installed tree, which lets each start skip re-reading the archive.
-    #[serde(default)]
-    tree_sha256: Option<String>,
+    /// Digest of the installed tree, so each start checks it without re-reading the archive.
+    tree_sha256: String,
     #[serde(flatten)]
     host: Host,
 }
@@ -82,7 +81,7 @@ fn runner(dir: &Path) -> Result<Runner> {
             .as_ref()
             .is_none_or(|url| url.starts_with("https://"))
             && digest(&runner.sha256)
-            && runner.tree_sha256.as_deref().is_none_or(digest)
+            && digest(&runner.tree_sha256)
             && runner.size > 0,
         "Invalid packaged Qwen runner manifest"
     );
@@ -195,28 +194,14 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     let _lock = assets::preparation_lock(&root)?;
     let engine = runtime_dir(&root, &runner)?;
     let installed = engine.join("installed");
-    if let Some(tree) = &runner.tree_sha256 {
-        // The digest covers every installed file, so the archive is needed only to install.
-        if !tree_matches(&installed, tree)? {
-            let archive = archive(&runner, &dir, &engine, offline)?;
-            assets::install_runtime(&archive, &installed, true, |staging| {
-                tree_matches(staging, tree)
-            })?;
-            if runner.url.is_some() {
-                fs::remove_file(&archive)?;
-            }
-        }
-    } else {
+    // The digest covers every installed file, so the archive is needed only to install.
+    if !tree_matches(&installed, &runner.tree_sha256)? {
         let archive = archive(&runner, &dir, &engine, offline)?;
-        let refresh = !integrity::runtime_tree(&archive, &installed)?;
-        assets::install_runtime(&archive, &installed, refresh, |dir| {
-            assets::runtime_valid(&archive, dir, "bin/python3")
+        assets::install_runtime(&archive, &installed, true, |staging| {
+            tree_matches(staging, &runner.tree_sha256)
         })?;
-        if refresh {
-            ensure!(
-                integrity::runtime_tree(&archive, &installed)?,
-                "The Qwen runtime contains unexpected files"
-            );
+        if runner.url.is_some() {
+            fs::remove_file(&archive)?;
         }
     }
     model_assets(id, &root, &dir, Some(offline))?;
@@ -252,15 +237,7 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     check_host(&runner)?;
     let root = cache.join("qwen");
     let engine = runtime_dir(&root, &runner)?;
-    let installed = engine.join("installed");
-    let ready = if let Some(tree) = &runner.tree_sha256 {
-        tree_matches(&installed, tree)?
-    } else {
-        let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
-        assets::verified(&archive, &runner.archive())?
-            && integrity::runtime_tree(&archive, &installed)?
-            && assets::runtime_valid(&archive, &installed, "bin/python3")?
-    };
+    let ready = tree_matches(&engine.join("installed"), &runner.tree_sha256)?;
     println!(
         "Qwen runner: {}",
         if ready {
@@ -334,7 +311,11 @@ fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
         }
     }
     let engine = runtime_dir(&root, &runner)?;
+    // An installed runtime no longer keeps its archive. A corrupt one may still need
+    // repair; preparation remains authoritative.
+    let installed = engine.join("installed/bin/python3").is_file();
     if runner.url.is_some()
+        && !installed
         && !engine
             .join("runner.tar.gz")
             .metadata()
@@ -342,14 +323,8 @@ fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
     {
         download += runner.size;
     }
-    // Allow unpacking and staging when the interpreter is not installed. A corrupt
-    // cached runtime may still need repair; preparation remains authoritative.
-    let disk = download
-        + if engine.join("installed/bin/python3").is_file() {
-            0
-        } else {
-            8 * runner.size
-        };
+    // Allow unpacking and staging when the interpreter is not installed.
+    let disk = download + if installed { 0 } else { 8 * runner.size };
     Ok(Requirements {
         min_macos: version(min_macos)?,
         download,
@@ -435,7 +410,7 @@ mod tests {
     fn runner_manifests_name_their_host() {
         let manifest = |host: &str| {
             serde_json::from_str::<Runner>(&format!(
-                r#"{{"url":null,"size":1,"sha256":"{}"{host}}}"#,
+                r#"{{"url":null,"size":1,"sha256":"{0}","tree_sha256":"{0}"{host}}}"#,
                 "a".repeat(64)
             ))
         };
@@ -444,8 +419,6 @@ mod tests {
         let cuda = manifest(r#","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#).unwrap();
         assert_eq!(cuda.host.entry(), "cuda.py");
         assert!(manifest("").is_err());
-        let tree = format!(r#","tree_sha256":"{}","min_macos":"15.0""#, "b".repeat(64));
-        assert!(manifest(&tree).unwrap().tree_sha256.is_some());
         // A runner built for the other system stops before anything is downloaded.
         let foreign = if cfg!(target_os = "macos") { cuda } else { mac };
         assert!(check_host(&foreign).is_err());
@@ -484,7 +457,7 @@ mod tests {
         let result = (|| -> Result<()> {
             let cache = root.join("cache");
             let digest = "a".repeat(64);
-            let manifest = |url| serde_json::json!({"url": url, "size": 100, "sha256": digest, "min_macos": "15.0"});
+            let manifest = |url| serde_json::json!({"url": url, "size": 100, "sha256": digest, "tree_sha256": digest, "min_macos": "15.0"});
             fs::write(
                 root.join("runtime.json"),
                 manifest(serde_json::Value::Null).to_string(),

@@ -41,8 +41,6 @@ TARGETS = {
         "device": "'CUDA', torch.version.cuda",
         # CUDA 13 needs driver 580.65.06 or later. Ubuntu 24.04's glibc 2.39 is the oldest tested.
         "host": {"min_nvidia_driver": "580.65.06", "min_glibc": "2.39"},
-        # Boubou checks the installed tree against this digest on every start, instead of re-reading the archive.
-        "tree": True,
     },
 }
 
@@ -161,9 +159,9 @@ print({target["device"]})
                 # The Rust verifier supports ordinary files and relative symlinks.
                 tar.inodes.clear()
                 tar.add(path, arcname=path.relative_to(moved), recursive=False)
-        result = {"url": args.url, "size": bundle.stat().st_size, "sha256": digest(bundle), **target["host"]}
-        if target.get("tree"):
-            result["tree_sha256"] = tree_digest(moved)
+        # Boubou checks the installed tree against this digest on every start, instead of re-reading the archive.
+        result = {"url": args.url, "size": bundle.stat().st_size, "sha256": digest(bundle),
+                  "tree_sha256": tree_digest(moved), **target["host"]}
         bundle.rename(archive)
         (output / "runtime.json").write_text(json.dumps(result, indent=2) + "\n")
         print(f"Built {archive} ({result['size']} bytes, sha256 {result['sha256']})")

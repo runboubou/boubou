@@ -16,7 +16,10 @@ The runner archive holds the interpreter, native wheels, Silero, NLTK and
 phonemizer data. It is too large for npm, so the Release workflow publishes it
 at that URL and the npm package carries only its size and SHA-256. The first
 `pull` downloads and verifies the runner, then fetches only the selected
-profile's verified weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
+profile's verified weights. Profiles reuse the same runner. `runtime.json` also
+records a digest of the unpacked runner, so each start hashes the installed
+files on several threads instead of re-reading the archive, which is removed
+once installed. The [runtime catalog](runtimes.json) is
 shared by the client, asset locking and runner arguments. Its `guided` entries
 are Qwen 0.6B and 1.7B CustomVoice with fixed Aiden, Pocket TTS English
 (`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
@@ -128,9 +131,7 @@ The runner is one 3.6 GB archive, 6.2 GB unpacked, shared by every profile.
 PyTorch and its CUDA libraries are 2.7 GB of its 3.3 GB of wheels, and all
 voice packages together are 0.17 GB, so voices are not separate downloads.
 Every profile shares 5.3 GB of models (Parakeet and Qwen3.5-4B); a voice adds
-0.02 to 3.3 GB. The runner's `runtime.json` records a digest of the unpacked
-tree, so each start hashes the installed files on several threads instead of
-re-reading the archive.
+0.02 to 3.3 GB.
 
 Measured on Ubuntu 24.04 with an RTX 5090 (driver 595.84), a Ryzen 9 9950X and
 about 110 MB/s from Hugging Face:
