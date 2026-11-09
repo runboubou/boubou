@@ -3,17 +3,18 @@ name = "boubou"
 version = "0.1.0-beta.3"
 edition = "2024"
 rust-version = "1.88"
-description = "Local voice conversations, one command away"
+description = "Run voice AI locally with open-source models. Bring it to any device with one command."
+repository = "https://github.com/runboubou/boubou"
 license = "MIT"
 publish = false
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4.5", features = ["derive", "env"] }
 crossterm = "0.29"
 ctrlc = "3.4"
-dirs = "6"
+dirs = "7"
 flate2 = "1"
 fs2 = "0.4"
 hound = "3.5"
@@ -21,11 +22,11 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 shlex = "2"
 tar = "0.4"
-tungstenite = "0.28"
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
+tungstenite = "0.30"
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 
 [profile.release]
 lto = "thin"

@@ -355,7 +355,6 @@ fn cached_model_verification_shows_live_progress_before_loading() {
 #[test]
 fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     use flate2::{Compression, write::GzEncoder};
-    use sha2::{Digest, Sha256};
 
     if !cfg!(target_arch = "aarch64") {
         return;
@@ -373,7 +372,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         .append_data(&mut header, "bin/python3", &script[..])
         .unwrap();
     let bytes = archive.into_inner().unwrap().finish().unwrap();
-    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let digest = sha256_hex(&bytes);
     let engine = cache.join("runtimes").join(&digest);
     fs::create_dir_all(&engine).unwrap();
     fs::write(engine.join("runner.tar.gz"), &bytes).unwrap();
@@ -391,7 +390,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     let snapshot = "hub/models--fixture--qwen/snapshots/abc";
     let files = serde_json::json!([{
         "profile": id, "path": format!("{snapshot}/tts.bin"), "size": asset.len(),
-        "sha256": format!("{:x}", Sha256::digest(asset)), "url": "https://example.invalid/tts.bin"
+        "sha256": sha256_hex(asset), "url": "https://example.invalid/tts.bin"
     }]);
     fs::write(release.join("models.json"), files.to_string()).unwrap();
     let snapshot = cache.join(snapshot);
@@ -1225,4 +1224,12 @@ with TemporaryDirectory() as folder:
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

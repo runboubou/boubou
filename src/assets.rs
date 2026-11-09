@@ -154,7 +154,12 @@ fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> 
             progress.advance(n as u64);
         }
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex(&hash.finalize()))
+}
+
+/// Lowercase hexadecimal, as used in SHA-256 manifests.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub(crate) fn verified(path: &Path, spec: &Download<'_>) -> Result<bool> {
@@ -432,6 +437,14 @@ mod tests {
             size: 6,
             sha256: hash,
         }
+    }
+
+    #[test]
+    fn sha256_is_lowercase_hex() {
+        assert_eq!(
+            sha256(&b"abc"[..], None).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

@@ -2,3 +2,4 @@
 .DS_Store
 *.wav
 *.aiff
+__pycache__/

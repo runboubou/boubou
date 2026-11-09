@@ -41,7 +41,7 @@ use std::{sync::mpsc::TryRecvError, time::Duration};
 #[command(
     name = "boubou",
     version,
-    about = "Local voice conversations, one command away"
+    about = "Run voice AI locally with open-source models. Bring it to any device with one command."
 )]
 struct Cli {
     /// Storage for pinned models and inference binaries.
