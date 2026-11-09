@@ -60,7 +60,7 @@ impl PendingAudio {
     }
 }
 
-/// Endpoint 20 ms frames using macOS's echo-aware near-end speech indication.
+/// Endpoint 20 ms frames using the audio layer's echo-aware near-end speech indication.
 pub struct Voice {
     preroll: VecDeque<Vec<i16>>,
     active: bool,

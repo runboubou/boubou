@@ -28,7 +28,7 @@ pub use linux::Audio;
 pub struct CapturedAudio {
     pub samples: Vec<i16>,
     pub captured_at: Instant,
-    /// macOS's echo-aware voice activity; Linux has no detector and reports false.
+    /// Speech from the person at the microphone rather than the reply's echo.
     pub near_end_speech: bool,
 }
 

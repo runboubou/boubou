@@ -296,10 +296,6 @@ fn run() -> Result<()> {
             };
             if input.is_empty() {
                 ensure!(
-                    manual || cfg!(target_os = "macos"),
-                    "Hands-free conversations currently require macOS. On Linux, add --manual and press Enter to start and send each turn."
-                );
-                ensure!(
                     io::stdin().is_terminal(),
                     "Microphone mode needs a terminal. Use --input question.wav for a file."
                 );

@@ -1,6 +1,7 @@
-//! Push-to-talk audio through the default ALSA devices, which PipeWire or PulseAudio serve
-//! on Linux desktops and convert to these rates. Linux has no echo cancellation or voice
-//! detection here, so a turn is recorded only after Enter has cleared playback.
+//! Linux audio through the default ALSA devices, which PipeWire or PulseAudio serve on
+//! desktops and convert to these rates. Like the macOS helper, it removes the reply's echo
+//! from the microphone with WebRTC AEC3 and marks frames that contain the person's own
+//! speech, so a conversation can keep listening while it speaks.
 
 use super::CapturedAudio;
 use anyhow::{Result, bail};
@@ -27,6 +28,10 @@ const CAPTURE_RATE: u32 = 16_000;
 const PLAYBACK_RATE: u32 = 24_000;
 /// 20 ms at 16 kHz, the frame the conversation loop consumes.
 const FRAME: usize = 320;
+/// The echo canceller works on 10 ms chunks.
+const RENDER_CHUNK: usize = PLAYBACK_RATE as usize / 100;
+#[cfg(target_os = "linux")]
+const CAPTURE_CHUNK: usize = CAPTURE_RATE as usize / 100;
 
 /// Owns the microphone and speaker streams; dropping it closes both.
 #[cfg(target_os = "linux")]
@@ -38,13 +43,12 @@ pub struct Audio {
 
 #[cfg(target_os = "linux")]
 impl Audio {
-    /// Linux records only manual turns, so `detect_voice` must be false.
+    /// Echo cancellation and speech detection always run; manual turns ignore the detector.
     pub fn start(
         _cache_dir: &Path,
-        detect_voice: bool,
+        _detect_voice: bool,
         stopped: &AtomicBool,
     ) -> Result<(Self, Receiver<CaptureFrame>)> {
-        debug_assert!(!detect_voice, "Linux has no voice detection");
         crate::check_cancel(stopped)?;
         let host = cpal::default_host();
         let error = Arc::new(Mutex::new(None));
@@ -57,9 +61,12 @@ impl Audio {
                 }
             }
         };
+        // Both callbacks share the canceller: the speaker's output is its reference signal.
+        let echo = Arc::new(Mutex::new(Echo::new()));
         let (sender, receiver) = mpsc::sync_channel(64);
         let mut frames = Frames::default();
-        let overflow = Arc::clone(&error);
+        let mut speech = Speech::default();
+        let (cancelling, failure) = (Arc::clone(&echo), Arc::clone(&error));
         let input = host
             .default_input_device()
             .context("No microphone found. Connect one and check the sound settings.")?
@@ -70,12 +77,18 @@ impl Audio {
                     let first = Instant::now()
                         .checked_sub(time.callback.duration_since(time.capture))
                         .unwrap_or_else(Instant::now);
-                    frames.push(pcm, first, |frame| {
+                    frames.push(pcm, first, |mut frame| {
+                        let mut echo = cancelling.lock().expect("echo canceller lock");
+                        if let Err(cause) = echo.cancel(&mut frame.samples) {
+                            return fail(&failure, format!("Echo cancellation failed: {cause}"));
+                        }
+                        frame.near_end_speech = echo.gate.near_end(speech.push(&frame.samples));
+                        drop(echo);
                         if let Err(TrySendError::Full(_)) =
                             sender.try_send(CaptureFrame::Samples(frame))
                         {
                             fail(
-                                &overflow,
+                                &failure,
                                 "Microphone processing fell behind by more than one second; restart Boubou.".into(),
                             );
                         }
@@ -86,14 +99,17 @@ impl Audio {
             )
             .context("Cannot record 16 kHz mono audio from the default microphone")?;
         let playback = Arc::new(Mutex::new(Playback::default()));
-        let speech = Arc::clone(&playback);
+        let (queue, failure) = (Arc::clone(&playback), Arc::clone(&error));
         let output = host
             .default_output_device()
             .context("No speaker found. Connect one and check the sound settings.")?
             .build_output_stream(
                 config(PLAYBACK_RATE),
                 move |pcm: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    speech.lock().expect("audio playback lock").fill(pcm);
+                    queue.lock().expect("audio playback lock").fill(pcm);
+                    if let Err(cause) = echo.lock().expect("echo canceller lock").render(pcm) {
+                        fail(&failure, format!("Echo cancellation failed: {cause}"));
+                    }
                 },
                 report(&error),
                 None,
@@ -148,6 +164,118 @@ fn fail(error: &Mutex<Option<String>>, message: String) {
         .lock()
         .expect("audio error lock")
         .get_or_insert(message);
+}
+
+/// WebRTC AEC3, noise suppression and a high-pass filter, fed with what the speaker plays.
+#[cfg(target_os = "linux")]
+struct Echo {
+    canceller: sonora::AudioProcessing,
+    rendered: Vec<i16>,
+    gate: Gate,
+}
+
+#[cfg(target_os = "linux")]
+impl Echo {
+    fn new() -> Self {
+        let config = sonora::Config {
+            echo_canceller: Some(Default::default()),
+            noise_suppression: Some(Default::default()),
+            high_pass_filter: Some(Default::default()),
+            ..Default::default()
+        };
+        Self {
+            canceller: sonora::AudioProcessing::builder()
+                .config(config)
+                .capture_config(sonora::StreamConfig::new(CAPTURE_RATE, 1))
+                .render_config(sonora::StreamConfig::new(PLAYBACK_RATE, 1))
+                .build(),
+            rendered: Vec::with_capacity(RENDER_CHUNK),
+            gate: Gate::default(),
+        }
+    }
+
+    /// Gives the canceller the speaker's output in 10 ms chunks.
+    fn render(&mut self, pcm: &[i16]) -> Result<()> {
+        let mut processed = [0; RENDER_CHUNK];
+        for &sample in pcm {
+            self.rendered.push(sample);
+            if self.rendered.len() == RENDER_CHUNK {
+                self.gate.render(&self.rendered);
+                self.canceller
+                    .process_render_i16(&self.rendered, &mut processed)?;
+                self.rendered.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the speaker's echo from a 20 ms microphone frame in place.
+    fn cancel(&mut self, frame: &mut [i16]) -> Result<()> {
+        for chunk in frame.as_chunks_mut::<CAPTURE_CHUNK>().0 {
+            let input = *chunk;
+            self.canceller.process_capture_i16(&input, chunk)?;
+        }
+        Ok(())
+    }
+}
+
+/// Neural speech detection on the echo-cancelled microphone, in 16 ms windows.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct Speech {
+    detector: earshot::Detector,
+    window: Vec<i16>,
+}
+
+#[cfg(target_os = "linux")]
+impl Speech {
+    /// Whether a window completed by these samples contains speech.
+    fn push(&mut self, pcm: &[i16]) -> bool {
+        let mut voiced = false;
+        for &sample in pcm {
+            self.window.push(sample);
+            if self.window.len() == 256 {
+                voiced |= self.detector.predict_i16(&self.window) >= 0.5;
+                self.window.clear();
+            }
+        }
+        voiced
+    }
+}
+
+/// AEC3 needs about a second of reply to find the echo path. Until two seconds of audible
+/// reply have played, speech counts only after half a second without playback.
+struct Gate {
+    audible: u32,
+    quiet: u32,
+}
+
+impl Gate {
+    /// In 10 ms playback chunks.
+    const CONVERGED: u32 = 200;
+    const SETTLED: u32 = 50;
+
+    fn render(&mut self, chunk: &[i16]) {
+        if chunk.iter().any(|&sample| sample != 0) {
+            self.audible = self.audible.saturating_add(1);
+            self.quiet = 0;
+        } else {
+            self.quiet = self.quiet.saturating_add(1);
+        }
+    }
+
+    fn near_end(&self, voiced: bool) -> bool {
+        voiced && (self.audible >= Self::CONVERGED || self.quiet >= Self::SETTLED)
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            audible: 0,
+            quiet: Self::SETTLED,
+        }
+    }
 }
 
 /// Splits microphone callbacks into 20 ms frames, each timed by its first sample.
@@ -228,11 +356,7 @@ mod tests {
             later + Duration::from_micros(33_750)
         );
         assert_eq!(captured[2].samples, [vec![2; 60], vec![3; 260]].concat());
-        assert!(
-            captured
-                .iter()
-                .all(|frame| frame.samples.len() == FRAME && !frame.near_end_speech)
-        );
+        assert!(captured.iter().all(|frame| frame.samples.len() == FRAME));
     }
 
     #[test]
@@ -252,6 +376,82 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("30-second playback queue")
+        );
+    }
+
+    #[test]
+    fn speech_interrupts_playback_only_after_the_canceller_has_heard_two_seconds() {
+        let mut gate = Gate::default();
+        assert!(gate.near_end(true), "nothing has played yet");
+        assert!(!gate.near_end(false));
+        for _ in 0..10 {
+            gate.render(&[1000; RENDER_CHUNK]);
+        }
+        assert!(
+            !gate.near_end(true),
+            "the first reply's echo is not cancelled yet"
+        );
+        for _ in 0..Gate::SETTLED {
+            gate.render(&[0; RENDER_CHUNK]);
+        }
+        assert!(
+            gate.near_end(true),
+            "a turn may start once playback has stopped"
+        );
+        for _ in 0..Gate::CONVERGED {
+            gate.render(&[1000; RENDER_CHUNK]);
+        }
+        assert!(
+            gate.near_end(true),
+            "after convergence, speech interrupts playback"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_canceller_removes_a_delayed_copy_of_the_speaker_signal() {
+        // Twenty unrelated tones across the speech band, evaluated at both device rates.
+        let mut seed = 7_u64;
+        let mut random = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let tones: Vec<(f64, f64)> = (0..20)
+            .map(|_| (200.0 + random() * 3200.0, random() * std::f64::consts::TAU))
+            .collect();
+        let signal = |seconds: f64, gain: f64| {
+            let value: f64 = tones
+                .iter()
+                .map(|(hz, phase)| (seconds * hz * std::f64::consts::TAU + phase).sin())
+                .sum();
+            (value * gain * 300.0) as i16
+        };
+        let energy = |pcm: &[i16]| pcm.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>();
+        let mut echo = Echo::new();
+        let (mut before, mut after) = (0.0, 0.0);
+        // Five seconds in 20 ms steps; the microphone hears half the speaker 40 ms later.
+        for step in 0..250 {
+            let speaker: Vec<i16> = (0..2 * RENDER_CHUNK)
+                .map(|n| signal((step * 2 * RENDER_CHUNK + n) as f64 / 24_000.0, 1.0))
+                .collect();
+            echo.render(&speaker).unwrap();
+            let mut microphone: Vec<i16> = (0..FRAME)
+                .map(|n| signal((step * FRAME + n) as f64 / 16_000.0 - 0.04, 0.5))
+                .collect();
+            let heard = energy(&microphone);
+            echo.cancel(&mut microphone).unwrap();
+            if step >= 200 {
+                before += heard;
+                after += energy(&microphone);
+            }
+        }
+        assert!(echo.gate.audible >= Gate::CONVERGED);
+        assert!(
+            after * 100.0 < before,
+            "only {:.1} dB of echo removed",
+            10.0 * (before / after).log10()
         );
     }
 }

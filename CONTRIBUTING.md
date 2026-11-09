@@ -12,7 +12,7 @@ license.
 
 ## Development
 
-You need an Apple Silicon Mac, Rust 1.88 or later and the Xcode Command Line
+You need an Apple Silicon Mac, Rust 1.91 or later and the Xcode Command Line
 Tools. Run the same checks as CI before you push:
 
 ```sh
