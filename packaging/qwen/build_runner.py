@@ -13,7 +13,6 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from bundle_data import install
-from build_drama3 import install as install_drama3
 
 HERE = Path(__file__).resolve().parent
 PYTHON = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz"
@@ -61,7 +60,6 @@ def main():
         shutil.copy2(HERE / "requirements-macos.lock", root)
         shutil.copytree(HERE / "voices", root / "voices")
         provenance = install(root)
-        provenance.update(install_drama3(root))
         provenance.update(python_url=PYTHON, python_sha256=PYTHON_SHA,
                           wheel_lock_sha256=digest(root / "requirements-macos.lock"))
         (root / "BUILD.json").write_text(json.dumps(provenance, indent=2) + "\n")

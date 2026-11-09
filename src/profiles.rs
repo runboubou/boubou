@@ -328,7 +328,6 @@ pub const QWEN_IDS: &[&str] = &[
     "chattts:whisper",
     "mms-tts:eng",
     "omnivoice:0.6b",
-    "drama3:4bit",
     "pocket-tts:english_2026-10",
     "pocket-tts:english_2026-09_2",
     "pocket-tts:english_2026-09",

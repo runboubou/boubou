@@ -3,10 +3,7 @@
 import json
 import os
 import re
-import selectors
-import subprocess
 import sys
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -85,7 +82,6 @@ TTS = {
     "omnivoice": lambda path: ["--tts", "omnivoice", "--omnivoice_model_name", path,
                                "--omnivoice_device", "mps", "--omnivoice_language", "en",
                                "--omnivoice_voice_clone_prompt", str(VOICES / "omnivoice.prompt")],
-    "drama3": lambda path: ["--tts", "drama3", "--drama3_model", "fishaudio/drama-3"],
 }
 
 
@@ -171,37 +167,6 @@ def link_espeak_data(work):
     espeak.EspeakWrapper.set_data_path(str(work))
 
 
-@contextmanager
-def drama3_server(model):
-    """Own the native MLX service for exactly one conversation."""
-    binary = Path(__file__).resolve().parent / "drama3/fishaudio_drama3_server"
-    child = subprocess.Popen([binary, "--model-path", model, "--model-name", "fishaudio/drama-3",
-                              "--supervised", "--host", "127.0.0.1", "--port", "0"],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-    try:
-        with selectors.DefaultSelector() as ready:
-            ready.register(child.stdout, selectors.EVENT_READ)
-            if not ready.select(timeout=240):
-                raise TimeoutError("The Drama-3 service did not become ready within 240 seconds")
-            line = child.stdout.readline()
-        event = json.loads(line) if line else {}
-        if event.get("event") != "ready":
-            raise RuntimeError(f"The Drama-3 service failed to start: {event}")
-        if event["host"] != "127.0.0.1" or not 0 < event["port"] < 65536:
-            raise RuntimeError("The Drama-3 service returned an invalid loopback address")
-        yield f"http://127.0.0.1:{event['port']}/v1"
-    finally:
-        # EOF stops the native service even if its parent dies before this block runs.
-        child.stdin.close()
-        if child.poll() is None:
-            try:
-                child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
-        child.stdout.close()
-
-
 def preserve_qwen_user_turns():
     # SDK 1.1.0 merges unanswered user turns for strict alternating-role templates.
     # Our fixed Qwen LLM accepts separate turns and needs that boundary after barge-in.
@@ -215,7 +180,7 @@ def preserve_qwen_user_turns():
 
 def run(command, model, cache, manifest, *extra):
     # Keep model-name aliases and compiled caches outside the verified package.
-    with TemporaryDirectory(prefix="boubou-qwen-") as work, ExitStack() as resources:
+    with TemporaryDirectory(prefix="boubou-qwen-") as work:
         work = Path(work)
         hub = work / "torch/hub"
         hub.mkdir(parents=True)
@@ -236,9 +201,6 @@ def run(command, model, cache, manifest, *extra):
         options = arguments(model, cache, manifest, work)
         if model.startswith(("kokoro:", "kitten-tts:")):
             link_espeak_data(work)
-        if model == "drama3:4bit":
-            url = resources.enter_context(drama3_server(work / "fish-audio-drama-3-4bit"))
-            options += ["--drama3_base_url", url, "--drama3_api_key", ""]
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         preserve_qwen_user_turns()
         # Upstream v1.1.0 sets this to its package directory during import.

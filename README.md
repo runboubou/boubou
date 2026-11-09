@@ -166,6 +166,6 @@ Boubou's code is released under the [MIT License](LICENSE).
 
 Models and inference backends keep their own licenses. Liquid models use the
 [LFM Open License](https://www.liquid.ai/lfm-license), and llama.cpp is MIT.
-Some optional voices in the Python runtime, including MMS, OmniVoice, Drama-3
-and ChatTTS, are licensed for non-commercial use only. Check the model card
+Some optional voices in the Python runtime, including MMS, OmniVoice and
+ChatTTS, are licensed for non-commercial use only. Check the model card
 before using a model commercially.
