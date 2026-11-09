@@ -70,7 +70,10 @@ jobs:
           target="$RUNNER_TEMP/qwen"
           mkdir -p "$target"
           python -B packaging/qwen/lock_models.py "$target/models.json"
-          python -B packaging/qwen/build_runner.py "$target"
+          # npm cannot carry the runner. The Release workflow uploads it to this URL.
+          version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
+          python -B packaging/qwen/build_runner.py "$target" --url "$url"
       - name: Build and install the npm candidate outside the checkout
         env:
           BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
@@ -79,6 +82,10 @@ jobs:
           cargo fetch --locked
           python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen"
           tarball=$(find "$PWD/target/dist" -name 'boubou-*.tgz')
+          # The release asset does not exist before the tag; place the exact runner where `pull` would download it.
+          sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
+          mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
+          cp "$RUNNER_TEMP/qwen/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
           cd "$RUNNER_TEMP"
           mkdir -p qwen-npm
           npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts "$tarball"
@@ -110,6 +117,7 @@ jobs:
           path: |
             ${{ runner.temp }}/qwen/runtime.json
             ${{ runner.temp }}/qwen/models.json
+            ${{ runner.temp }}/qwen/runner.tar.gz
             target/dist/**/*.tgz
       - name: Check offline speech inference through the loopback service
         run: |

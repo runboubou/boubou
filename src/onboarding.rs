@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute, queue,
@@ -577,8 +577,7 @@ impl Screen {
             if INTERRUPTED.load(Ordering::Relaxed) {
                 return Err(Cancelled.into());
             }
-            if event::poll(Duration::from_millis(100))? {
-                let event = event::read()?;
+            if let Some(event) = crate::next_event(Duration::from_millis(100))? {
                 if let Event::Key(key) = event {
                     if key.kind == KeyEventKind::Release {
                         continue;

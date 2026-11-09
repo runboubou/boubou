@@ -102,7 +102,8 @@ fn main() {
         if error.is::<Cancelled>() {
             std::process::exit(130);
         }
-        eprintln!("\nboubou: {error:#}");
+        // The terminal may already be gone; printing must not panic on the way out.
+        let _ = writeln!(io::stderr(), "\nboubou: {error:#}");
         std::process::exit(1);
     }
 }
@@ -500,6 +501,47 @@ fn from_files(
     Ok(())
 }
 
+/// Returns the next key or resize event, or waits up to `timeout` for input.
+///
+/// crossterm 0.29 retries a closed terminal forever inside `event::poll`, and its blocking read
+/// can start without input. So crossterm reads only when the terminal has input, or when its
+/// last read may still hold parsed events, and never waits itself.
+fn next_event(timeout: Duration) -> Result<Option<Event>> {
+    static BUFFERED: AtomicBool = AtomicBool::new(false);
+    for wait in [Duration::ZERO, timeout] {
+        if (BUFFERED.load(Ordering::Relaxed) || terminal_input(wait)?)
+            && event::poll(Duration::ZERO)?
+        {
+            BUFFERED.store(true, Ordering::Relaxed);
+            return Ok(Some(event::read()?));
+        }
+        BUFFERED.store(false, Ordering::Relaxed);
+    }
+    Ok(None)
+}
+
+/// Waits up to `timeout` and returns whether the terminal has input, failing once it closes.
+fn terminal_input(timeout: Duration) -> Result<bool> {
+    let mut input = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let millis = timeout.as_millis().min(libc::c_int::MAX as u128) as libc::c_int;
+    if unsafe { libc::poll(&mut input, 1, millis) } <= 0 {
+        // Timed out, or a signal interrupted the wait; callers check their cancellation flags.
+        return Ok(false);
+    }
+    let mut pending: libc::c_int = 0;
+    ensure!(
+        input.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) == 0
+            && unsafe { libc::ioctl(libc::STDIN_FILENO, libc::FIONREAD, &mut pending) } == 0
+            && pending > 0,
+        "The terminal closed."
+    );
+    Ok(true)
+}
+
 struct Terminal;
 impl Terminal {
     fn enter() -> Result<Self> {
@@ -510,7 +552,7 @@ impl Terminal {
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        eprintln!();
+        let _ = writeln!(io::stderr());
     }
 }
 
@@ -550,9 +592,7 @@ fn microphone(
                 "Manual recording reached 30 seconds. Restart and submit shorter turns with Enter."
             );
         }
-        if event::poll(Duration::ZERO)?
-            && let Event::Key(key) = event::read()?
-        {
+        if let Some(Event::Key(key)) = next_event(Duration::ZERO)? {
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 stopped.store(true, Ordering::SeqCst);
                 break;

@@ -56,6 +56,12 @@ impl Drop for Package {
     }
 }
 
+const MENU: &[&str] = &[
+    "Choose a voice for this Mac",
+    "No English voice fits",
+    "Device check unavailable",
+];
+
 struct Prompt {
     child: Child,
     master: fs::File,
@@ -66,6 +72,22 @@ struct Prompt {
 
 impl Prompt {
     fn new(package: &Package, no_color: bool, args: &[&str]) -> Self {
+        Self::start(package, package.command(), no_color, args, true)
+    }
+
+    /// Starts the native binary; without `controlling`, closing the terminal sends no SIGHUP.
+    fn native(package: &Package, controlling: bool) -> Self {
+        let command = Command::new(package.0.join("boubou"));
+        Self::start(package, command, false, &[], controlling)
+    }
+
+    fn start(
+        package: &Package,
+        mut command: Command,
+        no_color: bool,
+        args: &[&str],
+        controlling: bool,
+    ) -> Self {
         let (mut master, mut slave) = (-1, -1);
         let mut size = libc::winsize {
             ws_row: 24,
@@ -97,7 +119,13 @@ impl Prompt {
             unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0
         );
-        let mut command = package.command();
+        // Only this harness may hold the terminal, so closing `master` really closes it.
+        for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            assert_eq!(
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+                0
+            );
+        }
         command
             .args([
                 "--cache-dir",
@@ -112,13 +140,15 @@ impl Prompt {
         if no_color {
             command.env("NO_COLOR", "1");
         }
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        if controlling {
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY.into(), 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
         let child = command.spawn().unwrap();
         Self {
@@ -158,17 +188,21 @@ impl Prompt {
         self.master.write_all(text).unwrap();
     }
 
-    fn finish(&mut self) -> std::process::ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let status = loop {
+    fn exit_within(&mut self, limit: Duration) -> std::process::ExitStatus {
+        let deadline = Instant::now() + limit;
+        loop {
             let mut buffer = [0; 8192];
             let _ = self.master.read(&mut buffer);
             if let Some(status) = self.child.try_wait().unwrap() {
-                break status;
+                return status;
             }
             assert!(Instant::now() < deadline, "Prompt did not exit");
             thread::sleep(Duration::from_millis(10));
-        };
+        }
+    }
+
+    fn finish(&mut self) -> std::process::ExitStatus {
+        let status = self.exit_within(Duration::from_secs(5));
         let mut restored = unsafe { std::mem::zeroed::<libc::termios>() };
         assert_eq!(
             unsafe { libc::tcgetattr(self.master.as_raw_fd(), &mut restored) },
@@ -207,11 +241,7 @@ impl Drop for Prompt {
 fn guided_start_opens_english_voices_and_restores_the_terminal() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&[
-        "Choose a voice for this Mac",
-        "No English voice fits",
-        "Device check unavailable",
-    ]);
+    prompt.expect(MENU);
     prompt.expect(&["ctrl+c exit"]);
     assert!(!prompt.output.contains("Chinese"));
     assert!(!prompt.output.contains("Choose your conversation language"));
@@ -222,11 +252,7 @@ fn guided_start_opens_english_voices_and_restores_the_terminal() {
     prompt.send(b"\x1b[A\r");
     prompt.expect(&["Paste a model name"]);
     prompt.send(b"\x1b");
-    prompt.expect(&[
-        "Choose a voice for this Mac",
-        "No English voice fits",
-        "Device check unavailable",
-    ]);
+    prompt.expect(MENU);
     prompt.send(b"\x03");
     assert_eq!(prompt.finish().code(), Some(130));
     assert!(!package.0.join("menu-cache").exists());
@@ -236,11 +262,7 @@ fn guided_start_opens_english_voices_and_restores_the_terminal() {
 fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&[
-        "Choose a voice for this Mac",
-        "No English voice fits",
-        "Device check unavailable",
-    ]);
+    prompt.expect(MENU);
     assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
     prompt.send(b"\x1b[A\r");
     prompt.expect(&["Paste a model name"]);
@@ -259,17 +281,42 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);
-    prompt.expect(&[
-        "Choose a voice for this Mac",
-        "No English voice fits",
-        "Device check unavailable",
-    ]);
+    prompt.expect(MENU);
     assert_eq!(
         unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
         0
     );
     assert_eq!(prompt.finish().signal(), Some(15));
     assert!(!package.0.join("menu-cache").exists());
+}
+
+#[test]
+fn guided_start_exits_when_its_terminal_closes() {
+    let package = Package::new();
+    // A closed window hangs up its session; an orphaned process may keep a dead terminal instead.
+    for controlling in [true, false] {
+        let mut prompt = Prompt::native(&package, controlling);
+        prompt.expect(MENU);
+        prompt._slave = fs::File::open("/dev/null").unwrap();
+        prompt.master = fs::File::open("/dev/null").unwrap();
+        let status = prompt.exit_within(Duration::from_secs(2));
+        assert!(
+            !status.success(),
+            "{status:?} with controlling={controlling}"
+        );
+    }
+}
+
+#[test]
+fn guided_start_exits_promptly_when_terminated() {
+    let package = Package::new();
+    let mut prompt = Prompt::native(&package, true);
+    prompt.expect(MENU);
+    assert_eq!(
+        unsafe { libc::kill(prompt.child.id() as i32, libc::SIGTERM) },
+        0
+    );
+    assert_eq!(prompt.exit_within(Duration::from_secs(2)).code(), Some(130));
 }
 
 #[test]
@@ -308,11 +355,7 @@ fn guided_start_filters_incompatible_packaged_voices_before_download() {
     )
     .unwrap();
     let mut prompt = Prompt::new(&package, true, &[]);
-    prompt.expect(&[
-        "Choose a voice for this Mac",
-        "No English voice fits",
-        "Device check unavailable",
-    ]);
+    prompt.expect(MENU);
     for label in [
         "Qwen 0.6B",
         "Qwen 1.7B",
@@ -599,6 +642,19 @@ fn npm_exposes_the_product_name() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
     assert_eq!(manifest["bin"], serde_json::json!({"boubou":"cli.cjs"}));
+}
+
+#[test]
+fn npm_package_leaves_the_qwen_runner_to_the_release() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
+    let files = manifest["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .all(|file| !file.as_str().unwrap().ends_with(".tar.gz"))
+    );
+    assert!(include_str!("../packaging/build-macos.py").contains("if size > MAX_PACKED:"));
 }
 
 #[test]
