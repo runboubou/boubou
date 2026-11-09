@@ -14,7 +14,7 @@ from websockets.sync.client import connect
 
 
 def serve(model, cache, manifest, port):
-    entry = Path(sys.executable).resolve().parents[1] / "voice.py"
+    entry = Path(sys.executable).resolve().parents[1] / ("cuda.py" if sys.platform == "linux" else "voice.py")
     run = runpy.run_path(str(entry))["run"]
     run("serve", model, cache, manifest, "--host", "127.0.0.1", "--port", port)
 
