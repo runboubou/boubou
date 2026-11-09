@@ -1,9 +1,11 @@
 // macOS compiles every module, so its build is the authoritative dead-code check.
-// Elsewhere, items used only by guided startup and live audio are expected to be unused.
+// On Linux, items used only by guided startup and the macOS audio helper are expected to be unused.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+compile_error!("Boubou supports macOS and Linux.");
+
 mod assets;
-#[cfg(any(target_os = "macos", test))]
 mod audio;
 mod backend;
 mod liquid;
@@ -14,12 +16,10 @@ mod profiles;
 mod progress;
 mod qwen;
 mod realtime;
-#[cfg(any(target_os = "macos", test))]
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{CommandFactory, Parser, Subcommand};
-#[cfg(target_os = "macos")]
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal,
@@ -31,11 +31,10 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
+        mpsc::TryRecvError,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
-#[cfg(target_os = "macos")]
-use std::{sync::mpsc::TryRecvError, time::Duration};
 
 #[derive(Parser)]
 #[command(
@@ -131,7 +130,6 @@ trait Conversation {
     fn finish_audio(&mut self) -> Result<()>;
     fn interrupt(&mut self) -> Result<bool>;
     fn poll(&mut self) -> Result<Option<Output>>;
-    #[cfg(any(target_os = "macos", test))]
     fn end_input_without_response(&mut self) -> Result<()>;
 }
 
@@ -154,7 +152,6 @@ impl Conversation for Realtime {
     fn poll(&mut self) -> Result<Option<Output>> {
         self.poll()
     }
-    #[cfg(any(target_os = "macos", test))]
     fn end_input_without_response(&mut self) -> Result<()> {
         self.end_input_without_response()
     }
@@ -299,8 +296,8 @@ fn run() -> Result<()> {
             };
             if input.is_empty() {
                 ensure!(
-                    cfg!(target_os = "macos"),
-                    "Live microphone conversations currently require macOS. Use --input question.wav to speak from a file."
+                    manual || cfg!(target_os = "macos"),
+                    "Hands-free conversations currently require macOS. On Linux, add --manual and press Enter to start and send each turn."
                 );
                 ensure!(
                     io::stdin().is_terminal(),
@@ -316,11 +313,11 @@ fn run() -> Result<()> {
             check_cancel(&stopped)?;
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
             let converse = |chat: &mut dyn Conversation| {
-                #[cfg(target_os = "macos")]
                 if turns.is_empty() {
-                    return microphone(&cache, chat, &stopped, manual, model.voice_chat_language);
+                    microphone(&cache, chat, &stopped, manual, model.voice_chat_language)
+                } else {
+                    from_files(turns, output.as_deref(), chat, &stopped)
                 }
-                from_files(turns, output.as_deref(), chat, &stopped)
             };
             let result = match model.protocol {
                 profiles::Protocol::Realtime => {
@@ -449,16 +446,13 @@ fn from_files(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 struct Terminal;
-#[cfg(target_os = "macos")]
 impl Terminal {
     fn enter() -> Result<Self> {
         terminal::enable_raw_mode()?;
         Ok(Self)
     }
 }
-#[cfg(target_os = "macos")]
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
@@ -466,7 +460,6 @@ impl Drop for Terminal {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn microphone(
     cache: &Path,
     chat: &mut dyn Conversation,
@@ -474,7 +467,9 @@ fn microphone(
     manual: bool,
     language: &str,
 ) -> Result<()> {
-    eprintln!("Allow microphone access if macOS asks.");
+    if cfg!(target_os = "macos") {
+        eprintln!("Allow microphone access if macOS asks.");
+    }
     let (mut audio, captured) = {
         let _progress = progress::Progress::new("Opening microphone and speakers", None);
         audio::Audio::start(cache, !manual, stopped)?
@@ -683,7 +678,6 @@ fn microphone(
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn send_pending(
     pending: &mut voice::PendingAudio,
     chat: &mut dyn Conversation,

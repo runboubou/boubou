@@ -243,7 +243,6 @@ impl Conversation for Liquid {
         }
     }
 
-    #[cfg(any(target_os = "macos", test))]
     fn end_input_without_response(&mut self) -> Result<()> {
         self.input.clear();
         Ok(())

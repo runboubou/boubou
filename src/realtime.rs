@@ -246,7 +246,6 @@ impl Realtime {
         self.request_response()
     }
 
-    #[cfg(any(target_os = "macos", test))]
     pub fn end_input_without_response(&mut self) -> Result<()> {
         if self.user_samples > 0 {
             crate::trace(

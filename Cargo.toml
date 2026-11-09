@@ -28,6 +28,10 @@ tar = "0.4"
 tungstenite = "0.30"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 
+# Linux plays and records through the default ALSA devices (PipeWire or PulseAudio).
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = "0.18"
+
 [profile.release]
 lto = "thin"
 strip = true

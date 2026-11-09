@@ -75,17 +75,20 @@ constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
-later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. There
-is no live microphone chat on Linux yet, so [build from source](#build-from-source)
-and talk through WAV files or ask about media:
+later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`.
+[Build from source](#build-from-source), then talk with push-to-talk:
 
 ```sh
-boubou run LFM3-Audio-2B --input turn.wav --output reply.wav
-boubou ask LFM3-Omni-2B photo.png "What is in this picture?"
+boubou run LFM3-Audio-2B --manual
 ```
 
-Linux uses llama.cpp's portable CPU builds. The menu, live conversations and
-the Python runtime still need a Mac.
+Press Enter to start speaking and Enter again to send. Pressing Enter during a
+reply stops it and starts your next turn. Boubou uses the default microphone and
+speakers, usually through PipeWire or PulseAudio. WAV turns (`--input`) and
+`ask` work as on a Mac.
+
+Linux uses llama.cpp's portable CPU builds and has no echo cancellation yet, so
+hands-free listening, the menu and the Python runtime still need a Mac.
 
 ## Privacy
 
@@ -112,7 +115,8 @@ speakers   ◄── audio helper ◄── boubou ◄── model server
 
 `boubou` is a Rust program that starts two child processes. A small native
 audio helper uses Apple's voice processing for echo cancellation and speech
-detection, and streams 20 ms frames over a pipe. A model server, either
+detection, and streams 20 ms frames over a pipe. On Linux, Boubou records and
+plays through the default ALSA devices itself. A model server, either
 llama.cpp or the bundled Python runtime, listens on a loopback port. When you
 speak during a reply, Boubou drops the queued audio and cancels the
 generation. When the conversation fills the model's context, it starts a
@@ -120,8 +124,9 @@ fresh session in the background.
 
 ## Build from source
 
-You need Rust 1.88 or later, plus the Xcode Command Line Tools on a Mac or a C
-compiler on Linux.
+You need Rust 1.88 or later, plus the Xcode Command Line Tools on a Mac. On
+Linux, you need a C compiler, `pkg-config` and the ALSA headers (`libasound2-dev`
+on Ubuntu).
 
 ```sh
 git clone https://github.com/runboubou/boubou.git
@@ -140,8 +145,9 @@ Bug reports, device reports and model requests are welcome. Please read
 [CONTRIBUTING.md](CONTRIBUTING.md) first. Report security issues privately as
 described in [SECURITY.md](SECURITY.md).
 
-Live conversations run on Apple Silicon Macs today. Bringing them to Linux or
-another platform needs a native audio backend; open an issue before starting on one.
+Hands-free conversations need echo cancellation, which Boubou has only on macOS
+today. Linux has push-to-talk. Open an issue before starting on echo cancellation
+or another platform.
 
 ## Contributors
 
