@@ -31,8 +31,10 @@ Describe what changed and why, any change to commands, downloads or privacy,
 and how you tested it. Say which device checks you ran and which you did not.
 Write in English. More conventions are in [AGENTS.md](AGENTS.md).
 
-A maintainer must approve the latest commit of your pull request before it can
-merge. A new push needs a new approval.
+A core maintainer must approve the latest commit of your pull request before it
+can merge. A new push needs a new approval. Pull requests that
+[@runboubou/core-maintainers](https://github.com/orgs/runboubou/teams/core-maintainers)
+open from this repository need only passing checks.
 
 ## Releases
 

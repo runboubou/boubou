@@ -38,6 +38,8 @@ jobs:
         run: cargo test --locked --all-targets --all-features
       - name: Minimum supported Rust version
         run: cargo +1.88 check --locked --all-targets --all-features
+      - name: Review gate
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Native playback cancellation
         run: |
           clang -O2 -fobjc-arc -mmacosx-version-min=13.0 -framework AVFoundation -framework Foundation -framework CoreAudio native/audio_tests.m -o "$RUNNER_TEMP/boubou-audio-tests"
