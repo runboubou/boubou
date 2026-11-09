@@ -538,6 +538,7 @@ impl Screen {
             EnableBracketedPaste,
             EnableMouseCapture
         )?;
+        crate::watch_resizes();
         Ok(screen)
     }
 
