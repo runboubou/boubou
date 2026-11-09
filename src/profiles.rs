@@ -258,6 +258,7 @@ pub static OMNI: Profile = Profile {
     ..DEFAULT
 };
 
+/// Recall across turns fails whenever the newest message is spoken; see the README model list.
 pub static LFM25: Profile = Profile {
     id: "LFM2.5-Audio-1.5B",
     model_directory: "models/lfm2.5-audio-1.5b/7d525f883a077e20afb782f2ff618edcae0e39e4",
