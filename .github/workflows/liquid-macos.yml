@@ -73,9 +73,9 @@ jobs:
             "What color is the sky on a clear day?"
           export BOUBOU_QUESTION_WAV="$question"
           # One test at a time: each one starts a model server that needs most of the runner's memory.
+          # Hosted runners generate replies about 20 times slower than an Apple Silicon Mac, so the
+          # 120-turn conversation and the 32K-token context renewal tests stay on a real Mac.
           cargo test --locked --all-features -- --ignored --exact --test-threads=1 \
             liquid::tests::official_models_handle_multiturn_cancellation_and_offline_restart \
             realtime::tests::liquid_backend_cancels_and_accepts_the_next_turn \
-            realtime::tests::capture_chunks_match_reference_input \
-            realtime::tests::liquid_sustained_voice_conversation_keeps_replies_varied \
-            realtime::tests::liquid_conversation_renews_beyond_context_capacity
+            realtime::tests::capture_chunks_match_reference_input
