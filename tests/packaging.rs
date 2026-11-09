@@ -320,6 +320,26 @@ fn guided_start_exits_promptly_when_terminated() {
 }
 
 #[test]
+fn guided_start_redraws_when_the_terminal_resizes() {
+    let package = Package::new();
+    let mut prompt = Prompt::native(&package, true);
+    prompt.expect(MENU);
+    prompt.output.clear();
+    let size = libc::winsize {
+        ws_row: 30,
+        ws_col: 100,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    assert_eq!(
+        unsafe { libc::ioctl(prompt.master.as_raw_fd(), libc::TIOCSWINSZ, &size) },
+        0
+    );
+    // A resize sends no input, so the picker must notice it without a key press.
+    prompt.expect(MENU);
+}
+
+#[test]
 fn guided_start_filters_incompatible_packaged_voices_before_download() {
     let package = Package::new();
     let release = package.0.join("qwen");

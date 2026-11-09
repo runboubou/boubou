@@ -32,7 +32,7 @@ optional.
 | --- | --- | --- |
 | `LFM3-Audio-2B` | English voice chat. The default. | 1.4 GB |
 | `LFM3-Omni-2B` | English voice chat, plus text questions about images and short videos | 1.6 GB |
-| `LFM2.5-Audio-1.5B` | Smaller English voice chat model. Interrupting it takes longer, because Boubou has to restart its server. | 1.3 GB |
+| `LFM2.5-Audio-1.5B` | Smaller English voice chat model. It does not remember what you said in earlier turns. Interrupting it takes longer, because Boubou has to restart its server. | 1.3 GB |
 
 All three are [Liquid AI](https://huggingface.co/LiquidAI) models served by
 [llama.cpp](https://github.com/ggml-org/llama.cpp).
