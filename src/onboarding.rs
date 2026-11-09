@@ -40,6 +40,8 @@ unsafe extern "C" {
 pub struct Selection {
     pub model: Model,
     pub offline: bool,
+    /// What the device check found, for the startup checklist.
+    pub check: Option<String>,
 }
 
 struct Device {
@@ -344,6 +346,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
     Ok(Selection {
         model,
         offline: args.len() == 2,
+        check: None,
     })
 }
 
@@ -432,7 +435,12 @@ pub fn start(cache: &Path) -> Result<Selection> {
         }
         let setup = choices[selected];
         // A user may leave the picker open while other apps consume memory.
-        if let Err(error) = Device::detect(cache).and_then(|device| device.check(setup)) {
+        let device = Device::detect(cache);
+        if let Err(error) = device
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .and_then(|device| device.check(setup))
+        {
             screen.choose(
                 "Resources changed before startup",
                 &[error.to_string()],
@@ -440,9 +448,16 @@ pub fn start(cache: &Path) -> Result<Selection> {
             )?;
             continue;
         }
+        let device = device?;
         return Ok(Selection {
             model: setup.model,
             offline: false,
+            check: Some(format!(
+                "{} · {:.0} GiB memory · needs about {:.0} GiB",
+                device.chip.as_deref().unwrap_or("Apple Silicon"),
+                device.memory as f64 / GIB as f64,
+                setup.memory as f64 / GIB as f64
+            )),
         });
     }
 }

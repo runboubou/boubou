@@ -1,6 +1,6 @@
 use crate::{
     profiles::{Download, Profile},
-    progress::Progress,
+    progress::{self, Phase, Progress, Step},
 };
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
@@ -26,29 +26,67 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let runtime = profile.runtime()?;
     let _lock = preparation_lock(cache_dir)?;
 
-    let download = |spec: &Download<'_>, directory: &Path| {
-        fetch(spec, directory, offline).with_context(|| {
-            format!(
-                "Cannot prepare {}. Run `boubou pull {}` while online.",
-                profile.id, profile.id
-            )
-        })
+    let context = || {
+        format!(
+            "Cannot prepare {}. Run `boubou pull {}` while online.",
+            profile.id, profile.id
+        )
     };
     let model_dir = cache_dir.join(profile.model_directory);
-    let archive = download(&runtime.archive, &cache_dir.join("downloads"))?;
+    let downloads = cache_dir.join("downloads");
+    // The model's license is cached alongside its weights before anything is runnable.
+    let files: Vec<_> = [(&runtime.archive, downloads.as_path())]
+        .into_iter()
+        .chain(
+            profile
+                .model_assets()
+                .map(|spec| (spec, model_dir.as_path())),
+        )
+        .collect();
+    // Download everything first, then verify everything, so startup reads as two clear steps.
+    progress::step(Step::Download);
+    for (spec, directory) in &files {
+        prefetch(spec, directory, offline).with_context(context)?;
+    }
+    progress::step(Step::Verify);
+    let mut archive = PathBuf::new();
+    for (spec, directory) in &files {
+        let path = fetch(spec, directory, offline).with_context(context)?;
+        if std::ptr::eq(*spec, &runtime.archive) {
+            archive = path;
+        }
+    }
+    progress::step(Step::Start);
     let installed = cache_dir.join(runtime.directory);
     install_runtime(&archive, &installed, runtime.server, false)?;
-
-    // Cache the model's license alongside its weights before making it runnable.
-    for spec in profile.model_assets() {
-        download(spec, &model_dir)?;
-    }
     Ok(Assets {
         profile,
         server: installed.join(runtime.server),
         model: model_dir.join(profile.model.name),
         projector: model_dir.join(profile.projector.name),
     })
+}
+
+/// The checklist's download chips: the model's files and the speech engine.
+pub fn parts(profile: &'static Profile, cache_dir: &Path) -> Result<Vec<progress::Part>> {
+    let runtime = profile.runtime()?;
+    let model_dir = cache_dir.join(profile.model_directory);
+    Ok(vec![
+        progress::Part {
+            name: profile.id.into(),
+            files: profile
+                .model_assets()
+                .map(|spec| (model_dir.join(spec.name), spec.size))
+                .collect(),
+        },
+        progress::Part {
+            name: "Speech engine".into(),
+            files: vec![(
+                cache_dir.join("downloads").join(runtime.archive.name),
+                runtime.archive.size,
+            )],
+        },
+    ])
 }
 
 pub(crate) fn preparation_lock(cache_dir: &Path) -> Result<File> {
@@ -172,13 +210,46 @@ pub(crate) fn verified(path: &Path, spec: &Download<'_>) -> Result<bool> {
     if !metadata.is_file() || metadata.len() != spec.size {
         return Ok(false);
     }
-    let progress = Progress::new(&format!("Verifying {}", spec.name), Some(spec.size));
+    let progress = Progress::file(
+        &format!("Verifying {}", spec.name),
+        &path_for_progress(path, spec),
+        spec.size,
+        Phase::Verify,
+    );
     Ok(sha256(file, Some(&progress))? == spec.sha256)
 }
 
 fn sync_parent(path: &Path) -> Result<()> {
     File::open(path.parent().context("Cache path has no parent")?)?.sync_all()?;
     Ok(())
+}
+
+/// The checklist tracks a pinned file by its final name, whether it is read from there or from
+/// its `.part` download.
+fn path_for_progress<'a>(path: &'a Path, spec: &Download<'_>) -> std::borrow::Cow<'a, Path> {
+    let partial = format!("{}.part", spec.name);
+    if path.file_name().and_then(|n| n.to_str()) == Some(partial.as_str()) {
+        path.with_file_name(spec.name).into()
+    } else {
+        path.into()
+    }
+}
+
+/// Download a missing file into its `.part` without verifying it, when a full-sized copy is not
+/// already present. [`fetch`] then verifies, and repairs anything that fails.
+pub(crate) fn prefetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<()> {
+    let full = |path: PathBuf| {
+        path.metadata()
+            .is_ok_and(|m| m.is_file() && m.len() == spec.size)
+    };
+    if offline
+        || spec.url.is_empty()
+        || full(dir.join(spec.name))
+        || full(dir.join(format!("{}.part", spec.name)))
+    {
+        return Ok(());
+    }
+    download(spec, dir)
 }
 
 pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<PathBuf> {
@@ -197,7 +268,20 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
         "{} is missing or corrupted and offline mode is enabled.",
         spec.name
     );
+    download(spec, dir)?;
+    ensure!(
+        verified(&partial, spec)?,
+        "{} failed its size or SHA-256 check; it was not installed. Run again to retry.",
+        spec.name
+    );
+    fs::rename(&partial, &destination)?;
+    sync_parent(&destination)?;
+    Ok(destination)
+}
 
+/// Download or resume `spec` into its `.part` file.
+fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
+    let partial = dir.join(format!("{}.part", spec.name));
     fs::create_dir_all(dir)?;
     let offset = fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
     // A full-sized partial with an incorrect checksum cannot be resumed.
@@ -216,7 +300,7 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
     if offset > 0 {
         request = request.header(header::RANGE, format!("bytes={offset}-"));
     }
-    let progress = Progress::new(
+    let progress = Progress::file(
         &format!(
             "{} {}",
             if offset == 0 {
@@ -226,7 +310,9 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
             },
             spec.name,
         ),
-        Some(spec.size),
+        &dir.join(spec.name),
+        spec.size,
+        Phase::Download,
     );
     let mut response = request
         .send()
@@ -284,15 +370,7 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
     }
     file.sync_all()?;
     drop(file);
-    drop(progress);
-    ensure!(
-        verified(&partial, spec)?,
-        "{} failed its size or SHA-256 check; it was not installed. Run again to retry.",
-        spec.name
-    );
-    fs::rename(&partial, &destination)?;
-    sync_parent(&destination)?;
-    Ok(destination)
+    Ok(())
 }
 
 pub(crate) fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool> {
