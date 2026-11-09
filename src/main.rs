@@ -563,11 +563,8 @@ fn microphone(
     manual: bool,
     language: &str,
 ) -> Result<()> {
-    if cfg!(target_os = "macos") {
-        progress::say("Allow microphone access if macOS asks.");
-    }
     let (mut audio, captured) = {
-        let _progress = progress::Progress::new("Opening microphone and speakers", None);
+        let _progress = progress::opening_audio();
         audio::Audio::start(cache, !manual, stopped)?
     };
     if !progress::finish(&crate::progress::ready(language)) {

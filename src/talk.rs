@@ -93,6 +93,10 @@ impl Panel {
     }
 
     pub fn note(&mut self, note: Note) {
+        // These notes end the reply line, so the next reply is labelled again.
+        if matches!(note, Note::Paused | Note::Interrupted | Note::Recording) {
+            self.reply_open = false;
+        }
         let Some(live) = &mut self.live else {
             let text = match note {
                 Note::Intro if self.manual => {
@@ -120,7 +124,6 @@ impl Panel {
             Note::Paused => {
                 live.mic = Mic::Paused;
                 live.thinking = false;
-                self.reply_open = false;
                 live.end_line();
             }
             Note::Resumed => {
@@ -131,14 +134,12 @@ impl Panel {
                 }
             }
             Note::Interrupted => {
-                self.reply_open = false;
                 live.thinking = false;
                 live.end_line();
                 live.commit(&format!("{DIM}[Interrupted]"));
             }
             Note::Recording => {
                 live.mic = Mic::Recording;
-                self.reply_open = false;
                 live.end_line();
             }
             Note::NoAudioYet => live.commit(&format!(
@@ -515,6 +516,21 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_replies_are_labelled_again_after_a_pause_or_recording() {
+        for note in [Note::Paused, Note::Interrupted, Note::Recording] {
+            let mut panel = Panel {
+                live: None,
+                manual: true,
+                reply_open: false,
+            };
+            panel.reply("Liquid", "Hello");
+            assert!(panel.reply_open);
+            panel.note(note);
+            assert!(!panel.reply_open);
+        }
+    }
 
     #[test]
     fn speaker_meter_follows_the_sample_now_playing() {

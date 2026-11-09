@@ -158,18 +158,20 @@ pub fn ready(language: &str) -> String {
     )
 }
 
-/// A startup message: the active step's note on the checklist, a plain line otherwise.
-pub fn say(text: &str) {
+/// The progress for opening audio devices. On macOS it says that macOS may ask for microphone
+/// access, which it does while the devices open.
+pub fn opening_audio() -> Progress {
+    const LABEL: &str = "Opening microphone and speakers";
+    if !cfg!(target_os = "macos") {
+        return Progress::new(LABEL, None);
+    }
     let mut shown = false;
-    update(|state| {
-        shown = true;
-        let active = state.active;
-        if let Some(entry) = state.steps.iter_mut().find(|(s, ..)| *s == active) {
-            entry.2 = text.into();
-        }
-    });
-    if !shown {
-        eprintln!("{text}");
+    update(|_| shown = true);
+    if shown {
+        Progress::new(&format!("{LABEL} · allow access if macOS asks"), None)
+    } else {
+        eprintln!("Allow microphone access if macOS asks.");
+        Progress::new(LABEL, None)
     }
 }
 
@@ -185,13 +187,10 @@ fn end(mark: impl FnOnce(&mut State)) -> bool {
     true
 }
 
-/// Moves the checklist to `step`; earlier steps count as done.
+/// Moves the checklist to `step`; earlier steps count as done. A step this checklist does not
+/// show (`pull` has no Start) keeps the last shown step active, so its failure still shows ✗.
 pub fn step(step: Step) {
-    update(|state| {
-        if step > state.active {
-            state.active = step;
-        }
-    });
+    update(|state| state.reach(step));
 }
 
 fn update(change: impl FnOnce(&mut State)) {
@@ -228,9 +227,14 @@ impl State {
         for (index, part) in parts.into_iter().enumerate() {
             names.push(part.name);
             for (path, size) in part.files {
-                let cached = path
-                    .metadata()
-                    .is_ok_and(|m| m.is_file() && m.len() == size);
+                let full = |path: &Path| {
+                    path.metadata()
+                        .is_ok_and(|m| m.is_file() && m.len() == size)
+                };
+                // A full-sized partial is only verified, as a cached file is.
+                let mut partial = path.clone().into_os_string();
+                partial.push(".part");
+                let cached = full(&path) || full(Path::new(&partial));
                 files.push(File {
                     path,
                     size,
@@ -280,6 +284,12 @@ impl State {
                 self.download_done += bytes;
             }
             Counted::Verify => self.verify_done += bytes,
+        }
+    }
+
+    fn reach(&mut self, step: Step) {
+        if step > self.active && self.steps.iter().any(|(s, ..)| *s == step) {
+            self.active = step;
         }
     }
 
@@ -458,7 +468,7 @@ impl Progress {
             let active = state.active;
             verifying = active == Step::Verify && total.is_some();
             if let Some(entry) = state.steps.iter_mut().find(|(s, ..)| *s == active)
-                && matches!(active, Step::Start | Step::Check)
+                && (matches!(active, Step::Start | Step::Check) || total.is_none())
             {
                 entry.2 = label.into();
             }
@@ -696,5 +706,36 @@ mod tests {
         let frame = visible(&state.frame(Paint(Colors::None), 40).join("\n"));
         assert!(frame.contains("✗"));
         assert!(frame.contains("✓  Download"));
+    }
+
+    #[test]
+    fn pull_installs_during_its_last_step_and_shows_a_failure_there() {
+        let mut state = fixture(false);
+        state.steps.pop();
+        state.reach(Step::Verify);
+        state.reach(Step::Start);
+        assert_eq!(state.active, Step::Verify);
+        state.failed = true;
+        let frame = visible(&state.frame(Paint(Colors::None), 60).join("\n"));
+        assert!(frame.contains("✗  Verify"), "{frame}");
+    }
+
+    #[test]
+    fn a_full_sized_partial_is_already_downloaded() {
+        let state = fixture(false);
+        let dir = state.files[1].path.parent().unwrap().to_owned();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("small.bin.part"), [0; 4]).unwrap();
+        let state = State::new(
+            "boubou pull LFM3-Audio-2B".into(),
+            Vec::new(),
+            vec![Part {
+                name: "LFM3-Audio-2B".into(),
+                files: vec![(dir.join("small.bin"), 4)],
+            }],
+        );
+        assert_eq!(state.download_total, 0);
+        assert_eq!(state.verify_total, 4);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

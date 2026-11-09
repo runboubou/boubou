@@ -363,11 +363,8 @@ pub(super) fn converse(
     use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
     use std::sync::{atomic::Ordering, mpsc::TryRecvError};
 
-    if cfg!(target_os = "macos") {
-        crate::progress::say("Allow microphone access if macOS asks.");
-    }
     let (mut audio, captured) = {
-        let _progress = crate::progress::Progress::new("Opening microphone and speakers", None);
+        let _progress = crate::progress::opening_audio();
         Audio::start(cache, true, stopped)?
     };
     let language = language.trim_end_matches(" (Whisper)");
