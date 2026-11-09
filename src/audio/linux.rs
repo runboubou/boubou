@@ -149,12 +149,14 @@ impl Audio {
     }
 }
 
+/// Asks for 20 ms periods so the canceller sees speaker and microphone audio interleaved.
+/// PipeWire's default periods deliver both in 100 ms bursts, more jitter than AEC3 tolerates.
 #[cfg(target_os = "linux")]
 fn config(sample_rate: u32) -> cpal::StreamConfig {
     cpal::StreamConfig {
         channels: 1,
         sample_rate,
-        buffer_size: cpal::BufferSize::Default,
+        buffer_size: cpal::BufferSize::Fixed(sample_rate / 50),
     }
 }
 
@@ -229,22 +231,23 @@ struct Speech {
 
 #[cfg(target_os = "linux")]
 impl Speech {
-    /// Whether a window completed by these samples contains speech.
-    fn push(&mut self, pcm: &[i16]) -> bool {
-        let mut voiced = false;
+    /// The highest speech probability among windows completed by these samples.
+    fn push(&mut self, pcm: &[i16]) -> f32 {
+        let mut score = 0.0_f32;
         for &sample in pcm {
             self.window.push(sample);
             if self.window.len() == 256 {
-                voiced |= self.detector.predict_i16(&self.window) >= 0.5;
+                score = score.max(self.detector.predict_i16(&self.window));
                 self.window.clear();
             }
         }
-        voiced
+        score
     }
 }
 
 /// AEC3 needs about a second of reply to find the echo path. Until two seconds of audible
-/// reply have played, speech counts only after half a second without playback.
+/// reply have played, speech counts only after half a second without playback. Even then,
+/// echo can leak through briefly as a reply starts or resumes, so speech over it must be clear.
 struct Gate {
     audible: u32,
     quiet: u32,
@@ -254,6 +257,9 @@ impl Gate {
     /// In 10 ms playback chunks.
     const CONVERGED: u32 = 200;
     const SETTLED: u32 = 50;
+    /// Speech probabilities; echo leaks in a real room scored up to 0.75, people over 0.8.
+    const SPEECH: f32 = 0.5;
+    const OVER_REPLY: f32 = 0.8;
 
     fn render(&mut self, chunk: &[i16]) {
         if chunk.iter().any(|&sample| sample != 0) {
@@ -264,8 +270,12 @@ impl Gate {
         }
     }
 
-    fn near_end(&self, voiced: bool) -> bool {
-        voiced && (self.audible >= Self::CONVERGED || self.quiet >= Self::SETTLED)
+    fn near_end(&self, score: f32) -> bool {
+        if self.quiet >= Self::SETTLED {
+            score >= Self::SPEECH
+        } else {
+            self.audible >= Self::CONVERGED && score >= Self::OVER_REPLY
+        }
     }
 }
 
@@ -380,30 +390,34 @@ mod tests {
     }
 
     #[test]
-    fn speech_interrupts_playback_only_after_the_canceller_has_heard_two_seconds() {
+    fn speech_interrupts_playback_only_once_cancelled_and_clear() {
         let mut gate = Gate::default();
-        assert!(gate.near_end(true), "nothing has played yet");
-        assert!(!gate.near_end(false));
+        assert!(gate.near_end(0.6), "nothing has played yet");
+        assert!(!gate.near_end(0.4));
         for _ in 0..10 {
             gate.render(&[1000; RENDER_CHUNK]);
         }
         assert!(
-            !gate.near_end(true),
+            !gate.near_end(0.95),
             "the first reply's echo is not cancelled yet"
         );
         for _ in 0..Gate::SETTLED {
             gate.render(&[0; RENDER_CHUNK]);
         }
         assert!(
-            gate.near_end(true),
+            gate.near_end(0.6),
             "a turn may start once playback has stopped"
         );
         for _ in 0..Gate::CONVERGED {
             gate.render(&[1000; RENDER_CHUNK]);
         }
         assert!(
-            gate.near_end(true),
-            "after convergence, speech interrupts playback"
+            !gate.near_end(0.75),
+            "a leak of echo does not interrupt playback"
+        );
+        assert!(
+            gate.near_end(0.9),
+            "after convergence, clear speech interrupts playback"
         );
     }
 
@@ -431,7 +445,7 @@ mod tests {
         let energy = |pcm: &[i16]| pcm.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>();
         let mut echo = Echo::new();
         let (mut before, mut after) = (0.0, 0.0);
-        // Five seconds in 20 ms steps; the microphone hears half the speaker 40 ms later.
+        // Five seconds in 20 ms device periods; the microphone hears half the speaker 40 ms later.
         for step in 0..250 {
             let speaker: Vec<i16> = (0..2 * RENDER_CHUNK)
                 .map(|n| signal((step * 2 * RENDER_CHUNK + n) as f64 / 24_000.0, 1.0))
