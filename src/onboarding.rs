@@ -180,7 +180,7 @@ impl Setup {
             memory: profile
                 .memory_budget
                 .context("No memory estimate for this voice")?,
-            resources: liquid_requirements(profile, cache),
+            resources: liquid_requirements(profile, cache)?,
             recommended_memory_gib: if profile.id == profiles::DEFAULT.id {
                 8
             } else {
@@ -202,14 +202,15 @@ fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> 
     choices
 }
 
-fn liquid_requirements(model: &Profile, cache: &Path) -> qwen::Requirements {
+fn liquid_requirements(model: &Profile, cache: &Path) -> Result<qwen::Requirements> {
+    let runtime = model.runtime()?;
     let folder = cache.join(model.model_directory);
     let mut download = 0;
     let downloads = cache.join("downloads");
     for (asset, directory) in model
         .model_assets()
         .map(|asset| (asset, folder.as_path()))
-        .chain([(&model.runtime.archive, downloads.as_path())])
+        .chain([(&runtime.archive, downloads.as_path())])
     {
         if !directory
             .join(asset.name)
@@ -219,20 +220,16 @@ fn liquid_requirements(model: &Profile, cache: &Path) -> qwen::Requirements {
             download += asset.size;
         }
     }
-    let staging = if cache
-        .join(model.runtime.directory)
-        .join(model.runtime.server)
-        .is_file()
-    {
+    let staging = if cache.join(runtime.directory).join(runtime.server).is_file() {
         0
     } else {
-        4 * model.runtime.archive.size
+        4 * runtime.archive.size
     };
-    qwen::Requirements {
+    Ok(qwen::Requirements {
         min_macos: (13, 3, 0),
         download,
         disk: download + staging,
-    }
+    })
 }
 
 fn parse_selection(text: &str) -> Result<Selection> {

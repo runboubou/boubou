@@ -72,6 +72,21 @@ Images can be PNG or JPEG up to 2048 × 2048. Videos can be MP4 or MOV with a
 constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 `ffmpeg` and `ffprobe` installed. Files are limited to 64 MiB.
 
+## Linux
+
+The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
+later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. There
+is no live microphone chat on Linux yet, so [build from source](#build-from-source)
+and talk through WAV files or ask about media:
+
+```sh
+boubou run LFM3-Audio-2B --input turn.wav --output reply.wav
+boubou ask LFM3-Omni-2B photo.png "What is in this picture?"
+```
+
+Linux uses llama.cpp's portable CPU builds. The menu, live conversations and
+the Python runtime still need a Mac.
+
 ## Privacy
 
 - Inference runs on your machine. Boubou does not upload audio, transcripts or
@@ -83,9 +98,10 @@ constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 
 ## Storage
 
-Models and runtimes live in `~/Library/Caches/boubou`. Set `BOUBOU_HOME` or
-pass `--cache-dir` to use another folder. Interrupted downloads resume where
-they stopped. To remove everything, delete the folder.
+Models and runtimes live in `~/Library/Caches/boubou`, or `~/.cache/boubou` on
+Linux. Set `BOUBOU_HOME` or pass `--cache-dir` to use another folder.
+Interrupted downloads resume where they stopped. To remove everything, delete
+the folder.
 
 ## How it works
 
@@ -104,7 +120,8 @@ fresh session in the background.
 
 ## Build from source
 
-You need Rust 1.88 or later and the Xcode Command Line Tools.
+You need Rust 1.88 or later, plus the Xcode Command Line Tools on a Mac or a C
+compiler on Linux.
 
 ```sh
 git clone https://github.com/runboubou/boubou.git
@@ -123,8 +140,8 @@ Bug reports, device reports and model requests are welcome. Please read
 [CONTRIBUTING.md](CONTRIBUTING.md) first. Report security issues privately as
 described in [SECURITY.md](SECURITY.md).
 
-Boubou runs on Apple Silicon Macs today. Support for other platforms needs a
-native audio backend for each one; open an issue before starting on one.
+Live conversations run on Apple Silicon Macs today. Bringing them to Linux or
+another platform needs a native audio backend; open an issue before starting on one.
 
 ## Contributors
 

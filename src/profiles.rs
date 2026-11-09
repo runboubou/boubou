@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -34,10 +35,92 @@ pub struct Download<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct Runtime {
     pub label: &'static str,
+    /// The `std::env::consts` OS and architecture this build runs on.
+    pub host: (&'static str, &'static str),
     pub archive: Download<'static>,
     pub directory: &'static str,
     pub server: &'static str,
 }
+
+const LLAMA_CPP_MACOS: Runtime = Runtime {
+    label: "llama.cpp b11960",
+    host: ("macos", "aarch64"),
+    archive: Download {
+        name: "llama-b11960-bin-macos-arm64.tar.gz",
+        url: "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
+        size: 16_465_074,
+        sha256: "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
+    },
+    directory: "runtimes/b11960-macos-arm64",
+    server: "llama-b11960/llama-server",
+};
+
+/// Linux uses upstream's portable CPU builds; GPU builds need per-driver testing.
+const LLAMA_CPP: &[Runtime] = &[
+    LLAMA_CPP_MACOS,
+    Runtime {
+        host: ("linux", "x86_64"),
+        archive: Download {
+            name: "llama-b11960-bin-ubuntu-x64.tar.gz",
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-ubuntu-x64.tar.gz",
+            size: 22_686_210,
+            sha256: "31cc3a6bc638ac6c48dc4b1b74888f1eaadf3d14227c1e5f67daf9a49541d97a",
+        },
+        directory: "runtimes/b11960-linux-x64",
+        ..LLAMA_CPP_MACOS
+    },
+    Runtime {
+        host: ("linux", "aarch64"),
+        archive: Download {
+            name: "llama-b11960-bin-ubuntu-arm64.tar.gz",
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-ubuntu-arm64.tar.gz",
+            size: 18_411_465,
+            sha256: "0065ecfbffe8a790bb0d28059a3320cdc8f723b7f3f248cdc8bfc04790927715",
+        },
+        directory: "runtimes/b11960-linux-arm64",
+        ..LLAMA_CPP_MACOS
+    },
+];
+
+// Use PCM16 SSE; the older English archive emits float32 audio.
+const LIQUID_AUDIO: &[Runtime] = &[
+    Runtime {
+        label: "Liquid Audio 8256 (22e8cd6f6)",
+        host: ("macos", "aarch64"),
+        archive: Download {
+            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64.zip",
+            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-macos-arm64.zip",
+            size: 7_280_738,
+            sha256: "e59b7be254b6386960fc1d3cf51851709220202a4fdf7f83eb29953987992c9b",
+        },
+        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64",
+        server: "llama-liquid-audio-macos-arm64/llama-liquid-audio-server",
+    },
+    Runtime {
+        label: "Liquid Audio 8256 (22e8cd6f6)",
+        host: ("linux", "x86_64"),
+        archive: Download {
+            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-ubuntu-x64.zip",
+            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-ubuntu-x64.zip",
+            size: 14_127_918,
+            sha256: "1104d54e8bca5faabd6de28d27f17283a4b7ef464f0ab6c0f1f5eb9a5a143e91",
+        },
+        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-linux-x64",
+        server: "llama-liquid-audio-ubuntu-x64/llama-liquid-audio-server",
+    },
+    Runtime {
+        label: "Liquid Audio 8256 (22e8cd6f6)",
+        host: ("linux", "aarch64"),
+        archive: Download {
+            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-ubuntu-arm64.zip",
+            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-ubuntu-arm64.zip",
+            size: 9_243_426,
+            sha256: "c04db9ffb88bd9648d89a875814a52a71f763132cee858bb0dad200ebcc47357",
+        },
+        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-linux-arm64",
+        server: "llama-liquid-audio-ubuntu-arm64/llama-liquid-audio-server",
+    },
+];
 
 #[derive(Debug, Clone, Copy)]
 pub enum Protocol {
@@ -57,7 +140,7 @@ pub struct Profile {
     pub model: Download<'static>,
     pub projector: Download<'static>,
     pub license: Download<'static>,
-    pub runtime: Runtime,
+    pub runtimes: &'static [Runtime],
     pub protocol: Protocol,
     /// Verified runtime executable for local image/video questions, when supported.
     pub media_cli: Option<&'static str>,
@@ -71,6 +154,20 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The pinned engine build for this computer.
+    pub fn runtime(&self) -> Result<&'static Runtime> {
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        self.runtimes
+            .iter()
+            .find(|runtime| runtime.host == host)
+            .with_context(|| {
+                format!(
+                    "{} runs on Apple Silicon Macs and x86-64 or arm64 Linux.",
+                    self.id
+                )
+            })
+    }
+
     pub fn model_assets(&self) -> impl Iterator<Item = &Download<'static>> {
         [&self.license, &self.model, &self.projector]
             .into_iter()
@@ -108,17 +205,7 @@ pub static DEFAULT: Profile = Profile {
         size: 10_574,
         sha256: "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
     },
-    runtime: Runtime {
-        label: "llama.cpp b11960",
-        archive: Download {
-            name: "llama-b11960-bin-macos-arm64.tar.gz",
-            url: "https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz",
-            size: 16_465_074,
-            sha256: "58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c",
-        },
-        directory: "runtimes/b11960-macos-arm64",
-        server: "llama-b11960/llama-server",
-    },
+    runtimes: LLAMA_CPP,
     protocol: Protocol::Realtime,
     media_cli: None,
     // Native voice-file/cancellation profiling used about 2 GiB RSS. Reserve 6 GiB
@@ -194,18 +281,7 @@ pub static LFM25: Profile = Profile {
         size: 10_596,
         sha256: "5188f2b355da20647257a3156db5834c794e5fb5e6d8dc4d4cdbb3180e75b85b",
     },
-    // Use PCM16 SSE; the older English archive emits float32 audio.
-    runtime: Runtime {
-        label: "Liquid Audio 8256 (22e8cd6f6)",
-        archive: Download {
-            name: "liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64.zip",
-            url: "https://huggingface.co/LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF/resolve/64b96718b341dbd5650f9e85627cecdcbd4ac61b/runners/llama-liquid-audio-macos-arm64.zip",
-            size: 7_280_738,
-            sha256: "e59b7be254b6386960fc1d3cf51851709220202a4fdf7f83eb29953987992c9b",
-        },
-        directory: "runtimes/liquid-audio-jp-64b96718b341dbd5650f9e85627cecdcbd4ac61b-macos-arm64",
-        server: "llama-liquid-audio-macos-arm64/llama-liquid-audio-server",
-    },
+    runtimes: LIQUID_AUDIO,
     protocol: Protocol::LiquidAudio {
         tokenizer: Download {
             name: "tokenizer-LFM2.5-Audio-1.5B-Q8_0.gguf",
@@ -323,4 +399,28 @@ impl Model {
 pub fn value_parser() -> impl TypedValueParser<Value = Model> {
     PossibleValuesParser::new(Model::all().map(Model::id))
         .map(|id| Model::find(&id).expect("validated model ID"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profiles_select_the_engine_built_for_this_host() {
+        let host = (std::env::consts::OS, std::env::consts::ARCH);
+        for profile in PROFILES {
+            assert_eq!(profile.runtime().unwrap().host, host);
+        }
+        let unsupported = Profile {
+            runtimes: &[],
+            ..DEFAULT
+        };
+        assert!(
+            unsupported
+                .runtime()
+                .unwrap_err()
+                .to_string()
+                .contains("Apple Silicon Macs and x86-64 or arm64 Linux")
+        );
+    }
 }

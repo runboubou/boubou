@@ -1,3 +1,7 @@
+// macOS compiles every module, so its build is the authoritative dead-code check.
+// Elsewhere, items used only by guided startup and live audio are expected to be unused.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 mod assets;
 #[cfg(any(target_os = "macos", test))]
 mod audio;
@@ -228,7 +232,9 @@ fn run() -> Result<()> {
             );
             println!(
                 "Profile: Liquid AI {} · {} · {}",
-                model.id, model.quantization, model.runtime.label
+                model.id,
+                model.quantization,
+                model.runtime()?.label
             );
             println!(
                 "Voice chat: {} · audio input 16 kHz · audio output 24 kHz",
@@ -293,6 +299,10 @@ fn run() -> Result<()> {
             };
             if input.is_empty() {
                 ensure!(
+                    cfg!(target_os = "macos"),
+                    "Live microphone conversations currently require macOS. Use --input question.wav to speak from a file."
+                );
+                ensure!(
                     io::stdin().is_terminal(),
                     "Microphone mode needs a terminal. Use --input question.wav for a file."
                 );
@@ -306,11 +316,11 @@ fn run() -> Result<()> {
             check_cancel(&stopped)?;
             let backend = backend::Backend::start(&files, &cache, &stopped)?;
             let converse = |chat: &mut dyn Conversation| {
+                #[cfg(target_os = "macos")]
                 if turns.is_empty() {
-                    microphone(&cache, chat, &stopped, manual, model.voice_chat_language)
-                } else {
-                    from_files(turns, output.as_deref(), chat, &stopped)
+                    return microphone(&cache, chat, &stopped, manual, model.voice_chat_language);
                 }
+                from_files(turns, output.as_deref(), chat, &stopped)
             };
             let result = match model.protocol {
                 profiles::Protocol::Realtime => {
@@ -454,19 +464,6 @@ impl Drop for Terminal {
         let _ = terminal::disable_raw_mode();
         eprintln!();
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn microphone(
-    _cache: &Path,
-    _chat: &mut dyn Conversation,
-    _stopped: &AtomicBool,
-    _manual: bool,
-    _language: &str,
-) -> Result<()> {
-    bail!(
-        "Live voice conversations currently require macOS. Other audio backends are not implemented yet."
-    );
 }
 
 #[cfg(target_os = "macos")]

@@ -95,23 +95,14 @@ impl Input {
             // Reserve 1024 tokens per sampled frame, plus the whole 10-second soundtrack.
             frames * 1024 + 160_000_usize.div_ceil(profile.audio_samples_per_token)
         } else {
-            let output = tool_output(
-                Command::new("/usr/bin/sips")
-                    .args(["-g", "pixelWidth", "-g", "pixelHeight"])
-                    .arg(&self.path)
-                    .stderr(Stdio::null()),
-                stopped,
-                Duration::from_secs(10),
-            )
-            .context("Cannot inspect this PNG/JPEG image")?;
-            image_tokens(std::str::from_utf8(&output).context("Invalid image metadata")?)?
+            image_tokens(&fs::read(&self.path).context("Cannot read this PNG/JPEG image")?)?
         };
         check_context(profile, question.len(), media_tokens)?;
         let executable = profile
             .media_cli
             .context("This model does not support media questions")?;
         let output = tool_output(
-            Command::new(cache.join(profile.runtime.directory).join(executable))
+            Command::new(cache.join(profile.runtime()?.directory).join(executable))
                 .arg("--model")
                 .arg(&assets.model)
                 .arg("--mmproj")
@@ -155,15 +146,39 @@ impl Input {
     }
 }
 
-fn image_tokens(metadata: &str) -> Result<usize> {
-    let dimension = |key: &str| {
-        metadata
-            .lines()
-            .rev()
-            .find_map(|line| line.trim().strip_prefix(key)?.trim().parse::<usize>().ok())
-            .context("Cannot read image dimensions")
+/// Reads PNG or JPEG dimensions from the file's header without decoding it.
+fn image_size(image: &[u8]) -> Option<(usize, usize)> {
+    let number = |at: usize, length: usize| {
+        Some(
+            image
+                .get(at..at + length)?
+                .iter()
+                .fold(0, |value, &byte| value << 8 | usize::from(byte)),
+        )
     };
-    let (width, height) = (dimension("pixelWidth:")?, dimension("pixelHeight:")?);
+    if image.starts_with(b"\x89PNG\r\n\x1a\n") && image.get(12..16) == Some(&b"IHDR"[..]) {
+        return Some((number(16, 4)?, number(20, 4)?));
+    }
+    if !image.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut at = 2;
+    while image.get(at) == Some(&0xFF) {
+        let marker = *image.get(at + 1)?;
+        if marker == 0xFF {
+            at += 1; // Fill byte
+        } else if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            // A start-of-frame segment: length, precision, height, width.
+            return Some((number(at + 7, 2)?, number(at + 5, 2)?));
+        } else {
+            at += 2 + number(at + 2, 2)?;
+        }
+    }
+    None
+}
+
+fn image_tokens(image: &[u8]) -> Result<usize> {
+    let (width, height) = image_size(image).context("Cannot read PNG/JPEG image dimensions")?;
     ensure!(
         width > 0 && height > 0 && width <= 2048 && height <= 2048,
         "Images must be at most 2048 × 2048 pixels"
@@ -329,17 +344,33 @@ mod tests {
 
     #[test]
     fn rejects_invalid_image_dimensions_and_reserves_context() {
-        assert_eq!(
-            image_tokens("pixelWidth: 2048\npixelHeight: 2048").unwrap(),
-            4096
-        );
-        for metadata in [
-            "",
-            "pixelWidth: 1",
-            "pixelWidth: 0\npixelHeight: 1",
-            "pixelWidth: 2049\npixelHeight: 1",
+        let png = |width: u32, height: u32| {
+            [
+                &b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR"[..],
+                &width.to_be_bytes(),
+                &height.to_be_bytes(),
+                b"\x08\x02\0\0\0",
+            ]
+            .concat()
+        };
+        assert_eq!(image_tokens(&png(2048, 2048)).unwrap(), 4096);
+        // A progressive 640 × 480 frame after APP0 and Huffman-table segments and a fill byte.
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC4, 0, 2, 0xFF, 0xFF, 0xC2, 0, 11, 8, 1,
+            0xE0, 2, 0x80, 1, 1, 0x11, 0,
+        ];
+        assert_eq!(image_size(&jpeg), Some((640, 480)));
+        for image in [
+            &b""[..],
+            b"image",
+            &png(0, 1),
+            &png(2049, 1),
+            &png(1, 2049),
+            &png(1, 1)[..20],
+            &jpeg[..20],
+            &jpeg[..2],
         ] {
-            assert!(image_tokens(metadata).is_err());
+            assert!(image_tokens(image).is_err());
         }
         assert!(check_context(&OMNI, 4096, 20 * 1024 + 125).is_ok());
         let small = Profile {
