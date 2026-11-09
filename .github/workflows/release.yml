@@ -66,14 +66,18 @@ jobs:
           set -euo pipefail
           flags=()
           [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
+          # Never replace an uploaded runner: a published package may already point at it.
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes "${flags[@]}"
+          elif ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "${RUNNER_URL##*/}"; then
+            gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY"
           fi
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
           curl -fsSL --retry 5 --retry-all-errors "$RUNNER_URL" -o runner-check.tar.gz
-          test "$(sha256sum runner-check.tar.gz | cut -d' ' -f1)" = "$RUNNER_SHA"
+          test "$(sha256sum runner-check.tar.gz | cut -d' ' -f1)" = "$RUNNER_SHA" || {
+            echo "The release already holds a different runner. Release a new version instead."
+            exit 1
+          }
       - name: Publish to npm
         run: |
           set -euo pipefail
