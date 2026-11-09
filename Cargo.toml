@@ -2,7 +2,7 @@
 name = "boubou"
 version = "0.1.0-beta.3"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.91"
 description = "Run voice AI locally with open-source models. Bring it to any device with one command."
 repository = "https://github.com/runboubou/boubou"
 license = "MIT"
@@ -28,9 +28,12 @@ tar = "0.4"
 tungstenite = "0.30"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 
-# Linux plays and records through the default ALSA devices (PipeWire or PulseAudio).
+# Linux plays and records through the default ALSA devices (PipeWire or PulseAudio),
+# cancels the reply's echo with WebRTC AEC3 and detects speech, all in-process.
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.18"
+earshot = "1.2"
+sonora = "0.3"
 
 [profile.release]
 lto = "thin"
