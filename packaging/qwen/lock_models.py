@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -121,6 +122,17 @@ CUDA = [
 ]
 
 
+def retried(action, attempts=4):
+    """Run a network call again after a short wait; the Hub sometimes answers 502 or drops a fetch."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except (OSError, subprocess.CalledProcessError):
+            if attempt == attempts:
+                raise
+            time.sleep(15 * attempt)
+
+
 def snapshot(repo, revision, destination, profile, only=None):
     url = f"https://huggingface.co/{repo}"
     with tempfile.TemporaryDirectory() as folder:
@@ -128,7 +140,7 @@ def snapshot(repo, revision, destination, profile, only=None):
             return subprocess.check_output(["git", *args], cwd=folder)
 
         git("init", "--bare", "--quiet")
-        git("-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--depth=1", url, revision)
+        retried(lambda: git("-c", "fetch.fsckObjects=true", "fetch", "--quiet", "--depth=1", url, revision))
         if git("rev-parse", "FETCH_HEAD").decode().strip() != revision:
             raise ValueError(f"Unexpected revision for {repo}")
         included = set()
@@ -171,8 +183,11 @@ def pocket_configs():
     lock = (Path(__file__).resolve().parent / "requirements-macos.lock").read_text()
     version, digest = re.search(r"^pocket-tts==(\S+) --hash=sha256:([0-9a-f]{64})$", lock, re.M).groups()
     url = f"https://files.pythonhosted.org/packages/py3/p/pocket_tts/pocket_tts-{version}-py3-none-any.whl"
-    with urlopen(url, timeout=90) as response:
-        wheel = response.read()
+    def download():
+        with urlopen(url, timeout=90) as response:
+            return response.read()
+
+    wheel = retried(download)
     if hashlib.sha256(wheel).hexdigest() != digest:
         raise ValueError("The Pocket TTS wheel does not match the runner lock")
     with zipfile.ZipFile(io.BytesIO(wheel)) as z:

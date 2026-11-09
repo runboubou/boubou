@@ -21,9 +21,12 @@ cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets --all-features
 ```
 
-Tests cover protocol, download and lifecycle behavior with fakes. They cannot
-tell whether a real conversation sounds right, so changes to audio, models or
-interruption also need a short test on a real Mac.
+Tests cover protocol, download and lifecycle behavior with fakes. CI also runs
+the real models on GitHub-hosted Macs: the Liquid tests marked `#[ignore]` in
+[liquid-macos.yml](.github/workflows/liquid-macos.yml) and the Qwen voices in
+[qwen-macos.yml](.github/workflows/qwen-macos.yml). Only `speaker_echo_probe`
+needs real speakers and a microphone, so changes to echo handling, audio, models
+or interruption still need a short test on a real Mac.
 
 ## Pull requests
 

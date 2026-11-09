@@ -1,0 +1,81 @@
+name: Liquid Mac models
+
+# Runs the real Liquid model tests (marked #[ignore] for `cargo test`) on a
+# GitHub-hosted Mac: every Liquid profile is downloaded, then each test talks
+# to the real local server with speech from macOS `say`. Pull requests that
+# change the Liquid path run it; so do a weekly run and manual runs.
+on:
+  pull_request:
+    paths:
+      - 'src/assets.rs'
+      - 'src/backend.rs'
+      - 'src/liquid.rs'
+      - 'src/profiles.rs'
+      - 'src/realtime.rs'
+      - '.github/workflows/liquid-macos.yml'
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: liquid-mac-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  models:
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Pinned files are verified by size and SHA-256 on every pull, so a cached copy is safe to reuse.
+      - name: Restore model files
+        id: models
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/boubou
+          key: liquid-models-${{ hashFiles('src/profiles.rs') }}
+      - name: Download every Liquid profile
+        run: |
+          set -euo pipefail
+          cargo build --locked
+          for id in LFM3-Audio-2B LFM3-Omni-2B LFM2.5-Audio-1.5B; do
+            # Downloads resume from the partial file, so a dropped connection only costs a retry.
+            for attempt in 1 2 3; do
+              target/debug/boubou pull "$id" && break
+              [ "$attempt" = 3 ] && exit 1
+              sleep $((attempt * 30))
+            done
+          done
+      - name: Save model files
+        if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/boubou
+          key: ${{ steps.models.outputs.cache-primary-key }}
+      - name: Real model conversations, offline
+        run: |
+          set -euo pipefail
+          sw_vers -productVersion
+          sysctl hw.model hw.memsize
+          question="$RUNNER_TEMP/question.wav"
+          say -v Samantha --file-format=WAVE --data-format=LEI16@16000 -o "$question" \
+            "What color is the sky on a clear day?"
+          export BOUBOU_QUESTION_WAV="$question"
+          # One test at a time: each one starts a model server that needs most of the runner's memory.
+          cargo test --locked --all-features -- --ignored --exact --test-threads=1 \
+            liquid::tests::official_models_handle_multiturn_cancellation_and_offline_restart \
+            realtime::tests::liquid_backend_cancels_and_accepts_the_next_turn \
+            realtime::tests::capture_chunks_match_reference_input \
+            realtime::tests::liquid_sustained_voice_conversation_keeps_replies_varied \
+            realtime::tests::liquid_conversation_renews_beyond_context_capacity
