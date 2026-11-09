@@ -509,18 +509,13 @@ fn from_files(
 /// it is noticed by comparing the terminal size.
 fn next_event(timeout: Duration) -> Result<Option<Event>> {
     static BUFFERED: AtomicBool = AtomicBool::new(false);
-    static SIZE: AtomicU32 = AtomicU32::new(0);
-    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
-    // The first call only records the size; a failed or empty read leaves the hang-up check to
-    // report a closed terminal.
-    if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) } == 0
-        && size.ws_col > 0
-        && size.ws_row > 0
-    {
-        let packed = u32::from(size.ws_col) << 16 | u32::from(size.ws_row);
-        let previous = SIZE.swap(packed, Ordering::Relaxed);
+    // Until a size is recorded, the first call only records it; a failed or empty read leaves
+    // the hang-up check to report a closed terminal.
+    if let Some((columns, rows)) = terminal_size() {
+        let packed = u32::from(columns) << 16 | u32::from(rows);
+        let previous = TERMINAL_SIZE.swap(packed, Ordering::Relaxed);
         if previous != 0 && previous != packed {
-            return Ok(Some(Event::Resize(size.ws_col, size.ws_row)));
+            return Ok(Some(Event::Resize(columns, rows)));
         }
     }
     for wait in [Duration::ZERO, timeout] {
@@ -533,6 +528,28 @@ fn next_event(timeout: Duration) -> Result<Option<Event>> {
         BUFFERED.store(false, Ordering::Relaxed);
     }
     Ok(None)
+}
+
+/// The terminal size `next_event` last saw, to report a resize.
+static TERMINAL_SIZE: AtomicU32 = AtomicU32::new(0);
+
+fn terminal_size() -> Option<(u16, u16)> {
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    (unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) } == 0
+        && size.ws_col > 0
+        && size.ws_row > 0)
+        .then_some((size.ws_col, size.ws_row))
+}
+
+/// Records the size a screen is about to draw for. Otherwise a resize between the first draw and
+/// the first `next_event` would become the recorded size and never be reported.
+fn watch_resizes() {
+    if let Some((columns, rows)) = terminal_size() {
+        TERMINAL_SIZE.store(
+            u32::from(columns) << 16 | u32::from(rows),
+            Ordering::Relaxed,
+        );
+    }
 }
 
 /// Waits up to `timeout` and returns whether the terminal has input, failing once it closes.
