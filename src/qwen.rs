@@ -493,7 +493,9 @@ mod tests {
         };
         let mac = manifest(r#","min_macos":"15.0""#).unwrap();
         assert_eq!(mac.host.entry(), "voice.py");
-        let cuda = manifest(r#","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#).unwrap();
+        let cuda =
+            manifest(r#","sources_sha256":"c","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#)
+                .unwrap();
         assert_eq!(cuda.host.entry(), "cuda.py");
         assert!(manifest("").is_err());
         // A runner built for the other system stops before anything is downloaded.

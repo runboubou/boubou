@@ -57,6 +57,18 @@ def download(url, sha256, path):
         raise ValueError(f"Checksum mismatch: {url}")
 
 
+def sources_digest(target):
+    """Hash what goes into this host's runner, so a published runner older than its sources is caught."""
+    names = [*target["entries"], *target["files"], target["lock"], "bundle_data.py",
+             *sorted(path.relative_to(HERE).as_posix() for path in (HERE / "voices").rglob("*") if path.is_file())]
+    pins = [target["python"], target["python_sha256"], *target.get("llama", ())]
+    content = hashlib.sha256("\n".join(pins).encode())
+    for name in names:
+        content.update(f"\n{name}\n".encode())
+        content.update((HERE / name).read_bytes())
+    return content.hexdigest()
+
+
 def tree_digest(root):
     """Hash one sorted line per entry, as Boubou does to verify the installed runner without its archive."""
     lines = []
@@ -161,7 +173,7 @@ print({target["device"]})
                 tar.add(path, arcname=path.relative_to(moved), recursive=False)
         # Boubou checks the installed tree against this digest on every start, instead of re-reading the archive.
         result = {"url": args.url, "size": bundle.stat().st_size, "sha256": digest(bundle),
-                  "tree_sha256": tree_digest(moved), **target["host"]}
+                  "tree_sha256": tree_digest(moved), "sources_sha256": sources_digest(target), **target["host"]}
         bundle.rename(archive)
         (output / "runtime.json").write_text(json.dumps(result, indent=2) + "\n")
         print(f"Built {archive} ({result['size']} bytes, sha256 {result['sha256']})")

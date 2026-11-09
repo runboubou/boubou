@@ -34,7 +34,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The npm package also carries the x86-64 Linux CLI.
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: ALSA headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+      - name: Build the Linux CLI
+        run: cargo build --locked --release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: boubou-linux-x64
+          retention-days: 3
+          path: target/release/boubou
+
   candidate:
+    needs: linux
     runs-on: macos-15
     timeout-minutes: 120
     steps:
@@ -74,14 +97,25 @@ jobs:
           version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
           python -B packaging/qwen/build_runner.py "$target" --url "$url"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: boubou-linux-x64
+          path: ${{ runner.temp }}/linux
+      - name: Lock the Linux model files beside the published Linux runner
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/linux/qwen"
+          cp packaging/qwen/runner-linux-x64.json "$RUNNER_TEMP/linux/qwen/runtime.json"
+          python -B packaging/qwen/lock_models.py --cuda "$RUNNER_TEMP/linux/qwen/models.json"
       - name: Build and install the npm candidate outside the checkout
         env:
           BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
         run: |
           set -euo pipefail
           cargo fetch --locked
-          python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen"
+          python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen" --linux "$RUNNER_TEMP/linux"
           tarball=$(find "$PWD/target/dist" -name 'boubou-*.tgz')
+          tar -tzf "$tarball" | grep -Fx "package/linux-x64/boubou"
           # The release asset does not exist before the tag; place the exact runner where `pull` would download it.
           sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
           mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
