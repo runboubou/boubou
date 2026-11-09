@@ -451,9 +451,9 @@ fn from_files(
 fn next_event(timeout: Duration) -> Result<Option<Event>> {
     static BUFFERED: AtomicBool = AtomicBool::new(false);
     for wait in [Duration::ZERO, timeout] {
-        if (BUFFERED.load(Ordering::Relaxed) || terminal_input(wait)?)
-            && event::poll(Duration::ZERO)?
-        {
+        // Check for a hang-up first, even when crossterm may hold buffered events.
+        let input = terminal_input(wait)?;
+        if (input || BUFFERED.load(Ordering::Relaxed)) && event::poll(Duration::ZERO)? {
             BUFFERED.store(true, Ordering::Relaxed);
             return Ok(Some(event::read()?));
         }
