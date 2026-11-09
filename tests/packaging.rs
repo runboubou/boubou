@@ -677,6 +677,8 @@ fn npm_package_leaves_the_qwen_runner_to_the_release() {
             .iter()
             .all(|file| !file.as_str().unwrap().ends_with(".tar.gz"))
     );
+    // The x86-64 Linux CLI and its manifests ride along; its runner comes from Hugging Face.
+    assert!(files.iter().any(|file| file == "linux-x64"));
     assert!(include_str!("../packaging/build-macos.py").contains("if size > MAX_PACKED:"));
 }
 

@@ -127,6 +127,22 @@ target/release/boubou pull kokoro:82m
 target/release/boubou run kokoro:82m --offline
 ```
 
+The npm package carries the Linux CLI with
+[`runner-linux-x64.json`](runner-linux-x64.json), which points at the runner
+published on Hugging Face. The Linux runner is rebuilt only when its sources
+change, and `build-macos.py --linux` refuses a manifest whose
+`sources_sha256` no longer matches them. To publish a new one, build it as
+above, then upload it and record its commit-pinned URL:
+
+```sh
+sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$out/runtime.json")
+huggingface-cli upload runboubou/runtimes "$out/runner.tar.gz" "qwen/linux-x64/$sha.tar.gz"
+```
+
+Copy `$out/runtime.json` to `packaging/qwen/runner-linux-x64.json` and set
+`url` to `https://huggingface.co/runboubou/runtimes/resolve/<commit>/qwen/linux-x64/<sha256>.tar.gz`,
+with the commit the upload created. Never replace an uploaded runner.
+
 The runner is one 3.6 GB archive, 6.2 GB unpacked, shared by every profile.
 PyTorch and its CUDA libraries are 2.7 GB of its 3.3 GB of wheels, and all
 voice packages together are 0.17 GB, so voices are not separate downloads.

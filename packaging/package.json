@@ -7,8 +7,8 @@
   "bugs": "https://github.com/runboubou/boubou/issues",
   "bin": { "boubou": "cli.cjs" },
   "engines": { "node": ">=18" },
-  "os": ["darwin"],
-  "cpu": ["arm64"],
+  "os": ["darwin", "linux"],
+  "cpu": ["arm64", "x64"],
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/runboubou/boubou.git" },
   "files": [
@@ -17,6 +17,7 @@
     "LICENSE",
     "qwen/runtime.json",
     "qwen/models.json",
+    "linux-x64",
     "licenses",
     "BUILD.json",
     "SHA256SUMS",

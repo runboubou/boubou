@@ -75,11 +75,12 @@ constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
-later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`.
-[Build from source](#build-from-source), then talk:
+later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. From
+the next release, the npm package also runs on x86-64 Linux with Node.js 18 or
+later; on arm64, [build from source](#build-from-source). Then talk:
 
 ```sh
-boubou run LFM3-Audio-2B
+npx boubou@beta run LFM3-Audio-2B
 ```
 
 It works as on a Mac: pause and Boubou answers, start speaking and it stops.
@@ -101,16 +102,18 @@ voice except Qwen3-TTS, ChatTTS and the Whisper entries. You need:
 - NVIDIA driver 580.65.06 or later. The runtime brings its own CUDA 13
   libraries, so no CUDA toolkit is needed.
 - glibc 2.39 or later and OpenSSL 3, for example Ubuntu 24.04.
-- About 10 GB of disk for the runtime, plus 5.3 GB of models shared by every
-  voice and 0.02 to 3.3 GB for each voice.
+- About 10 GB of free disk while the runtime installs and 6.2 GB after it,
+  plus 5.3 GB of models shared by every voice and 0.02 to 3.3 GB for each voice.
 
-Build the runtime as described in [packaging/qwen](packaging/qwen/README.md#x86-64-linux-with-an-nvidia-gpu),
-then talk:
+From the next release, talk with:
 
 ```sh
-boubou pull kokoro:82m
-boubou run kokoro:82m --offline
+npx boubou@beta run kokoro:82m
 ```
+
+The first run downloads the 3.6 GB runtime from
+[Hugging Face](https://huggingface.co/runboubou/runtimes), then the voice's
+models. To use a source build instead, see [packaging/qwen](packaging/qwen/README.md#x86-64-linux-with-an-nvidia-gpu).
 
 On the test machine, the first `pull kokoro:82m` took 87 s at about 110 MB/s.
 Each later start verifies every file in about 2 s and is listening after about

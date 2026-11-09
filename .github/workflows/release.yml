@@ -48,6 +48,9 @@ jobs:
           size=$(stat -c %s "$tarball")
           test "$size" -le $((32 * 1024 * 1024)) || { echo "npm tarball is $size bytes"; exit 1; }
           tar -xzOf "$tarball" package/qwen/runtime.json | cmp - "$runtime"
+          # The Linux runner is published on Hugging Face before the release; make sure the package can fetch it.
+          linux_url=$(tar -xzOf "$tarball" package/linux-x64/qwen/runtime.json | jq -r .url)
+          curl -fsSL --retry 5 --retry-all-errors -r 0-0 -o /dev/null "$linux_url"
           url=$(jq -r .url "$runtime")
           asset=${url##*/}
           test "$url" = "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$asset" || { echo "Unexpected runner URL $url"; exit 1; }

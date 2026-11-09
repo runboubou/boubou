@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the native macOS npm package from a clean commit."""
+"""Build the npm package from a clean commit: the Apple Silicon build, plus an x86-64 Linux build if given."""
 
 import argparse
 import hashlib
@@ -47,6 +47,10 @@ def main():
         "--qwen", type=Path, metavar="DIR",
         help="include reviewed runtime.json and models.json from a Qwen candidate build",
     )
+    parser.add_argument(
+        "--linux", type=Path, metavar="DIR",
+        help="include an x86-64 Linux release build (DIR/boubou) and its Qwen manifests (DIR/qwen)",
+    )
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise SystemExit("Build this candidate on an Apple Silicon Mac.")
@@ -81,26 +85,32 @@ def main():
     archive = destination / f"{name}.tgz"
     if archive.exists():
         raise SystemExit(f"Candidate already exists; preserve its receipt: {archive}")
-    metadata = json.loads(
-        output(
-            "cargo",
-            "metadata",
-            "--locked",
-            "--offline",
-            "--format-version",
-            "1",
-            "--filter-platform",
-            "aarch64-apple-darwin",
-        )
-    )
+    targets = ["aarch64-apple-darwin"] + (["x86_64-unknown-linux-gnu"] if args.linux else [])
     reachable = set()
-    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    pending = [metadata["resolve"]["root"]]
-    while pending:
-        node = pending.pop()
-        if node not in reachable:
-            reachable.add(node)
-            pending.extend(dep["pkg"] for dep in nodes[node]["deps"])
+    packages = {}
+    for target in targets:
+        metadata = json.loads(
+            output(
+                "cargo",
+                "metadata",
+                "--locked",
+                "--offline",
+                "--format-version",
+                "1",
+                "--filter-platform",
+                target,
+            )
+        )
+        packages.update((package["id"], package) for package in metadata["packages"])
+        nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+        seen = set()
+        pending = [metadata["resolve"]["root"]]
+        while pending:
+            node = pending.pop()
+            if node not in seen:
+                seen.add(node)
+                pending.extend(dep["pkg"] for dep in nodes[node]["deps"])
+        reachable |= seen
     with tempfile.TemporaryDirectory(
         prefix="boubou-package-", dir=destination
     ) as temporary:
@@ -120,6 +130,29 @@ def main():
             runner = args.qwen / "runner.tar.gz"
             if runner.stat().st_size != runtime["size"] or sha256(runner) != runtime["sha256"]:
                 raise SystemExit("Qwen archive does not match its release manifest")
+        if args.linux:
+            linux = folder / "linux-x64"
+            (linux / "qwen").mkdir(parents=True)
+            with (args.linux / "boubou").open("rb") as executable:
+                header = executable.read(20)
+            # An ELF64 executable for x86-64 (e_machine 0x3E).
+            if header[:5] != b"\x7fELF\x02" or header[18:20] != b"\x3e\x00":
+                raise SystemExit("The Linux build must be an x86-64 executable.")
+            shutil.copyfile(args.linux / "boubou", linux / "boubou")
+            (linux / "boubou").chmod(0o755)
+            for file in ["runtime.json", "models.json"]:
+                shutil.copyfile(args.linux / "qwen" / file, linux / "qwen" / file)
+            runtime = json.loads((linux / "qwen/runtime.json").read_text())
+            if not str(runtime.get("url") or "").startswith("https://"):
+                raise SystemExit("The Linux Qwen runner must be published at an HTTPS URL.")
+            # The Linux runner is rebuilt only when its sources change, so check it is current.
+            sys.path.insert(0, str(ROOT / "packaging/qwen"))
+            from build_runner import TARGETS, sources_digest
+            if runtime.get("sources_sha256") != sources_digest(TARGETS["Linux", "x86_64"]):
+                raise SystemExit(
+                    "The published Linux runner is older than its sources. Rebuild and publish it "
+                    "as packaging/qwen/README.md describes."
+                )
         shutil.copy2(ROOT / "README.md", folder / "README.md")
         shutil.copy2(ROOT / "LICENSE", folder / "LICENSE")
         (folder / "licenses").mkdir()
@@ -142,7 +175,7 @@ def main():
             if sha256(path) != expected:
                 raise SystemExit(f"Upstream license checksum mismatch: {filename}")
         dependencies = []
-        for package in metadata["packages"]:
+        for package in packages.values():
             if package["id"] not in reachable or package["name"] == "boubou":
                 continue
             directory = Path(package["manifest_path"]).parent
@@ -184,6 +217,7 @@ def main():
             "source_commit": source,
             "source_url": f"https://github.com/runboubou/boubou/commit/{source}",
             "target": "aarch64-apple-darwin",
+            "linux_binary_sha256": sha256(args.linux / "boubou") if args.linux else None,
             "rustc": output("rustc", "--version"),
             "node": output("node", "--version"),
             "npm": output("npm", "--version"),

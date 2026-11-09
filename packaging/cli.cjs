@@ -2,7 +2,16 @@
 const { spawn } = require("node:child_process");
 const { join } = require("node:path");
 
-const child = spawn(join(__dirname, "boubou"), process.argv.slice(2), {
+// The package carries the Apple Silicon build at its root and the x86-64 Linux build in linux-x64/.
+const binary = {
+  "darwin-arm64": join(__dirname, "boubou"),
+  "linux-x64": join(__dirname, "linux-x64", "boubou"),
+}[`${process.platform}-${process.arch}`];
+if (!binary) {
+  console.error("Boubou's npm package runs on Apple Silicon Macs and x86-64 Linux.");
+  process.exit(1);
+}
+const child = spawn(binary, process.argv.slice(2), {
   stdio: "inherit",
 });
 let shutdownSignal;
