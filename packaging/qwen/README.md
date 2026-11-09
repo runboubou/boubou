@@ -155,8 +155,9 @@ about 110 MB/s from Hugging Face:
 | Step | Result |
 | --- | --- |
 | First `pull kokoro:82m` from a source build | 87 s |
+| Runner and models from Hugging Face, eight connections | 27–110 MB/s (one connection: 10–21 MB/s) |
 | Verify the runner and models on each start | 1.7 s |
-| `run` until it is listening | 14–16 s |
+| `run` until it is ready to talk | 14–16 s |
 | Peak GPU memory | 6.3–7.3 GiB; OmniVoice 8.3 GiB |
 | First audio after a text turn (`smoke.py`) | 0.5–0.8 s for most voices; up to 1.2 s |
 

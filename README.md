@@ -115,9 +115,10 @@ The first run downloads the 3.6 GB runtime from
 [Hugging Face](https://huggingface.co/runboubou/runtimes), then the voice's
 models. To use a source build instead, see [packaging/qwen](packaging/qwen/README.md#x86-64-linux-with-an-nvidia-gpu).
 
-On the test machine, the first `pull kokoro:82m` took 87 s at about 110 MB/s.
-Each later start verifies every file in about 2 s and is listening after about
-15 s.
+The first `pull kokoro:82m` downloads 9.2 GB. Boubou fetches large files over
+eight connections; on the test machine that reached 27 to 110 MB/s from Hugging
+Face, against 10 to 21 MB/s over one. Each later start verifies every file in
+about 2 s and is ready to talk after about 15 s.
 
 ## Privacy
 
