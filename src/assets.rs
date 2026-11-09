@@ -503,7 +503,6 @@ fn range(client: &Client, spec: &Download<'_>, start: u64, end: u64) -> Result<O
             .get(spec.url)
             .header(header::ACCEPT_ENCODING, "identity")
             .header(header::RANGE, format!("bytes={start}-{}", end - 1))
-            .timeout(Duration::from_secs(120))
             .send()
             .map_err(reqwest::Error::without_url)?;
         match response.status() {
