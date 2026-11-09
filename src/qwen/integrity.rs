@@ -1,10 +1,9 @@
 use anyhow::{Context, Result, ensure};
-use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
-    fs::{self, File},
+    fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
 };
@@ -67,18 +66,13 @@ fn include_path(expected: &mut HashSet<PathBuf>, path: &Path) {
     );
 }
 
-// Walk without following links. Returns how many entries were visited, or None for an unexpected one.
-fn tree_entries(
-    root: &Path,
-    expected: &HashSet<PathBuf>,
-    allow_links: bool,
-) -> Result<Option<usize>> {
+// Walk without following links: only expected directories and regular files may appear.
+fn tree_entries(root: &Path, expected: &HashSet<PathBuf>) -> Result<bool> {
     if !metadata(root)?.is_some_and(|m| m.is_dir()) {
-        return Ok(None);
+        return Ok(false);
     }
     let root = root.canonicalize()?;
     let mut directories = vec![root.clone()];
-    let mut count = 0;
     while let Some(dir) = directories.pop() {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -88,48 +82,17 @@ fn tree_entries(
                     "Unexpected entry in the verified Qwen cache: {}",
                     path.display()
                 );
-                return Ok(None);
+                return Ok(false);
             }
-            count += 1;
             let kind = entry.file_type()?;
             if kind.is_dir() {
                 directories.push(path);
-            } else if kind.is_symlink() {
-                if !allow_links
-                    || fs::read_link(&path)?.is_absolute()
-                    || !path
-                        .canonicalize()
-                        .is_ok_and(|target| target.starts_with(&root))
-                {
-                    return Ok(None);
-                }
             } else if !kind.is_file() {
-                return Ok(None);
+                return Ok(false);
             }
         }
     }
-    Ok(Some(count))
-}
-
-pub(super) fn runtime_tree(archive: &Path, installed: &Path) -> Result<bool> {
-    if !metadata(installed)?.is_some_and(|m| m.is_dir()) {
-        return Ok(false);
-    }
-    let mut expected = HashSet::new();
-    let mut tar = tar::Archive::new(GzDecoder::new(File::open(archive)?));
-    for entry in tar.entries()? {
-        let entry = entry?;
-        let path = entry.path()?;
-        ensure!(
-            path.components()
-                .all(|c| matches!(c, Component::Normal(_) | Component::CurDir)),
-            "Unsafe path in Qwen runner archive"
-        );
-        let relative: PathBuf = path.iter().filter(|c| *c != OsStr::new(".")).collect();
-        include_path(&mut expected, &relative);
-    }
-    // Count the entries too, so a missing subtree cannot pass.
-    Ok(tree_entries(installed, &expected, true)? == Some(expected.len()))
+    Ok(true)
 }
 
 /// The digest a runner build records over its installed tree: one line per entry, sorted and
@@ -223,7 +186,7 @@ pub(super) fn model_snapshots(root: &Path, listed: &[&Path], selected: &[&Path])
     for (snapshot, expected) in snapshots {
         let dir = root.join(snapshot);
         ensure!(
-            tree_entries(&dir, &expected, false)?.is_some(),
+            tree_entries(&dir, &expected)?,
             "Qwen snapshot has missing or unexpected files. Remove {} and pull the model again.",
             dir.display()
         );
@@ -285,37 +248,13 @@ mod tests {
             fs::write(tree.join("empty/extra"), b"")?;
             assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
             fs::remove_file(tree.join("empty/extra"))?;
+            fs::remove_file(tree.join("bin/python3"))?;
+            symlink("../../runner.tar.gz", tree.join("bin/python3"))?;
+            assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
+            fs::remove_file(tree.join("bin/python3"))?;
+            symlink("python3.11", tree.join("bin/python3"))?;
             fs::write(tree.join("voice.py"), b"Voice")?;
             assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
-            Ok(())
-        })
-    }
-
-    #[test]
-    fn rejects_unlisted_python_and_escaping_interpreter_links() -> Result<()> {
-        fixture(|root| {
-            let installed = root.join("installed");
-            let bin = installed.join("bin");
-            let packages = installed.join("lib/python3.11/site-packages");
-            fs::create_dir_all(&bin)?;
-            fs::create_dir_all(&packages)?;
-            fs::write(bin.join("python3.11"), "engine")?;
-            symlink("python3.11", bin.join("python3"))?;
-            let archive = root.join("runner.tar.gz");
-            let encoder =
-                flate2::write::GzEncoder::new(File::create(&archive)?, flate2::Compression::fast());
-            let mut tar = tar::Builder::new(encoder);
-            tar.follow_symlinks(false);
-            tar.append_dir_all(".", &installed)?;
-            tar.into_inner()?.finish()?;
-            assert!(runtime_tree(&archive, &installed)?);
-            let extra = packages.join("injected.pth");
-            fs::write(&extra, "import unexpected")?;
-            assert!(!runtime_tree(&archive, &installed)?);
-            fs::remove_file(extra)?;
-            fs::remove_file(bin.join("python3"))?;
-            symlink("../../runner.tar.gz", bin.join("python3"))?;
-            assert!(!runtime_tree(&archive, &installed)?);
             Ok(())
         })
     }

@@ -348,7 +348,7 @@ fn guided_start_filters_incompatible_packaged_voices_before_download() {
         release.join("runtime.json"),
         serde_json::json!({
             "url":"https://example.invalid/runner.tar.gz", "size":1,
-            "sha256":"a".repeat(64), "min_macos":"99.0"
+            "sha256":"a".repeat(64), "tree_sha256":"a".repeat(64), "min_macos":"99.0"
         })
         .to_string(),
     )
@@ -438,6 +438,9 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         .unwrap();
     let bytes = archive.into_inner().unwrap().finish().unwrap();
     let digest = sha256_hex(&bytes);
+    // The runner build's digest of the unpacked tree: one sorted line per entry.
+    let tree =
+        sha256_hex(format!("bin\tdir\nbin/python3\texec\t{}\n", sha256_hex(script)).as_bytes());
     let engine = cache.join("runtimes").join(&digest);
     fs::create_dir_all(&engine).unwrap();
     fs::write(engine.join("runner.tar.gz"), &bytes).unwrap();
@@ -445,7 +448,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         release.join("runtime.json"),
         serde_json::json!({
             "url": "https://example.invalid/runner.tar.gz",
-            "sha256": digest, "size": bytes.len(), "min_macos": "13.3"
+            "sha256": digest, "tree_sha256": tree, "size": bytes.len(), "min_macos": "13.3"
         })
         .to_string(),
     )
@@ -484,7 +487,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         release.join("runtime.json"),
         serde_json::json!({
             "url": "https://example.invalid/runner.tar.gz",
-            "sha256": "a".repeat(64), "size": 1, "min_macos": "13.3"
+            "sha256": "a".repeat(64), "tree_sha256": "a".repeat(64), "size": 1, "min_macos": "13.3"
         })
         .to_string(),
     )
