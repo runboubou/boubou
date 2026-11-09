@@ -16,6 +16,8 @@ mod profiles;
 mod progress;
 mod qwen;
 mod realtime;
+// The bar, meter and spinner helpers serve the startup checklist and talk panel that follow.
+#[allow(dead_code)]
 mod tui;
 mod voice;
 
