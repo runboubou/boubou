@@ -16,6 +16,7 @@ mod profiles;
 mod progress;
 mod qwen;
 mod realtime;
+mod tui;
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
