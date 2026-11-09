@@ -1,8 +1,8 @@
 name: Release
 
-# Pushing a v* tag (maintainers only) checks every profile, publishes the tested
-# Qwen runner as a GitHub release asset, then publishes the exact tested tarball
-# to npm through trusted publishing.
+# Pushing a v* tag (maintainers only) checks every Qwen profile and the real
+# Liquid models, publishes the tested Qwen runner as a GitHub release asset, then
+# publishes the exact tested tarball to npm through trusted publishing.
 on:
   push:
     tags: ['v*']
@@ -16,8 +16,11 @@ jobs:
     with:
       all_profiles: true
 
+  verify-liquid:
+    uses: ./.github/workflows/liquid-macos.yml
+
   publish:
-    needs: verify
+    needs: [verify, verify-liquid]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

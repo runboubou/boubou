@@ -1,3 +1,4 @@
+use crate::tui::{self, BOLD, DIM, Paint, RESET, REVERSE};
 use crate::{
     Cancelled,
     profiles::{self, Model, Profile},
@@ -7,11 +8,15 @@ use anyhow::{Context, Result, ensure};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
-        DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute, queue,
-    style::{Color, ResetColor, Stylize},
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    style::ResetColor,
+    terminal::{
+        self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate,
+        EnterAlternateScreen, LeaveAlternateScreen,
+    },
 };
 use std::{
     ffi::CString,
@@ -35,6 +40,8 @@ unsafe extern "C" {
 pub struct Selection {
     pub model: Model,
     pub offline: bool,
+    /// What the device check found, for the startup checklist.
+    pub check: Option<String>,
 }
 
 struct Device {
@@ -147,11 +154,11 @@ impl Device {
         let (major, minor, patch) = self.macos;
         vec![
             format!(
-                "{chip} / macOS {major}.{minor}.{patch} / {:.0} GiB memory",
+                "{chip} · macOS {major}.{minor}.{patch} · {:.0} GiB memory",
                 self.memory as f64 / GIB as f64
             ),
             format!(
-                "About {:.1} GiB available memory / {:.1} GB free cache disk",
+                "About {:.1} GiB memory available · {:.1} GB free disk",
                 self.available as f64 / GIB as f64,
                 self.disk as f64 / 1_000_000_000.0
             ),
@@ -172,9 +179,9 @@ impl Setup {
         Ok(Self {
             model: Model::Liquid(profile),
             voice: if profile.id == profiles::OMNI.id {
-                "Liquid Omni 2.17B / integrated English voice"
+                "Liquid Omni 2.17B"
             } else {
-                "Liquid Audio 2B / integrated English voice"
+                "Liquid Audio 2B"
             },
             memory: profile
                 .memory_budget
@@ -187,7 +194,68 @@ impl Setup {
             },
         })
     }
+
+    /// The picker row: catalogue labels read "Name / voice / LLM".
+    fn row(&self) -> Row {
+        let mut label = self.voice.split(" / ");
+        let name = label.next().unwrap_or(self.voice).to_owned();
+        let rest: Vec<_> = label.collect();
+        let preset = profiles::presets()
+            .iter()
+            .find(|preset| preset.id == self.model.id());
+        let detail = if preset.is_some() {
+            rest.join(" · ")
+        } else {
+            "One model hears and speaks".into()
+        };
+        let pipeline = preset.map_or_else(
+            || "one model hears, thinks and speaks".to_owned(),
+            |preset| format!("{} → {} → {}", preset.stt, preset.llm, preset.tts),
+        );
+        Row {
+            name,
+            detail,
+            size: if self.resources.download == 0 {
+                "ready".into()
+            } else {
+                tui::gb(self.resources.download)
+            },
+            command: Some(format!("boubou run {}", self.model.id())),
+            about: vec![
+                format!(
+                    "Needs about {:.0} GiB memory (estimate) · {} GiB Mac or larger · {} free disk",
+                    self.memory as f64 / GIB as f64,
+                    self.recommended_memory_gib,
+                    tui::gb(self.resources.disk)
+                ),
+                format!("English · {pipeline}"),
+            ],
+        }
+    }
 }
+
+/// One choice in a menu. Rows with a command are voices; the rest are actions.
+struct Row {
+    name: String,
+    detail: String,
+    size: String,
+    command: Option<String>,
+    about: Vec<String>,
+}
+
+impl Row {
+    fn action(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            detail: String::new(),
+            size: String::new(),
+            command: None,
+            about: Vec::new(),
+        }
+    }
+}
+
+const DEVELOPER: &str = "Use a model you already chose…";
 
 fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
     let mut choices: Vec<_> = setups
@@ -278,6 +346,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
     Ok(Selection {
         model,
         offline: args.len() == 2,
+        check: None,
     })
 }
 
@@ -302,10 +371,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 match screen.choose(
                     "Device check unavailable",
                     &[error.to_string()],
-                    &[
-                        "Check again".into(),
-                        "Developer: choose a model or paste a command".into(),
-                    ],
+                    &[Row::action("Check again"), Row::action(DEVELOPER)],
                 )? {
                     Some(0) => continue,
                     Some(_) => {
@@ -345,17 +411,16 @@ pub fn start(cache: &Path) -> Result<Selection> {
             }
             "No English voice fits this Mac right now"
         } else {
-            "Choose an English voice for this Mac"
+            "Choose a voice for this Mac"
         };
-        details.push("Memory needs are estimates; smaller Macs still need device testing.".into());
         if let Some(error) = unavailable.first() {
             details.push(format!("Some packaged voices are unavailable: {error}"));
         }
-        let mut rows: Vec<_> = choices.iter().map(|setup| setup.voice.to_owned()).collect();
+        let mut rows: Vec<_> = choices.iter().map(|setup| setup.row()).collect();
         if choices.is_empty() {
-            rows.push("Check again".into());
+            rows.push(Row::action("Check again"));
         }
-        rows.push("Developer: choose a model or paste a command".into());
+        rows.push(Row::action(DEVELOPER));
         let Some(selected) = screen.choose(title, &details, &rows)? else {
             return Err(Cancelled.into());
         };
@@ -369,59 +434,30 @@ pub fn start(cache: &Path) -> Result<Selection> {
             continue;
         }
         let setup = choices[selected];
-        let mut details = device.summary();
-        if let Some(preset) = profiles::presets()
-            .iter()
-            .find(|preset| preset.id == setup.model.id())
+        // A user may leave the picker open while other apps consume memory.
+        let device = Device::detect(cache);
+        if let Err(error) = device
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+            .and_then(|device| device.check(setup))
         {
-            details.extend([
-                format!("STT: {} / LLM: {}", preset.stt, preset.llm),
-                format!("TTS: {} / English", preset.tts),
-            ]);
-        } else {
-            details.push("Liquid handles speech input, conversation and speech output.".into());
-        }
-        details.extend([
-            setup.voice.into(),
-            format!(
-                "Suggested Mac memory: {} GiB or more",
-                setup.recommended_memory_gib
-            ),
-            format!(
-                "Estimated speech + conversation memory: {:.0} GiB",
-                setup.memory as f64 / GIB as f64
-            ),
-            format!(
-                "Estimated download: {:.2} GB / free disk needed: {:.2} GB",
-                setup.resources.download as f64 / 1_000_000_000.0,
-                setup.resources.disk as f64 / 1_000_000_000.0
-            ),
-            "Speed and stability vary. Cached files are verified before use.".into(),
-            "Downloads need internet; speech processing stays on this Mac.".into(),
-        ]);
-        if screen.choose(
-            "Review this runtime",
-            &details,
-            &[
-                "Download, verify and start".into(),
-                "Back to voice choices".into(),
-            ],
-        )? != Some(0)
-        {
-            continue;
-        }
-        // A user may leave the confirmation screen open while other apps consume memory.
-        if let Err(error) = Device::detect(cache).and_then(|device| device.check(setup)) {
             screen.choose(
                 "Resources changed before startup",
                 &[error.to_string()],
-                &["Check again".into()],
+                &[Row::action("Check again")],
             )?;
             continue;
         }
+        let device = device?;
         return Ok(Selection {
             model: setup.model,
             offline: false,
+            check: Some(format!(
+                "{} · {:.0} GiB memory · needs about {:.0} GiB",
+                device.chip.as_deref().unwrap_or("Apple Silicon"),
+                device.memory as f64 / GIB as f64,
+                setup.memory as f64 / GIB as f64
+            )),
         });
     }
 }
@@ -444,7 +480,27 @@ extern "C" fn interrupt(_: libc::c_int) {
 
 struct Screen {
     signals: Vec<(libc::c_int, libc::sigaction)>,
-    color: bool,
+    paint: Paint,
+}
+
+/// Where the last frame put clickable things.
+#[derive(Default)]
+struct Hits {
+    rows: Vec<(u16, usize)>,
+    confirm: Option<(u16, u16)>,
+}
+
+/// Leave raw mode and the alternate screen. Safe to repeat.
+fn restore_terminal() {
+    let _ = execute!(
+        io::stdout(),
+        ResetColor,
+        Show,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    );
+    let _ = terminal::disable_raw_mode();
 }
 
 impl Screen {
@@ -452,7 +508,7 @@ impl Screen {
         INTERRUPTED.store(false, Ordering::Relaxed);
         let mut screen = Self {
             signals: Vec::new(),
-            color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+            paint: Paint::detect(),
         };
         // Only the prompt temporarily owns these handlers; run retains its existing Ctrl+C path.
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
@@ -465,39 +521,55 @@ impl Screen {
             );
             screen.signals.push((signal, previous));
         }
+        // A panic message must land on the normal screen, not a raw alternate one.
+        static HOOK: std::sync::Once = std::sync::Once::new();
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                restore_terminal();
+                previous(info);
+            }));
+        });
         terminal::enable_raw_mode()?;
         execute!(
             io::stdout(),
             EnterAlternateScreen,
             Hide,
-            EnableBracketedPaste
+            EnableBracketedPaste,
+            EnableMouseCapture
         )?;
         Ok(screen)
     }
 
-    fn line(&self, row: u16, text: &str, color: Option<Color>) -> Result<()> {
-        let width = terminal::size()?.0.saturating_sub(4) as usize;
-        let mut clipped = String::new();
-        for c in text.chars() {
-            if clipped.len() + c.len_utf8() > width {
-                break;
-            }
-            clipped.push(c);
+    /// Draw `text` (which may carry escape codes) as row `y`, clearing what was there.
+    fn put(&self, out: &mut impl Write, height: u16, y: &mut u16, text: &str) -> Result<()> {
+        if *y < height {
+            queue!(out, MoveTo(0, *y), Clear(ClearType::CurrentLine))?;
+            write!(out, "{text}{RESET}")?;
         }
-        let mut out = io::stdout();
-        queue!(out, MoveTo(2, row), ResetColor)?;
-        if let Some(color) = color.filter(|_| self.color) {
-            write!(out, "{}", clipped.with(color))?;
-        } else {
-            write!(out, "{clipped}")?;
-        }
+        *y += 1;
         Ok(())
     }
 
-    fn heading(&self, title: &str) -> Result<()> {
-        execute!(io::stdout(), Clear(ClearType::All))?;
-        self.line(1, "Boubou", Some(Color::Magenta))?;
-        self.line(3, title, None)
+    /// The window bar: product name, a rule and the dim local-status light.
+    fn header(&self, out: &mut impl Write, size: (u16, u16), y: &mut u16) -> Result<()> {
+        let width = size.0 as usize;
+        let status = "○ On this Mac";
+        let gap = width.saturating_sub(4 + 6 + tui::width(status));
+        self.put(out, size.1, y, "")?;
+        self.put(
+            out,
+            size.1,
+            y,
+            &format!("  {BOLD}boubou{RESET}{}{DIM}{status}", " ".repeat(gap)),
+        )?;
+        self.put(
+            out,
+            size.1,
+            y,
+            &format!("  {DIM}{}", "─".repeat(width.saturating_sub(4))),
+        )?;
+        self.put(out, size.1, y, "")
     }
 
     fn event(&self) -> Result<Event> {
@@ -521,90 +593,300 @@ impl Screen {
         }
     }
 
-    fn choose(
-        &mut self,
+    fn row_line(&self, row: &Row, columns: &tui::Columns, selected: bool, hover: bool) -> String {
+        let paint = self.paint;
+        let mark = match (&row.command, selected) {
+            (Some(_), true) => '◉',
+            (Some(_), false) => '○',
+            (None, _) => '›',
+        };
+        let (name, detail, size) = if row.command.is_none() {
+            // Actions span the whole row.
+            let span = columns.name + columns.detail + if columns.detail > 0 { 2 } else { 0 };
+            (
+                tui::pad(&row.name, span),
+                String::new(),
+                " ".repeat(columns.size),
+            )
+        } else {
+            let detail = if columns.detail > 0 {
+                format!("  {}", tui::pad(&row.detail, columns.detail))
+            } else {
+                String::new()
+            };
+            (
+                tui::pad(&row.name, columns.name),
+                detail,
+                tui::pad_left(&row.size, columns.size),
+            )
+        };
+        if selected && paint.colored() {
+            let on = format!("{}{}", paint.bg(tui::ROW), paint.fg(tui::ROW_TEXT));
+            format!("  {on} {mark}  {BOLD}{name}{RESET}{on}{detail}  {size} {RESET}")
+        } else if selected {
+            format!("  {BOLD} {mark}  {name}{detail}  {size} ")
+        } else if hover {
+            // Hover lifts the row to full brightness on light and dark themes alike.
+            format!("   {mark}  {name}{detail}  {size} ")
+        } else {
+            format!("  {DIM} {mark}  {RESET}{name}{DIM}{detail}  {size} ")
+        }
+    }
+
+    /// The run line under the list, styled like a command with a button.
+    fn confirm_box(&self, row: &Row, width: usize, hover: bool) -> [String; 3] {
+        let inner = width.saturating_sub(8);
+        let (prompt, text, button) = match &row.command {
+            Some(command) => ("$ ", command.as_str(), " Run locally ↵ "),
+            None => ("", row.name.as_str(), " Continue ↵ "),
+        };
+        let button_width = tui::width(button);
+        let text_width = inner.saturating_sub(button_width + 2 + prompt.len());
+        let text = tui::pad(text, text_width);
+        // Reverse video follows the theme: a light button on dark terminals and vice versa.
+        let button = format!("{BOLD}{REVERSE}{button}{RESET}");
+        let text = if hover {
+            format!("{BOLD}{text}{RESET}")
+        } else {
+            text
+        };
+        let rule = "─".repeat(inner + 2);
+        [
+            format!("  {DIM}╭{rule}╮"),
+            format!("  {DIM}│{RESET} {DIM}{prompt}{RESET}{text}  {button} {DIM}│"),
+            format!("  {DIM}╰{rule}╯"),
+        ]
+    }
+
+    fn draw(
+        &self,
         title: &str,
         details: &[String],
-        rows: &[String],
-    ) -> Result<Option<usize>> {
-        let mut selected = 0;
-        loop {
-            self.heading(title)?;
-            for (i, detail) in details.iter().enumerate() {
-                self.line(5 + i as u16, detail, None)?;
-            }
-            let first = 6 + details.len() as u16;
-            let visible = ((terminal::size()?.1.saturating_sub(first + 3)) / 2).max(1) as usize;
-            let offset = selected / visible * visible;
-            let mut row_index = first;
-            for (i, row) in rows.iter().enumerate().skip(offset).take(visible) {
-                for (part, line) in row.lines().enumerate() {
-                    self.line(
-                        row_index,
-                        &format!(
-                            "{} {line}",
-                            if i == selected && part == 0 { ">" } else { " " }
-                        ),
-                        (i == selected).then_some(Color::DarkCyan),
-                    )?;
-                    row_index += 1;
-                }
-                row_index += 1;
-            }
-            if rows.len() > visible {
-                self.line(
-                    row_index,
-                    &format!(
-                        "Showing {}-{} of {} choices",
-                        offset + 1,
-                        (offset + visible).min(rows.len()),
-                        rows.len()
-                    ),
-                    None,
-                )?;
-            }
-            self.line(
-                row_index + 1,
-                "Up/Down Select  Enter Continue  Esc Back  Ctrl+C Exit",
-                None,
+        rows: &[Row],
+        selected: usize,
+        hover: Option<usize>,
+        confirm_hover: bool,
+    ) -> Result<Hits> {
+        let size = terminal::size()?;
+        let (width, height) = (size.0 as usize, size.1);
+        // One write per frame: no half-drawn screens between reads.
+        let mut out = Vec::new();
+        queue!(out, BeginSynchronizedUpdate)?;
+        let mut y = 0;
+        let mut hits = Hits::default();
+        self.header(&mut out, size, &mut y)?;
+        let text = width.saturating_sub(4);
+        self.put(
+            &mut out,
+            height,
+            &mut y,
+            &format!("  {BOLD}{}", tui::fit(title, text)),
+        )?;
+        for detail in details {
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!("  {DIM}{}", tui::fit(detail, text)),
             )?;
-            io::stdout().flush()?;
+        }
+        self.put(&mut out, height, &mut y, "")?;
+        let about = &rows[selected].about;
+        // Header, title, blanks, the action gap, the about block, the run box and the footer.
+        let fixed = y + 2 + about.len() as u16 + 1 + 3 + 2;
+        let visible = (height.saturating_sub(fixed) as usize).max(1);
+        let offset = selected / visible * visible;
+        let voices = || rows.iter().filter(|row| row.command.is_some());
+        let columns = tui::Columns::fit(
+            voices().map(|row| row.name.as_str()),
+            voices().map(|row| row.size.as_str()),
+            width.saturating_sub(2),
+        );
+        for (i, row) in rows.iter().enumerate().skip(offset).take(visible) {
+            // Set actions apart from the voices above them.
+            if i > offset && row.command.is_none() && rows[i - 1].command.is_some() {
+                self.put(&mut out, height, &mut y, "")?;
+            }
+            hits.rows.push((y, i));
+            let line = self.row_line(row, &columns, i == selected, hover == Some(i));
+            self.put(&mut out, height, &mut y, &line)?;
+        }
+        self.put(&mut out, height, &mut y, "")?;
+        for line in about {
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!("  {DIM}{}", tui::fit(line, text)),
+            )?;
+        }
+        if !about.is_empty() {
+            self.put(&mut out, height, &mut y, "")?;
+        }
+        hits.confirm = Some((y, y + 2));
+        for line in self.confirm_box(&rows[selected], width, confirm_hover) {
+            self.put(&mut out, height, &mut y, &line)?;
+        }
+        let mut keys = String::from("↑↓ choose  ↵ ");
+        keys.push_str(if rows[selected].command.is_some() {
+            "run"
+        } else {
+            "continue"
+        });
+        keys.push_str("  esc back  ctrl+c exit  ·  click to choose");
+        if rows.len() > visible {
+            keys.push_str(&format!(
+                "  ·  {}-{} of {}",
+                offset + 1,
+                (offset + visible).min(rows.len()),
+                rows.len()
+            ));
+        }
+        self.put(
+            &mut out,
+            height,
+            &mut y,
+            &format!("  {DIM}{}", tui::fit(&keys, text)),
+        )?;
+        if y < height {
+            queue!(out, MoveTo(0, y), Clear(ClearType::FromCursorDown))?;
+        }
+        queue!(out, EndSynchronizedUpdate)?;
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(&out)?;
+        stdout.flush()?;
+        Ok(hits)
+    }
+
+    fn choose(&mut self, title: &str, details: &[String], rows: &[Row]) -> Result<Option<usize>> {
+        let mut selected = 0;
+        let mut hover = None;
+        let mut confirm_hover = false;
+        execute!(io::stdout(), Clear(ClearType::All))?;
+        loop {
+            let hits = self.draw(title, details, rows, selected, hover, confirm_hover)?;
+            let hit_row = |y: u16| hits.rows.iter().find(|(row, _)| *row == y).map(|(_, i)| *i);
+            let on_confirm = |y: u16| {
+                hits.confirm
+                    .is_some_and(|(top, bottom)| (top..=bottom).contains(&y))
+            };
             match self.event()? {
                 Event::Key(key) => match key.code {
-                    KeyCode::Up => selected = (selected + rows.len() - 1) % rows.len(),
-                    KeyCode::Down => selected = (selected + 1) % rows.len(),
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        selected = (selected + rows.len() - 1) % rows.len()
+                    }
+                    KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                        selected = (selected + 1) % rows.len()
+                    }
+                    KeyCode::Home => selected = 0,
+                    KeyCode::End => selected = rows.len() - 1,
                     KeyCode::Enter => return Ok(Some(selected)),
-                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
                     _ => {}
                 },
-                Event::Resize(..) => {}
-                _ => continue,
+                Event::Mouse(mouse) => {
+                    hover = hit_row(mouse.row);
+                    confirm_hover = on_confirm(mouse.row);
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            if let Some(row) = hover {
+                                selected = row;
+                            } else if confirm_hover {
+                                return Ok(Some(selected));
+                            }
+                        }
+                        MouseEventKind::ScrollUp => selected = selected.saturating_sub(1),
+                        MouseEventKind::ScrollDown => selected = (selected + 1).min(rows.len() - 1),
+                        _ => {}
+                    }
+                }
+                Event::Resize(..) => execute!(io::stdout(), Clear(ClearType::All))?,
+                _ => {}
             }
         }
     }
 
     fn input(&mut self, text: &mut String, notice: &str) -> Result<bool> {
+        execute!(io::stdout(), Clear(ClearType::All))?;
         loop {
-            self.heading("Use a model you already chose")?;
-            self.line(
-                5,
-                "Paste a model name or a run command from the model library.",
-                None,
+            let size = terminal::size()?;
+            let (width, height) = (size.0 as usize, size.1);
+            let mut out = Vec::new();
+            queue!(out, BeginSynchronizedUpdate)?;
+            let mut y = 0;
+            self.header(&mut out, size, &mut y)?;
+            let room = width.saturating_sub(4);
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!("  {BOLD}Use a model you already chose"),
             )?;
-            let width = terminal::size()?.0.saturating_sub(9) as usize;
-            let tail: String = text
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!(
+                    "  {DIM}{}",
+                    tui::fit(
+                        "Paste a model name or a run command from the model library.",
+                        room
+                    )
+                ),
+            )?;
+            self.put(&mut out, height, &mut y, "")?;
+            let inner = width.saturating_sub(8);
+            // Keep the end of long input in view, marking the hidden start.
+            let field = inner.saturating_sub(3);
+            let mut tail: String = text
                 .chars()
                 .rev()
-                .take(width)
+                .take(field)
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
                 .collect();
-            let prefix = if tail.len() < text.len() { "..." } else { "" };
-            self.line(7, &format!("> {prefix}{tail}"), Some(Color::DarkCyan))?;
-            self.line(10, notice, Some(Color::DarkYellow))?;
-            self.line(13, "Enter  Start    Esc  Back    Ctrl+C  Exit", None)?;
-            io::stdout().flush()?;
+            if tail.len() < text.len() {
+                tail = format!("…{}", tail.chars().skip(1).collect::<String>());
+            }
+            let rule = "─".repeat(inner + 2);
+            self.put(&mut out, height, &mut y, &format!("  {DIM}╭{rule}╮"))?;
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!(
+                    "  {DIM}│{RESET} {DIM}${RESET} {}{REVERSE} {RESET} {DIM}│",
+                    tui::pad(&tail, field)
+                ),
+            )?;
+            self.put(&mut out, height, &mut y, &format!("  {DIM}╰{rule}╯"))?;
+            self.put(&mut out, height, &mut y, "")?;
+            let notice = tui::fit(notice, room);
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!("  {}{notice}", self.paint.fg(tui::WARN)),
+            )?;
+            self.put(&mut out, height, &mut y, "")?;
+            self.put(
+                &mut out,
+                height,
+                &mut y,
+                &format!(
+                    "  {DIM}{}",
+                    tui::fit("↵ start  esc back  ctrl+u clear  ctrl+c exit", room)
+                ),
+            )?;
+            if y < height {
+                queue!(out, MoveTo(0, y), Clear(ClearType::FromCursorDown))?;
+            }
+            queue!(out, EndSynchronizedUpdate)?;
+            let mut stdout = io::stdout().lock();
+            stdout.write_all(&out)?;
+            stdout.flush()?;
+            drop(stdout);
             match self.event()? {
                 Event::Key(key) => match key.code {
                     KeyCode::Enter => return Ok(true),
@@ -627,6 +909,7 @@ impl Screen {
                 Event::Paste(paste) if text.len() + paste.len() <= 1024 => {
                     text.extend(paste.chars().filter(|c| !c.is_control()));
                 }
+                Event::Resize(..) => execute!(io::stdout(), Clear(ClearType::All))?,
                 _ => {}
             }
         }
@@ -635,14 +918,7 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        let _ = execute!(
-            io::stdout(),
-            ResetColor,
-            Show,
-            DisableBracketedPaste,
-            LeaveAlternateScreen
-        );
-        let _ = terminal::disable_raw_mode();
+        restore_terminal();
         for (signal, previous) in &self.signals {
             unsafe {
                 libc::sigaction(*signal, previous, std::ptr::null_mut());

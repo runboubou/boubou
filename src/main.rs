@@ -16,6 +16,8 @@ mod profiles;
 mod progress;
 mod qwen;
 mod realtime;
+mod talk;
+mod tui;
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -30,7 +32,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::TryRecvError,
     },
     time::{Duration, Instant},
@@ -177,6 +179,7 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     #[cfg(target_os = "macos")]
     let guided = cli.command.is_none();
+    let mut check = None;
     let cache = cli
         .cache_dir
         .or_else(|| dirs::cache_dir().map(|p| p.join("boubou")))
@@ -195,6 +198,7 @@ fn run() -> Result<()> {
             #[cfg(target_os = "macos")]
             {
                 let selected = onboarding::start(&cache)?;
+                check = selected.check;
                 Action::Run {
                     model: selected.model,
                     offline: selected.offline,
@@ -246,6 +250,13 @@ fn run() -> Result<()> {
             assets::status(model, &cache)
         }
         Action::Pull { model, offline } => {
+            let _checklist = checklist(
+                format!("boubou pull {}", model.id()),
+                check.take(),
+                model,
+                &cache,
+                false,
+            );
             match model {
                 profiles::Model::Liquid(profile) => {
                     assets::prepare(profile, &cache, offline)?;
@@ -254,7 +265,10 @@ fn run() -> Result<()> {
                     qwen::prepare(id, &cache, offline)?;
                 }
             }
-            eprintln!("{0} is ready. Run: boubou run {0} --offline", model.id());
+            let ready = format!("{0} is ready. Run: boubou run {0} --offline", model.id());
+            if !progress::finish(&ready) {
+                eprintln!("{ready}");
+            }
             Ok(())
         }
         Action::Ask {
@@ -281,6 +295,17 @@ fn run() -> Result<()> {
             input,
             output,
         } => {
+            let _checklist = checklist(
+                format!(
+                    "boubou run {}{}",
+                    model.id(),
+                    if offline { " --offline" } else { "" }
+                ),
+                check.take(),
+                model,
+                &cache,
+                true,
+            );
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
                 profiles::Model::Qwen(id) => {
@@ -340,6 +365,38 @@ fn run() -> Result<()> {
     result
 }
 
+/// The startup checklist for `run` and `pull` on a terminal.
+fn checklist(
+    command: String,
+    check: Option<String>,
+    model: profiles::Model,
+    cache: &Path,
+    start: bool,
+) -> Option<progress::Checklist> {
+    let parts = match model {
+        profiles::Model::Liquid(profile) => assets::parts(profile, cache),
+        profiles::Model::Qwen(id) => qwen::parts(id, cache),
+    }
+    .unwrap_or_default();
+    let check = check.unwrap_or_else(|| {
+        #[cfg(target_os = "macos")]
+        let os = qwen::macos_version().map_or_else(
+            |_| "macOS".to_owned(),
+            |(major, minor, patch)| format!("macOS {major}.{minor}.{patch}"),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let os = "Linux".to_owned();
+        let arch = match std::env::consts::ARCH {
+            "aarch64" if cfg!(target_os = "macos") => "Apple Silicon",
+            "aarch64" => "arm64",
+            "x86_64" => "x86-64",
+            other => other,
+        };
+        format!("{os} · {arch}")
+    });
+    progress::Checklist::begin(command, check, parts, start)
+}
+
 fn read_wav(path: &Path) -> Result<Vec<i16>> {
     let mut wav =
         hound::WavReader::open(path).with_context(|| format!("Cannot read {}", path.display()))?;
@@ -380,6 +437,7 @@ fn from_files(
             )
         })
         .transpose()?;
+    progress::finish("Ready. Sending the input files.");
     let mut missing_speech = false;
     for (i, pcm) in turns.iter().enumerate() {
         eprintln!("Turn {}", i + 1);
@@ -445,18 +503,40 @@ fn from_files(
 
 /// Returns the next key or resize event, or waits up to `timeout` for input.
 ///
-/// crossterm 0.29 retries a closed terminal forever inside `event::poll`, so crossterm only
-/// reads after this checks that the terminal is still open and never waits itself.
+/// crossterm 0.29 retries a closed terminal forever inside `event::poll`, and its blocking read
+/// can start without input. So crossterm reads only when the terminal has input, or when its
+/// last read may still hold parsed events, and never waits itself. A resize sends no input, so
+/// it is noticed by comparing the terminal size.
 fn next_event(timeout: Duration) -> Result<Option<Event>> {
-    wait_for_terminal(Duration::ZERO)?;
-    if event::poll(Duration::ZERO)? {
-        return Ok(Some(event::read()?));
+    static BUFFERED: AtomicBool = AtomicBool::new(false);
+    static SIZE: AtomicU32 = AtomicU32::new(0);
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    // The first call only records the size; a failed or empty read leaves the hang-up check to
+    // report a closed terminal.
+    if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) } == 0
+        && size.ws_col > 0
+        && size.ws_row > 0
+    {
+        let packed = u32::from(size.ws_col) << 16 | u32::from(size.ws_row);
+        let previous = SIZE.swap(packed, Ordering::Relaxed);
+        if previous != 0 && previous != packed {
+            return Ok(Some(Event::Resize(size.ws_col, size.ws_row)));
+        }
     }
-    wait_for_terminal(timeout)?;
+    for wait in [Duration::ZERO, timeout] {
+        // Check for a hang-up first, even when crossterm may hold buffered events.
+        let input = terminal_input(wait)?;
+        if (input || BUFFERED.load(Ordering::Relaxed)) && event::poll(Duration::ZERO)? {
+            BUFFERED.store(true, Ordering::Relaxed);
+            return Ok(Some(event::read()?));
+        }
+        BUFFERED.store(false, Ordering::Relaxed);
+    }
     Ok(None)
 }
 
-fn wait_for_terminal(timeout: Duration) -> Result<()> {
+/// Waits up to `timeout` and returns whether the terminal has input, failing once it closes.
+fn terminal_input(timeout: Duration) -> Result<bool> {
     let mut input = libc::pollfd {
         fd: libc::STDIN_FILENO,
         events: libc::POLLIN,
@@ -465,7 +545,7 @@ fn wait_for_terminal(timeout: Duration) -> Result<()> {
     let millis = timeout.as_millis().min(libc::c_int::MAX as u128) as libc::c_int;
     if unsafe { libc::poll(&mut input, 1, millis) } <= 0 {
         // Timed out, or a signal interrupted the wait; callers check their cancellation flags.
-        return Ok(());
+        return Ok(false);
     }
     let mut pending: libc::c_int = 0;
     ensure!(
@@ -474,7 +554,7 @@ fn wait_for_terminal(timeout: Duration) -> Result<()> {
             && pending > 0,
         "The terminal closed."
     );
-    Ok(())
+    Ok(true)
 }
 
 struct Terminal;
@@ -498,30 +578,21 @@ fn microphone(
     manual: bool,
     language: &str,
 ) -> Result<()> {
-    if cfg!(target_os = "macos") {
-        eprintln!("Allow microphone access if macOS asks.");
-    }
     let (mut audio, captured) = {
-        let _progress = progress::Progress::new("Opening microphone and speakers", None);
+        let _progress = progress::opening_audio();
         audio::Audio::start(cache, !manual, stopped)?
     };
-    eprintln!("Ready. Speak {language}.");
-    let _terminal = Terminal::enter()?;
-    if manual {
-        eprint!(
-            "\r\nManual · Enter starts/submits recording or interrupts a reply · Esc pauses · Ctrl+C exits\r\n"
-        );
-    } else {
-        eprint!(
-            "\r\nListening · pause to send · speak to interrupt · Esc pauses · Enter resumes · Ctrl+C exits\r\n"
-        );
+    if !progress::finish(&crate::progress::ready(language)) {
+        eprintln!("Ready. Speak {language}.");
     }
+    let _terminal = Terminal::enter()?;
+    let mut panel = talk::Panel::new(manual);
+    panel.note(talk::Note::Intro);
     let mut voice = voice::Voice::new();
     let mut pending = voice::PendingAudio::default();
     let mut recording_since: Option<Instant> = None;
     let mut recording_samples = 0usize;
     let mut submit_at = None;
-    let mut reply_open = false;
     let mut last_output = Instant::now();
     let mut listening_since = Some(Instant::now());
 
@@ -544,6 +615,7 @@ fn microphone(
                     format_args!("queued_samples={}", audio.pending_samples()),
                 );
                 audio.clear()?;
+                panel.silenced();
                 chat.interrupt()?;
                 chat.end_input_without_response()?;
                 pending.clear();
@@ -553,15 +625,12 @@ fn microphone(
                 submit_at = None;
                 listening_since = None;
                 trace("pause.latched", format_args!(""));
-                eprint!("\r\nPaused · Press Enter to resume · Ctrl+C exits\r\n");
-                reply_open = false;
+                panel.note(talk::Note::Paused);
             }
             if key.code == KeyCode::Enter && listening_since.is_none() {
                 listening_since = Some(Instant::now());
                 trace("resume.key", format_args!(""));
-                if !manual {
-                    eprint!("\r\nListening…\r\n");
-                }
+                panel.note(talk::Note::Resumed);
             }
             if manual && key.code == KeyCode::Enter {
                 if recording_since.is_some() {
@@ -570,16 +639,16 @@ fn microphone(
                 } else {
                     if chat.busy() || audio.pending_samples() > 0 {
                         audio.clear()?;
+                        panel.silenced();
                         if chat.interrupt()? {
-                            eprint!("\r\n[Interrupted]\r\n");
+                            panel.note(talk::Note::Interrupted);
                         }
                     }
                     let turn = pending.push(voice::Segment::Start(Vec::new()))?;
                     trace("input.start", format_args!("turn={turn} manual=true"));
                     recording_since = Some(Instant::now());
                     recording_samples = 0;
-                    reply_open = false;
-                    eprint!("\r\nRecording… Press Enter to send.\r\n");
+                    panel.note(talk::Note::Recording);
                 }
             }
         }
@@ -599,6 +668,7 @@ fn microphone(
             if frame.captured_at < since {
                 continue;
             }
+            panel.mic(&frame.samples);
             ensure!(
                 frame.captured_at.elapsed() < Duration::from_millis(500),
                 "Microphone processing fell behind. Restart Boubou after closing other busy applications."
@@ -614,9 +684,7 @@ fn microphone(
                     // Capture is ordered. Crossing the cutoff proves all earlier frames arrived.
                     submit_at = None;
                     if recording_samples == 0 {
-                        eprint!(
-                            "\r\nNo audio received yet. Keep recording, then press Enter to send.\r\n"
-                        );
+                        panel.note(talk::Note::NoAudioYet);
                     } else {
                         let turn = pending.push(voice::Segment::End(Vec::new()))?;
                         trace("input.end", format_args!("turn={turn} manual=true"));
@@ -650,52 +718,51 @@ fn microphone(
                 );
                 if chat.busy() || audio.pending_samples() > 0 {
                     audio.clear()?;
+                    panel.silenced();
                     if chat.interrupt()? {
-                        eprint!("\r\n[Interrupted]\r\n");
+                        panel.note(talk::Note::Interrupted);
                     }
                 }
-                reply_open = false;
+                panel.reply_close();
             }
             if ending {
                 trace("input.end", format_args!("turn={turn} manual=false"));
             }
-            if !chat.busy() && audio.pending_samples() == 0 {
-                send_pending(
+            if !chat.busy()
+                && audio.pending_samples() == 0
+                && send_pending(
                     &mut pending,
                     chat,
                     !voice.is_active() && recording_since.is_none(),
-                )?;
+                )?
+            {
+                panel.note(talk::Note::Thinking);
             }
         }
         if let Some(output) = chat.poll()? {
             last_output = Instant::now();
             match output {
-                Output::Text(text) => {
-                    if !reply_open {
-                        eprint!("Liquid: ");
-                        reply_open = true;
-                    }
-                    print!("{}", text.replace('\n', "\r\n"));
-                    io::stdout().flush()?;
+                Output::Text(text) => panel.reply("Liquid", &text),
+                Output::Audio(pcm) => {
+                    audio.enqueue(&pcm)?;
+                    panel.played(&pcm);
                 }
-                Output::Audio(pcm) => audio.enqueue(&pcm)?,
-                Output::Done => {
-                    print!("\r\n");
-                    reply_open = false;
-                }
+                Output::Done => panel.reply_done(),
                 Output::Interrupted => {}
-                Output::ContextCleared => {
-                    eprint!("\r\n[Earlier conversation context cleared.]\r\n");
-                }
+                Output::ContextCleared => panel.note(talk::Note::ContextCleared),
             }
         }
-        if !chat.busy() && audio.pending_samples() == 0 {
-            send_pending(
+        if !chat.busy()
+            && audio.pending_samples() == 0
+            && send_pending(
                 &mut pending,
                 chat,
                 !voice.is_active() && recording_since.is_none(),
-            )?;
+            )?
+        {
+            panel.note(talk::Note::Thinking);
         }
+        panel.tick(audio.pending_samples());
         // poll() already waits briefly on the local socket. Detect a stalled player
         // instead of allowing queued speech to hold the device indefinitely.
         ensure!(
@@ -707,23 +774,24 @@ fn microphone(
     Ok(())
 }
 
+/// Sends queued speech when the conversation can take it. True when a turn was submitted.
 fn send_pending(
     pending: &mut voice::PendingAudio,
     chat: &mut dyn Conversation,
     allow_finish: bool,
-) -> Result<()> {
+) -> Result<bool> {
     if !chat.ready_for_audio()? {
-        return Ok(());
+        return Ok(false);
     }
     if let Some((turn, pcm, end)) = pending.take(allow_finish) {
         chat.append_audio(&pcm)?;
         if end {
             trace("input.submit", format_args!("turn={turn}"));
             chat.finish_audio()?;
-            eprint!("\r\nThinking…\r\n");
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]

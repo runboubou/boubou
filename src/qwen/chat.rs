@@ -356,29 +356,27 @@ pub(super) fn converse(
     stopped: &AtomicBool,
     language: &str,
 ) -> Result<()> {
-    use crate::audio::{Audio, CaptureFrame};
-    use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
-    use std::{
-        io::{self, Write},
-        sync::{atomic::Ordering, mpsc::TryRecvError},
+    use crate::{
+        audio::{Audio, CaptureFrame},
+        talk::Note,
     };
+    use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
+    use std::sync::{atomic::Ordering, mpsc::TryRecvError};
 
-    if cfg!(target_os = "macos") {
-        eprintln!("Allow microphone access if macOS asks.");
-    }
     let (mut audio, captured) = {
-        let _progress = crate::progress::Progress::new("Opening microphone and speakers", None);
+        let _progress = crate::progress::opening_audio();
         Audio::start(cache, true, stopped)?
     };
-    eprintln!("Ready. Speak {}.", language.trim_end_matches(" (Whisper)"));
+    let language = language.trim_end_matches(" (Whisper)");
+    if !crate::progress::finish(&crate::progress::ready(language)) {
+        eprintln!("Ready. Speak {language}.");
+    }
     let _terminal = crate::Terminal::enter()?;
-    eprint!(
-        "\r\nListening · pause to send · speak to interrupt · Esc pauses · Enter resumes · Ctrl+C exits\r\n"
-    );
+    let mut panel = crate::talk::Panel::new(false);
+    panel.note(Note::Intro);
     let mut voice = Voice::new();
     let mut backlog = VecDeque::new();
     let mut listening = true;
-    let mut reply_open = false;
 
     while !stopped.load(Ordering::SeqCst) {
         audio.check_error()?;
@@ -394,14 +392,14 @@ pub(super) fn converse(
                 listening = false;
                 voice = Voice::new();
                 audio.clear()?;
+                panel.silenced();
                 backlog.clear();
                 session.interrupt()?;
-                reply_open = false;
-                eprint!("\r\nPaused · Press Enter to resume · Ctrl+C exits\r\n");
+                panel.note(Note::Paused);
             }
             if key.code == KeyCode::Enter && !listening {
                 listening = true;
-                eprint!("\r\nListening…\r\n");
+                panel.note(Note::Resumed);
             }
         }
         // Bound each tick so a continuous microphone cannot starve server events.
@@ -418,6 +416,9 @@ pub(super) fn converse(
                 frame.captured_at.elapsed() < Duration::from_millis(500),
                 "Microphone processing fell behind. Restart Boubou after closing other busy applications."
             );
+            if listening {
+                panel.mic(&frame.samples);
+            }
             let (pcm, started) = if listening {
                 gate(&mut voice, frame.samples, frame.near_end_speech)?
             } else {
@@ -427,9 +428,9 @@ pub(super) fn converse(
                 && (session.interrupt()? || audio.pending_samples() > 0 || !backlog.is_empty())
             {
                 audio.clear()?;
+                panel.silenced();
                 backlog.clear();
-                reply_open = false;
-                eprint!("\r\n[Interrupted]\r\n");
+                panel.note(Note::Interrupted);
             }
             session.send(&pcm)?;
         }
@@ -438,39 +439,24 @@ pub(super) fn converse(
                 break;
             };
             match event {
-                Event::Heard(text) => {
-                    if reply_open {
-                        print!("\r\n");
-                        reply_open = false;
-                    }
-                    print!("You: {text}\r\n");
-                }
-                Event::Text(text) => {
-                    if !reply_open {
-                        eprint!("Qwen: ");
-                        reply_open = true;
-                    }
-                    print!("{}", text.replace('\n', "\r\n"));
-                }
+                Event::Heard(text) => panel.heard(&text),
+                Event::Text(text) => panel.reply("Qwen", &text),
                 Event::Audio(pcm) => backlog.extend(pcm),
                 Event::SpeechStarted => {
                     if audio.pending_samples() > 0 || !backlog.is_empty() {
                         audio.clear()?;
+                        panel.silenced();
                         backlog.clear();
                     }
                 }
-                Event::Done => {
-                    if reply_open {
-                        print!("\r\n");
-                        reply_open = false;
-                    }
-                }
+                Event::Done => panel.reply_close(),
             }
-            io::stdout().flush()?;
         }
         if let Some(pcm) = refill(&mut backlog, audio.pending_samples()) {
             audio.enqueue(&pcm)?;
+            panel.played(&pcm);
         }
+        panel.tick(audio.pending_samples());
     }
     audio.clear()?;
     Ok(())
