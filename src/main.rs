@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc::TryRecvError,
     },
     time::{Duration, Instant},
@@ -447,9 +447,24 @@ fn from_files(
 ///
 /// crossterm 0.29 retries a closed terminal forever inside `event::poll`, and its blocking read
 /// can start without input. So crossterm reads only when the terminal has input, or when its
-/// last read may still hold parsed events, and never waits itself.
+/// last read may still hold parsed events, and never waits itself. A resize sends no input, so
+/// it is noticed by comparing the terminal size.
 fn next_event(timeout: Duration) -> Result<Option<Event>> {
     static BUFFERED: AtomicBool = AtomicBool::new(false);
+    static SIZE: AtomicU32 = AtomicU32::new(0);
+    let mut size = unsafe { std::mem::zeroed::<libc::winsize>() };
+    // The first call only records the size; a failed or empty read leaves the hang-up check to
+    // report a closed terminal.
+    if unsafe { libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut size) } == 0
+        && size.ws_col > 0
+        && size.ws_row > 0
+    {
+        let packed = u32::from(size.ws_col) << 16 | u32::from(size.ws_row);
+        let previous = SIZE.swap(packed, Ordering::Relaxed);
+        if previous != 0 && previous != packed {
+            return Ok(Some(Event::Resize(size.ws_col, size.ws_row)));
+        }
+    }
     for wait in [Duration::ZERO, timeout] {
         // Check for a hang-up first, even when crossterm may hold buffered events.
         let input = terminal_input(wait)?;
