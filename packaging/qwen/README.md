@@ -95,8 +95,9 @@ and inference backends require a separately configured developer runtime.
 
 The Linux runner follows upstream's llama.cpp setup on CUDA: Parakeet TDT 0.6B
 v3 through nano-parakeet, Qwen3.5-4B as Unsloth's Q4_K_M GGUF through
-llama.cpp b11960's CUDA 13 build, and Kokoro through its PyTorch package. The
-other voices load the same weights as on a Mac, and OmniVoice runs on CUDA.
+llama.cpp b11960's CUDA 13 build, and Kokoro through its PyTorch package.
+Phonon, Supertonic, MMS, OmniVoice, Pocket TTS and KittenTTS load the same
+weights as on a Mac, and OmniVoice runs on CUDA.
 llama.cpp uses the CUDA libraries installed with PyTorch, so the runner carries
 one CUDA 13 line and no CUDA toolkit is needed. `pull` checks for glibc 2.39
 and NVIDIA driver 580.65.06 before downloading anything.
@@ -131,9 +132,10 @@ about 110 MB/s from Hugging Face:
 | Verify the runner and models on each start | 1.7 s |
 | `run` until it is listening | 14–16 s |
 | Peak GPU memory | 6.3–7.3 GiB; OmniVoice 8.3 GiB |
-| First audio after a text turn (`smoke.py`) | 0.5–0.8 s for most voices; ChatTTS 9.4 s |
+| First audio after a text turn (`smoke.py`) | 0.5–0.8 s for most voices; up to 1.2 s |
 
-Not on Linux yet: Qwen3-TTS, whose CUDA 13 qwentts.cpp wheel lacks RTX 50
+Not on Linux: ChatTTS, which takes about 9 s to voice its first sentence on
+CUDA too. Not yet: Qwen3-TTS, whose CUDA 13 qwentts.cpp wheel lacks RTX 50
 kernels and whose PyTorch path fails with Transformers 5.18; the Whisper
 entries; the presets with other Qwen3.5 sizes or Whisper tiny; and guided
 startup.

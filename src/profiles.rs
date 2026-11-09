@@ -374,10 +374,15 @@ impl Model {
     pub fn all() -> impl Iterator<Item = Self> {
         let packaged = crate::qwen::packaged();
         // The CUDA runner packages Parakeet and Qwen3.5-4B only: no Whisper entries and none of
-        // the macOS presets with other model sizes. Qwen3-TTS waits for upstream RTX 50 support.
+        // the macOS presets with other model sizes. Qwen3-TTS waits for upstream RTX 50 support,
+        // and ChatTTS, which takes about 9 s for its first sentence, stays on the Mac.
         let linux = cfg!(target_os = "linux");
         let qwen = QWEN_IDS.iter().copied().filter(move |&id| {
-            packaged && !(linux && (crate::qwen::whisper(id) || id.starts_with("qwen3-tts:")))
+            packaged
+                && !(linux
+                    && (crate::qwen::whisper(id)
+                        || id.starts_with("qwen3-tts:")
+                        || id.starts_with("chattts:")))
         });
         let presets = presets()
             .iter()

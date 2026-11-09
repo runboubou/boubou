@@ -301,7 +301,8 @@ def cuda():
     for repo, revision, only, profile in ORIGINALS:
         if repo == "Qwen/Qwen3.5-4B":
             files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
-    files.extend(shared())
+    # ChatTTS takes about 9 s for its first sentence on CUDA, so it stays on the Mac.
+    files.extend(file for file in shared() if file.get("profile") != CHATTTS[3])
     everyone = sorted({file["profile"] for file in files if "profile" in file})
     return [{**{key: value for key, value in file.items() if key != "profile"},
              "profiles": [file["profile"]] if "profile" in file else everyone} for file in files]

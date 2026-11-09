@@ -68,8 +68,8 @@ def llama_server(model, work):
 
 
 def warm_librosa():
-    # ChatTTS and MMS call librosa.resample for every reply. Its first call compiles for about
-    # nine seconds, so compile it while the models load rather than during the first reply.
+    # MMS calls librosa.resample for every reply. Its first call compiles for about nine
+    # seconds, so compile it while the models load rather than during the first reply.
     import librosa
     import numpy
 
@@ -107,7 +107,7 @@ def arguments(model_id, cache, manifest, work):
             owned.append(str(cache / entry["path"]))
     (tts,) = owned
     family = model_id.split(":")[0]
-    if family in ("chattts", "mms-tts"):
+    if family == "mms-tts":
         threading.Thread(target=warm_librosa, daemon=True).start()
     os.environ.update({
         "HF_HOME": str(work / "hf"),

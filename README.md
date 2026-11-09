@@ -94,7 +94,7 @@ still needs a Mac.
 ### Modular pipeline on an NVIDIA GPU
 
 The modular pipeline also runs on x86-64 Linux with an NVIDIA GPU, with every
-voice except Qwen3-TTS and the Whisper entries. You need:
+voice except Qwen3-TTS, ChatTTS and the Whisper entries. You need:
 
 - An NVIDIA GPU from the Turing generation (RTX 20 series) or newer, with about
   7.5 GB of free memory, or 8.5 GB for OmniVoice.
