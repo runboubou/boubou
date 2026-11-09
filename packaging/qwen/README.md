@@ -1,6 +1,6 @@
-# Apple Silicon Qwen candidate
+# Qwen runner
 
-From a clean checkout on macOS 15 or newer, use Python 3.11 or newer and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
+On an Apple Silicon Mac, from a clean checkout on macOS 15 or newer, use Python 3.11 or newer and Xcode Command Line Tools to build the shared interpreter and resolve the pinned model manifests. Keep the output outside the checkout so the npm build can verify its source commit.
 
 ```sh
 candidate="$(mktemp -d)"
@@ -87,6 +87,53 @@ own model formats and dependencies; changing another component's backend does
 not switch this package's STT engine.
 
 The upstream framework supports `mlx-lm`, `transformers`, `responses-api` and
-`chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` and the
-pinned checkpoints selected by each complete runtime. Other component combinations
+`chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` on a Mac,
+`transformers` on Linux, and the pinned checkpoints selected by each complete runtime. Other component combinations
 and inference backends require a separately configured developer runtime.
+
+## x86-64 Linux with an NVIDIA GPU
+
+The Linux runner follows upstream's llama.cpp setup on CUDA: Parakeet TDT 0.6B
+v3 through nano-parakeet, Qwen3.5-4B as Unsloth's Q4_K_M GGUF through
+llama.cpp b11960's CUDA 13 build, and Kokoro through its PyTorch package. The
+other voices load the same weights as on a Mac, and OmniVoice runs on CUDA.
+llama.cpp uses the CUDA libraries installed with PyTorch, so the runner carries
+one CUDA 13 line and no CUDA toolkit is needed. `pull` checks for glibc 2.39
+and NVIDIA driver 580.65.06 before downloading anything.
+
+Build on Ubuntu 24.04 or newer with Python 3.11 or newer and Git. Put the
+runner next to a release build, where `boubou` looks for it:
+
+```sh
+cargo build --locked --release
+out=target/release/qwen
+mkdir -p "$out"
+python3 -B packaging/qwen/lock_models.py --cuda "$out/models.json"
+python3 -B packaging/qwen/build_runner.py "$out"
+target/release/boubou pull kokoro:82m
+target/release/boubou run kokoro:82m --offline
+```
+
+The runner is one 3.6 GB archive, 6.2 GB unpacked, shared by every profile.
+PyTorch and its CUDA libraries are 2.7 GB of its 3.3 GB of wheels, and all
+voice packages together are 0.17 GB, so voices are not separate downloads.
+Every profile shares 5.3 GB of models (Parakeet and Qwen3.5-4B); a voice adds
+0.02 to 3.3 GB. The runner's `runtime.json` records a digest of the unpacked
+tree, so each start hashes the installed files on several threads instead of
+re-reading the archive.
+
+Measured on Ubuntu 24.04 with an RTX 5090 (driver 595.84), a Ryzen 9 9950X and
+about 110 MB/s from Hugging Face:
+
+| Step | Result |
+| --- | --- |
+| First `pull kokoro:82m` from a source build | 87 s |
+| Verify the runner and models on each start | 1.7 s |
+| `run` until it is listening | 14–16 s |
+| Peak GPU memory | 6.3–7.3 GiB; OmniVoice 8.3 GiB |
+| First audio after a text turn (`smoke.py`) | 0.5–0.8 s for most voices; ChatTTS 9.4 s |
+
+Not on Linux yet: Qwen3-TTS, whose CUDA 13 qwentts.cpp wheel lacks RTX 50
+kernels and whose PyTorch path fails with Transformers 5.18; the Whisper
+entries; the presets with other Qwen3.5 sizes or Whisper tiny; and guided
+startup.

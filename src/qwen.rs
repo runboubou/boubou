@@ -1,9 +1,8 @@
-#[cfg(any(target_os = "macos", test))]
 mod chat;
 mod integrity;
 
 use crate::{assets, profiles::Download};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::{
     env, fs,
@@ -16,7 +15,35 @@ struct Runner {
     url: Option<String>,
     size: u64,
     sha256: String,
-    min_macos: String,
+    /// Digest of the installed tree, which lets each start skip re-reading the archive.
+    #[serde(default)]
+    tree_sha256: Option<String>,
+    #[serde(flatten)]
+    host: Host,
+}
+
+/// The computer a runner was built for, with the minimum versions its build recorded.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Host {
+    Mac {
+        min_macos: String,
+    },
+    /// x86-64 Linux with an NVIDIA driver that supports the runner's CUDA libraries.
+    Cuda {
+        min_nvidia_driver: String,
+        min_glibc: String,
+    },
+}
+
+impl Host {
+    /// The script beside the runner's interpreter that serves the conversation.
+    fn entry(&self) -> &'static str {
+        match self {
+            Self::Mac { .. } => "voice.py",
+            Self::Cuda { .. } => "cuda.py",
+        }
+    }
 }
 
 impl Runner {
@@ -46,14 +73,16 @@ fn runner(dir: &Path) -> Result<Runner> {
     let bytes = fs::read(dir.join("runtime.json")).context(
         "This build does not include a Qwen runner manifest. Use a Qwen-enabled Boubou package.",
     )?;
-    let runner: Runner = serde_json::from_slice(&bytes)?;
+    let runner: Runner =
+        serde_json::from_slice(&bytes).context("Invalid packaged Qwen runner manifest")?;
+    let digest = |text: &str| text.len() == 64 && text.bytes().all(|c| c.is_ascii_hexdigit());
     ensure!(
         runner
             .url
             .as_ref()
             .is_none_or(|url| url.starts_with("https://"))
-            && runner.sha256.len() == 64
-            && runner.sha256.bytes().all(|c| c.is_ascii_hexdigit())
+            && digest(&runner.sha256)
+            && runner.tree_sha256.as_deref().is_none_or(digest)
             && runner.size > 0,
         "Invalid packaged Qwen runner manifest"
     );
@@ -62,7 +91,7 @@ fn runner(dir: &Path) -> Result<Runner> {
 
 fn version(text: &str) -> Result<(u32, u32, u32)> {
     let mut parts = text.trim().split('.');
-    let major = parts.next().context("Missing macOS version")?.parse()?;
+    let major = parts.next().context("Missing version number")?.parse()?;
     let minor = parts.next().unwrap_or("0").parse()?;
     let patch = parts.next().unwrap_or("0").parse()?;
     Ok((major, minor, patch))
@@ -79,16 +108,58 @@ pub fn macos_version() -> Result<(u32, u32, u32)> {
     version(std::str::from_utf8(&os.stdout)?)
 }
 
+/// The loaded kernel module's version, such as 595.84 in
+/// "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  595.84  Release Build ...".
+fn nvidia_driver(text: &str) -> Option<&str> {
+    text.split_whitespace()
+        .find(|word| word.contains('.') && word.bytes().all(|c| c.is_ascii_digit() || c == b'.'))
+}
+
+#[cfg(target_os = "linux")]
+fn glibc_version() -> Result<(u32, u32, u32)> {
+    let text = unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) };
+    version(text.to_str()?)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn glibc_version() -> Result<(u32, u32, u32)> {
+    bail!("glibc is only available on Linux")
+}
+
+// Runs before any download, so an unsupported computer does not fetch gigabytes first.
 fn check_host(runner: &Runner) -> Result<()> {
-    ensure!(
-        cfg!(all(target_os = "macos", target_arch = "aarch64")),
-        "Qwen requires an Apple Silicon Mac."
-    );
-    ensure!(
-        macos_version()? >= version(&runner.min_macos)?,
-        "This Qwen runner requires macOS {} or later.",
-        runner.min_macos
-    );
+    match &runner.host {
+        Host::Mac { min_macos } => {
+            ensure!(
+                cfg!(all(target_os = "macos", target_arch = "aarch64")),
+                "Qwen requires an Apple Silicon Mac."
+            );
+            ensure!(
+                macos_version()? >= version(min_macos)?,
+                "This Qwen runner requires macOS {min_macos} or later."
+            );
+        }
+        Host::Cuda {
+            min_nvidia_driver,
+            min_glibc,
+        } => {
+            ensure!(
+                cfg!(all(target_os = "linux", target_arch = "x86_64")),
+                "This Qwen runner requires x86-64 Linux with an NVIDIA GPU."
+            );
+            ensure!(
+                glibc_version()? >= version(min_glibc)?,
+                "This Qwen runner requires glibc {min_glibc} or later, for example Ubuntu 24.04."
+            );
+            let text = fs::read_to_string("/proc/driver/nvidia/version")
+                .context("Qwen on Linux requires an NVIDIA GPU, and no NVIDIA driver is loaded.")?;
+            let driver = nvidia_driver(&text).context("Cannot read the NVIDIA driver version")?;
+            ensure!(
+                version(driver)? >= version(min_nvidia_driver)?,
+                "Qwen requires NVIDIA driver {min_nvidia_driver} or later, but {driver} is loaded. Update the driver and retry."
+            );
+        }
+    }
     Ok(())
 }
 
@@ -96,6 +167,23 @@ fn runtime_dir(root: &Path, runner: &Runner) -> Result<PathBuf> {
     let relative = Path::new("runtimes").join(&runner.sha256);
     integrity::safe_destination(root, &relative.join("runner.tar.gz"))?;
     Ok(root.join(relative))
+}
+
+/// The verified runner archive: downloaded into the cache, or bundled beside the binary.
+fn archive(runner: &Runner, dir: &Path, engine: &Path, offline: bool) -> Result<PathBuf> {
+    if runner.url.is_some() {
+        return assets::fetch(&runner.archive(), engine, offline);
+    }
+    let archive = dir.join("runner.tar.gz");
+    ensure!(
+        assets::verified(&archive, &runner.archive())?,
+        "The bundled Qwen interpreter failed verification. Reinstall the package."
+    );
+    Ok(archive)
+}
+
+fn tree_matches(installed: &Path, tree: &str) -> Result<bool> {
+    Ok(integrity::tree_digest(installed)?.as_deref() == Some(tree))
 }
 
 pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
@@ -106,32 +194,43 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     integrity::safe_destination(cache, Path::new("qwen/install.lock"))?;
     let _lock = assets::preparation_lock(&root)?;
     let engine = runtime_dir(&root, &runner)?;
-    let archive = if runner.url.is_some() {
-        assets::fetch(&runner.archive(), &engine, offline)?
-    } else {
-        let archive = dir.join("runner.tar.gz");
-        ensure!(
-            assets::verified(&archive, &runner.archive())?,
-            "The bundled Qwen interpreter failed verification. Reinstall the package."
-        );
-        archive
-    };
     let installed = engine.join("installed");
-    let refresh = !integrity::runtime_tree(&archive, &installed)?;
-    assets::install_runtime(&archive, &installed, "bin/python3", refresh)?;
-    if refresh {
-        ensure!(
-            integrity::runtime_tree(&archive, &installed)?,
-            "The Qwen runtime contains unexpected files"
-        );
+    if let Some(tree) = &runner.tree_sha256 {
+        // The digest covers every installed file, so the archive is needed only to install.
+        if !tree_matches(&installed, tree)? {
+            let archive = archive(&runner, &dir, &engine, offline)?;
+            assets::install_runtime(&archive, &installed, true, |staging| {
+                tree_matches(staging, tree)
+            })?;
+            if runner.url.is_some() {
+                fs::remove_file(&archive)?;
+            }
+        }
+    } else {
+        let archive = archive(&runner, &dir, &engine, offline)?;
+        let refresh = !integrity::runtime_tree(&archive, &installed)?;
+        assets::install_runtime(&archive, &installed, refresh, |dir| {
+            assets::runtime_valid(&archive, dir, "bin/python3")
+        })?;
+        if refresh {
+            ensure!(
+                integrity::runtime_tree(&archive, &installed)?,
+                "The Qwen runtime contains unexpected files"
+            );
+        }
     }
     model_assets(id, &root, &dir, Some(offline))?;
     Ok(installed)
 }
 
+/// Whisper entries recognize Chinese and English; the others use Parakeet.
+pub fn whisper(id: &str) -> bool {
+    id.ends_with("-whisper") || id == "chattts:whisper"
+}
+
 /// Language modes are explicit; Pocket profiles name their stock language.
 fn language(id: &str) -> String {
-    if id.ends_with("-whisper") || id == "chattts:whisper" {
+    if whisper(id) {
         return "Chinese / English (Whisper)".into();
     }
     let Some(config) = id.strip_prefix("pocket-tts:") else {
@@ -153,10 +252,15 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     check_host(&runner)?;
     let root = cache.join("qwen");
     let engine = runtime_dir(&root, &runner)?;
-    let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
-    let ready = assets::verified(&archive, &runner.archive())?
-        && integrity::runtime_tree(&archive, &engine.join("installed"))?
-        && assets::runtime_valid(&archive, &engine.join("installed"), "bin/python3")?;
+    let installed = engine.join("installed");
+    let ready = if let Some(tree) = &runner.tree_sha256 {
+        tree_matches(&installed, tree)?
+    } else {
+        let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
+        assets::verified(&archive, &runner.archive())?
+            && integrity::runtime_tree(&archive, &installed)?
+            && assets::runtime_valid(&archive, &installed, "bin/python3")?
+    };
     println!(
         "Qwen runner: {}",
         if ready {
@@ -213,6 +317,9 @@ pub fn requirements(id: &str, cache: &Path) -> Result<Requirements> {
 // Estimates use sizes only. Preparation still verifies every selected file by SHA-256.
 fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
     let runner = runner(dir)?;
+    let Host::Mac { min_macos } = &runner.host else {
+        bail!("Guided startup requires the macOS Qwen runner.");
+    };
     let files = model_files(id, dir)?;
     let root = cache.join("qwen");
     let mut download = 0;
@@ -244,7 +351,7 @@ fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
             8 * runner.size
         };
     Ok(Requirements {
-        min_macos: version(&runner.min_macos)?,
+        min_macos: version(min_macos)?,
         download,
         disk,
     })
@@ -255,12 +362,13 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
     let files = model_files(id, dir)?;
     let mut ready = true;
     let mut selected = Vec::new();
+    let mut specs = Vec::new();
     for f in files.iter().filter(|f| f.applies_to(id)) {
         integrity::safe_destination(root, &f.path)?;
         selected.push(f.path.as_path());
-        let path = root.join(&f.path);
         let spec = Download {
-            name: path
+            name: f
+                .path
                 .file_name()
                 .and_then(|s| s.to_str())
                 .context("Invalid asset name")?,
@@ -268,14 +376,22 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
             size: f.size,
             sha256: &f.sha256,
         };
+        specs.push((root.join(&f.path), spec));
+    }
+    // Check the cache on several threads first; only missing or damaged files are fetched.
+    let verified = assets::verified_all(&specs)?;
+    for ((path, spec), valid) in specs.iter().zip(verified) {
+        if valid {
+            continue;
+        }
         if let Some(offline) = prepare {
             assets::fetch(
-                &spec,
+                spec,
                 path.parent().context("Missing asset directory")?,
                 offline,
             )?;
-        } else if !assets::verified(&path, &spec)? {
-            println!("Missing or invalid: {}", f.path.display());
+        } else {
+            println!("Missing or invalid: {}", path.strip_prefix(root)?.display());
             ready = false;
         }
     }
@@ -284,7 +400,6 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
     integrity::model_snapshots(root, &listed, &selected)
 }
 
-#[cfg(target_os = "macos")]
 pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     use std::sync::{
         Arc,
@@ -292,13 +407,14 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     };
 
     let installed = prepare(id, cache, offline)?;
+    let entry = runner(&release_dir()?)?.host.entry();
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
     let mut command = Command::new(installed.join("bin/python3"));
     command
         .args(["-I", "-B"])
-        .arg(installed.join("voice.py"))
+        .arg(installed.join(entry))
         .arg(id)
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"));
@@ -311,15 +427,38 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
     result
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
-    prepare(id, cache, offline)?;
-    anyhow::bail!("Qwen requires an Apple Silicon Mac.")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runner_manifests_name_their_host() {
+        let manifest = |host: &str| {
+            serde_json::from_str::<Runner>(&format!(
+                r#"{{"url":null,"size":1,"sha256":"{}"{host}}}"#,
+                "a".repeat(64)
+            ))
+        };
+        let mac = manifest(r#","min_macos":"15.0""#).unwrap();
+        assert_eq!(mac.host.entry(), "voice.py");
+        let cuda = manifest(r#","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#).unwrap();
+        assert_eq!(cuda.host.entry(), "cuda.py");
+        assert!(manifest("").is_err());
+        let tree = format!(r#","tree_sha256":"{}","min_macos":"15.0""#, "b".repeat(64));
+        assert!(manifest(&tree).unwrap().tree_sha256.is_some());
+        // A runner built for the other system stops before anything is downloaded.
+        let foreign = if cfg!(target_os = "macos") { cuda } else { mac };
+        assert!(check_host(&foreign).is_err());
+    }
+
+    #[test]
+    fn nvidia_driver_version_comes_from_the_loaded_kernel_module() {
+        let text = "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  595.84  Release Build  (dvs-builder@U22-I3-AM02-24-3)  Thu Oct 30 2026\nGCC version:  gcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04)\n";
+        assert_eq!(nvidia_driver(text), Some("595.84"));
+        assert!(version("595.84").unwrap() >= version("580.65.06").unwrap());
+        assert!(version("575.57.08").unwrap() < version("580.65.06").unwrap());
+        assert_eq!(nvidia_driver("NVRM version: unavailable"), None);
+    }
 
     #[test]
     fn asset_ownership_accepts_legacy_and_grouped_profiles() {

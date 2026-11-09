@@ -8,11 +8,23 @@ use fs2::FileExt;
 use reqwest::{StatusCode, blocking::Client, header};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        Condvar, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
     time::Duration,
 };
+
+/// Files larger than two chunks download over several ranged connections, because one connection
+/// to the Hub carries only part of a fast link. Chunks are appended in order, so a partial file
+/// always holds a prefix and stays resumable.
+const CHUNK: u64 = 16 << 20;
+const CONNECTIONS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct Assets {
@@ -37,7 +49,9 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     let model_dir = cache_dir.join(profile.model_directory);
     let archive = download(&runtime.archive, &cache_dir.join("downloads"))?;
     let installed = cache_dir.join(runtime.directory);
-    install_runtime(&archive, &installed, runtime.server, false)?;
+    install_runtime(&archive, &installed, false, |dir| {
+        runtime_valid(&archive, dir, runtime.server)
+    })?;
 
     // Cache the model's license alongside its weights before making it runnable.
     for spec in profile.model_assets() {
@@ -64,13 +78,14 @@ pub(crate) fn preparation_lock(cache_dir: &Path) -> Result<File> {
     Ok(lock)
 }
 
+/// Unpacks `archive` into `installed` unless `valid` accepts the installed tree already.
 pub(crate) fn install_runtime(
     archive: &Path,
     installed: &Path,
-    server: &str,
     refresh: bool,
+    valid: impl Fn(&Path) -> Result<bool>,
 ) -> Result<()> {
-    if refresh || !runtime_valid(archive, installed, server)? {
+    if refresh || !valid(installed)? {
         let staging = installed.with_extension("partial");
         if staging.exists() {
             fs::remove_dir_all(&staging)?;
@@ -92,7 +107,7 @@ pub(crate) fn install_runtime(
             }
         }
         ensure!(
-            runtime_valid(archive, &staging, server)?,
+            valid(&staging)?,
             "The unpacked speech engine failed verification"
         );
         if installed.exists() {
@@ -141,7 +156,7 @@ pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> {
+pub(crate) fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> {
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1024 * 1024];
     loop {
@@ -155,6 +170,64 @@ fn sha256(mut reader: impl Read, progress: Option<&Progress>) -> Result<String> 
         }
     }
     Ok(hex(&hash.finalize()))
+}
+
+/// SHA-256 of each file, in order, hashed on several threads with one progress line.
+pub(crate) fn sha256_files(files: &[(&Path, u64)], label: &str) -> Result<Vec<String>> {
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let progress = Progress::new(label, Some(files.iter().map(|(_, size)| size).sum()));
+    // Largest first, so one big model file does not start last.
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&index| std::cmp::Reverse(files[index].1));
+    let next = AtomicUsize::new(0);
+    let digests: Vec<OnceLock<String>> = files.iter().map(|_| OnceLock::new()).collect();
+    let workers = thread::available_parallelism().map_or(4, |n| n.get().min(16));
+    thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers.min(files.len()))
+            .map(|_| {
+                scope.spawn(|| -> Result<()> {
+                    while let Some(&index) = order.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let path = files[index].0;
+                        let file = File::open(path)
+                            .with_context(|| format!("Cannot read {}", path.display()))?;
+                        let _ = digests[index].set(sha256(file, Some(&progress))?);
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .try_for_each(|handle| handle.join().expect("hash worker"))
+    })?;
+    Ok(digests
+        .into_iter()
+        .map(|digest| digest.into_inner().expect("every file hashed"))
+        .collect())
+}
+
+/// Which files are present with the expected size and SHA-256, checked on several threads.
+pub(crate) fn verified_all(files: &[(PathBuf, Download<'_>)]) -> Result<Vec<bool>> {
+    let present: Vec<usize> = (0..files.len())
+        .filter(|&index| {
+            let (path, spec) = &files[index];
+            fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() == spec.size)
+        })
+        .collect();
+    let paths: Vec<_> = present
+        .iter()
+        .map(|&index| (files[index].0.as_path(), files[index].1.size))
+        .collect();
+    let mut valid = vec![false; files.len()];
+    for (index, digest) in present
+        .into_iter()
+        .zip(sha256_files(&paths, "Verifying model files")?)
+    {
+        valid[index] = digest == files[index].1.sha256;
+    }
+    Ok(valid)
 }
 
 /// Lowercase hexadecimal, as used in SHA-256 manifests.
@@ -210,12 +283,6 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
     #[cfg(test)]
     let client = client.no_proxy();
     let client = client.build()?;
-    let mut request = client
-        .get(spec.url)
-        .header(header::ACCEPT_ENCODING, "identity");
-    if offset > 0 {
-        request = request.header(header::RANGE, format!("bytes={offset}-"));
-    }
     let progress = Progress::new(
         &format!(
             "{} {}",
@@ -228,6 +295,44 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
         ),
         Some(spec.size),
     );
+    if spec.size - offset > 2 * CHUNK {
+        download_ranges(
+            &client,
+            spec,
+            &partial,
+            offset,
+            &progress,
+            CHUNK,
+            CONNECTIONS,
+        )?;
+    } else {
+        download_stream(&client, spec, &partial, offset, &progress)?;
+    }
+    drop(progress);
+    ensure!(
+        verified(&partial, spec)?,
+        "{} failed its size or SHA-256 check; it was not installed. Run again to retry.",
+        spec.name
+    );
+    fs::rename(&partial, &destination)?;
+    sync_parent(&destination)?;
+    Ok(destination)
+}
+
+/// Appends the rest of the file from one request, restarting if the server ignores the range.
+fn download_stream(
+    client: &Client,
+    spec: &Download<'_>,
+    partial: &Path,
+    offset: u64,
+    progress: &Progress,
+) -> Result<()> {
+    let mut request = client
+        .get(spec.url)
+        .header(header::ACCEPT_ENCODING, "identity");
+    if offset > 0 {
+        request = request.header(header::RANGE, format!("bytes={offset}-"));
+    }
     let mut response = request
         .send()
         .map_err(reqwest::Error::without_url)
@@ -262,7 +367,7 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
         .write(true)
         .append(start > 0)
         .truncate(start == 0)
-        .open(&partial)?;
+        .open(partial)?;
     let mut received = start;
     progress.advance(start);
     let mut buffer = vec![0; 256 * 1024];
@@ -283,16 +388,155 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
         progress.advance(n as u64);
     }
     file.sync_all()?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct Chunks {
+    ready: BTreeMap<usize, Vec<u8>>,
+    written: usize,
+    failure: Option<anyhow::Error>,
+    ignored_range: bool,
+}
+
+/// Downloads the rest of the file in `chunk`-sized ranges over `connections` connections and
+/// appends them in order. Connections stay at most two chunks each ahead of the writer.
+fn download_ranges(
+    client: &Client,
+    spec: &Download<'_>,
+    partial: &Path,
+    offset: u64,
+    progress: &Progress,
+    chunk: u64,
+    connections: usize,
+) -> Result<()> {
+    let count = (spec.size - offset).div_ceil(chunk) as usize;
+    let window = 2 * connections;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(offset > 0)
+        .truncate(offset == 0)
+        .open(partial)?;
+    progress.advance(offset);
+    let state = Mutex::new(Chunks::default());
+    let changed = Condvar::new();
+    let next = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        for _ in 0..connections.min(count) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= count {
+                        return;
+                    }
+                    let waiting = changed
+                        .wait_while(state.lock().expect("download lock"), |chunks| {
+                            index >= chunks.written + window && chunks.failure.is_none()
+                        })
+                        .expect("download lock");
+                    if waiting.failure.is_some() {
+                        return;
+                    }
+                    drop(waiting);
+                    let start = offset + index as u64 * chunk;
+                    let received = range(client, spec, start, (start + chunk).min(spec.size));
+                    let mut chunks = state.lock().expect("download lock");
+                    match received {
+                        Ok(Some(bytes)) => {
+                            chunks.ready.insert(index, bytes);
+                        }
+                        Ok(None) => {
+                            chunks.ignored_range = true;
+                            chunks.failure.get_or_insert_with(|| {
+                                anyhow::anyhow!("{} ignored a ranged request", spec.name)
+                            });
+                        }
+                        Err(error) => {
+                            chunks.failure.get_or_insert(error);
+                        }
+                    }
+                    changed.notify_all();
+                }
+            });
+        }
+        let mut chunks = state.lock().expect("download lock");
+        while chunks.written < count {
+            let written = chunks.written;
+            if let Some(bytes) = chunks.ready.remove(&written) {
+                drop(chunks);
+                let appended = file.write_all(&bytes);
+                chunks = state.lock().expect("download lock");
+                if let Err(error) = appended {
+                    chunks.failure.get_or_insert(error.into());
+                } else {
+                    progress.advance(bytes.len() as u64);
+                    chunks.written += 1;
+                }
+                changed.notify_all();
+            } else if chunks.failure.is_some() {
+                break;
+            } else {
+                chunks = changed.wait(chunks).expect("download lock");
+            }
+        }
+    });
+    file.sync_all()?;
     drop(file);
-    drop(progress);
-    ensure!(
-        verified(&partial, spec)?,
-        "{} failed its size or SHA-256 check; it was not installed. Run again to retry.",
-        spec.name
-    );
-    fs::rename(&partial, &destination)?;
-    sync_parent(&destination)?;
-    Ok(destination)
+    let chunks = state.into_inner().expect("download lock");
+    match chunks.failure {
+        None => Ok(()),
+        Some(_) if chunks.ignored_range && chunks.written == 0 => {
+            download_stream(client, spec, partial, offset, progress)
+        }
+        Some(error) => Err(error.context(format!(
+            "Download interrupted; run again to resume {}",
+            spec.name
+        ))),
+    }
+}
+
+/// Bytes `start..end` of the file, or None if the server answered with the whole file.
+fn range(client: &Client, spec: &Download<'_>, start: u64, end: u64) -> Result<Option<Vec<u8>>> {
+    let attempt = || -> Result<Option<Vec<u8>>> {
+        let mut response = client
+            .get(spec.url)
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::RANGE, format!("bytes={start}-{}", end - 1))
+            .timeout(Duration::from_secs(120))
+            .send()
+            .map_err(reqwest::Error::without_url)?;
+        match response.status() {
+            StatusCode::OK => return Ok(None),
+            StatusCode::PARTIAL_CONTENT => {}
+            status => bail!("HTTP {status}"),
+        }
+        let expected = format!("bytes {start}-{}/{}", end - 1, spec.size);
+        ensure!(
+            response
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|h| h.to_str().ok())
+                == Some(expected.as_str()),
+            "inconsistent Content-Range"
+        );
+        let mut bytes = Vec::with_capacity((end - start) as usize);
+        response
+            .by_ref()
+            .take(end - start + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(bytes.len() as u64 == end - start, "unexpected chunk size");
+        Ok(Some(bytes))
+    };
+    // A dropped connection is retried, since one failure would otherwise stop all connections.
+    let mut result = attempt();
+    for _ in 0..2 {
+        if result.is_ok() {
+            break;
+        }
+        result = attempt();
+    }
+    result.with_context(|| format!("Cannot download {}", spec.name))
 }
 
 pub(crate) fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> Result<bool> {
@@ -437,6 +681,129 @@ mod tests {
             size: 6,
             sha256: hash,
         }
+    }
+
+    /// Serves `body` with byte ranges on any number of connections. With `fail_from`, ranges
+    /// starting there or later fail; with `ignore_ranges`, every answer is the whole body.
+    fn serve_ranges(body: &'static [u8], fail_from: Option<u64>, ignore_ranges: bool) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/weights", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            for socket in listener.incoming() {
+                let mut socket = socket.unwrap();
+                thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                    let mut range = None;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(bytes) = line.to_lowercase().strip_prefix("range: bytes=") {
+                            let (start, end) = bytes.trim().split_once('-').unwrap();
+                            range = Some((
+                                start.parse::<usize>().unwrap(),
+                                end.parse::<usize>().unwrap(),
+                            ));
+                        }
+                    }
+                    let head = match range {
+                        Some((start, _)) if fail_from.is_some_and(|from| start as u64 >= from) => {
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                        }
+                        Some((start, end)) if !ignore_ranges => format!(
+                            "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",
+                            end + 1 - start,
+                            body.len()
+                        ),
+                        _ => format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()),
+                    };
+                    let payload = match range {
+                        _ if head.starts_with("HTTP/1.1 500") => &[][..],
+                        Some((start, end)) if !ignore_ranges => &body[start..=end],
+                        _ => body,
+                    };
+                    let _ = socket.write_all(head.as_bytes());
+                    let _ = socket.write_all(payload);
+                });
+            }
+        });
+        url
+    }
+
+    fn ranged(dir: &TestDir, url: &str, offset: u64, hash: &str) -> Result<Vec<u8>> {
+        let spec = Download {
+            name: "weights",
+            url,
+            size: 100,
+            sha256: hash,
+        };
+        let client = Client::builder().no_proxy().build()?;
+        let partial = dir.0.join("weights.part");
+        let progress = Progress::new("test", None);
+        download_ranges(&client, &spec, &partial, offset, &progress, 7, 3)?;
+        Ok(fs::read(partial)?)
+    }
+
+    #[test]
+    fn ranged_download_appends_chunks_in_order_and_resumes() {
+        static BODY: [u8; 100] = {
+            let mut body = [0; 100];
+            let mut i = 0;
+            while i < 100 {
+                body[i] = i as u8;
+                i += 1;
+            }
+            body
+        };
+        let dir = TestDir::new();
+        let hash = sha256(&BODY[..], None).unwrap();
+        assert_eq!(
+            ranged(&dir, &serve_ranges(&BODY, None, false), 0, &hash).unwrap(),
+            BODY
+        );
+
+        // A failed range stops every connection; the partial keeps only whole chunks before it.
+        fs::remove_file(dir.0.join("weights.part")).unwrap();
+        let error = ranged(&dir, &serve_ranges(&BODY, Some(35), false), 0, &hash).unwrap_err();
+        assert!(
+            error.to_string().contains("run again to resume"),
+            "{error:#}"
+        );
+        let kept = fs::read(dir.0.join("weights.part")).unwrap();
+        assert!(kept.len() <= 35 && kept.len().is_multiple_of(7) && kept == BODY[..kept.len()]);
+        let resumed = ranged(
+            &dir,
+            &serve_ranges(&BODY, None, false),
+            kept.len() as u64,
+            &hash,
+        );
+        assert_eq!(resumed.unwrap(), BODY);
+
+        // A server without ranges is read as one stream.
+        fs::remove_file(dir.0.join("weights.part")).unwrap();
+        assert_eq!(
+            ranged(&dir, &serve_ranges(&BODY, None, true), 0, &hash).unwrap(),
+            BODY
+        );
+    }
+
+    #[test]
+    fn files_are_hashed_in_their_given_order() {
+        let dir = TestDir::new();
+        let small = dir.0.join("small");
+        let large = dir.0.join("large");
+        fs::write(&small, b"abc").unwrap();
+        fs::write(&large, b"abcdef").unwrap();
+        let digests = sha256_files(&[(&small, 3), (&large, 6)], "test").unwrap();
+        assert_eq!(digests[0], sha256(&b"abc"[..], None).unwrap());
+        assert_eq!(digests[1], sha256(&b"abcdef"[..], None).unwrap());
+        let files = [
+            (small.clone(), spec("", &digests[0])),
+            (large, spec("", &digests[1])),
+            (dir.0.join("missing"), spec("", &digests[1])),
+        ];
+        assert_eq!(verified_all(&files).unwrap(), [false, true, false]);
     }
 
     #[test]

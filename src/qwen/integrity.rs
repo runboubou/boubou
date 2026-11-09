@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     ffi::OsStr,
@@ -131,6 +132,62 @@ pub(super) fn runtime_tree(archive: &Path, installed: &Path) -> Result<bool> {
     Ok(tree_entries(installed, &expected, true)? == Some(expected.len()))
 }
 
+/// The digest a runner build records over its installed tree: one line per entry, sorted and
+/// hashed, with each file's SHA-256. None when the tree is missing or holds an unsupported entry.
+pub(super) fn tree_digest(root: &Path) -> Result<Option<String>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !metadata(root)?.is_some_and(|m| m.is_dir()) {
+        return Ok(None);
+    }
+    let mut lines = Vec::new();
+    let mut files = Vec::new();
+    let mut directories = vec![root.to_owned()];
+    while let Some(dir) = directories.pop() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(relative) = path.strip_prefix(root)?.to_str().map(str::to_owned) else {
+                return Ok(None);
+            };
+            if relative.contains(['\t', '\n']) {
+                return Ok(None);
+            }
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                lines.push(format!("{relative}\tdir\n"));
+                directories.push(path);
+            } else if kind.is_symlink() {
+                let Some(target) = fs::read_link(&path)?.to_str().map(str::to_owned) else {
+                    return Ok(None);
+                };
+                lines.push(format!("{relative}\tlink\t{target}\n"));
+            } else if kind.is_file() {
+                let metadata = entry.metadata()?;
+                let executable = metadata.permissions().mode() & 0o111 != 0;
+                files.push((path, relative, metadata.len(), executable));
+            } else {
+                return Ok(None);
+            }
+        }
+    }
+    let sizes: Vec<_> = files
+        .iter()
+        .map(|(path, _, size, _)| (path.as_path(), *size))
+        .collect();
+    let digests = crate::assets::sha256_files(&sizes, "Verifying the Qwen runtime")?;
+    for ((_, relative, _, executable), digest) in files.iter().zip(digests) {
+        let kind = if *executable { "exec" } else { "file" };
+        lines.push(format!("{relative}\t{kind}\t{digest}\n"));
+    }
+    lines.sort_unstable();
+    let mut hash = Sha256::new();
+    for line in &lines {
+        hash.update(line.as_bytes());
+    }
+    Ok(Some(crate::assets::hex(&hash.finalize())))
+}
+
 fn split_snapshot(path: &Path) -> Result<(PathBuf, &Path)> {
     ensure!(
         path.iter().nth(2) == Some(OsStr::new("snapshots")) && path.iter().count() >= 5,
@@ -193,6 +250,45 @@ mod tests {
         let result = test(&root);
         fs::remove_dir_all(&root)?;
         result
+    }
+
+    #[test]
+    fn tree_digest_covers_names_contents_modes_and_links() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        fixture(|root| {
+            let tree = root.join("installed");
+            assert_eq!(tree_digest(&tree)?, None);
+            fs::create_dir_all(tree.join("bin"))?;
+            fs::create_dir(tree.join("empty"))?;
+            fs::write(tree.join("bin/python3.11"), b"python")?;
+            fs::set_permissions(
+                tree.join("bin/python3.11"),
+                fs::Permissions::from_mode(0o755),
+            )?;
+            fs::write(tree.join("voice.py"), b"voice")?;
+            fs::set_permissions(tree.join("voice.py"), fs::Permissions::from_mode(0o644))?;
+            symlink("python3.11", tree.join("bin/python3"))?;
+            // The runner build hashes the same sorted lines.
+            let sha = |data: &[u8]| crate::assets::sha256(data, None).unwrap();
+            let lines = format!(
+                "bin\tdir\nbin/python3\tlink\tpython3.11\nbin/python3.11\texec\t{}\nempty\tdir\nvoice.py\tfile\t{}\n",
+                sha(b"python"),
+                sha(b"voice")
+            );
+            let expected = sha(lines.as_bytes());
+            assert_eq!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
+
+            fs::set_permissions(tree.join("voice.py"), fs::Permissions::from_mode(0o755))?;
+            assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
+            fs::set_permissions(tree.join("voice.py"), fs::Permissions::from_mode(0o644))?;
+            fs::write(tree.join("empty/extra"), b"")?;
+            assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
+            fs::remove_file(tree.join("empty/extra"))?;
+            fs::write(tree.join("voice.py"), b"Voice")?;
+            assert_ne!(tree_digest(&tree)?.as_deref(), Some(expected.as_str()));
+            Ok(())
+        })
     }
 
     #[test]

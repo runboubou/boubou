@@ -109,6 +109,18 @@ KITTEN = [
 ]
 
 
+# Upstream's CUDA engines: Parakeet through nano-parakeet, Qwen3.5-4B in 4 bits through llama.cpp
+# and Kokoro through its PyTorch package. A file without a profile serves every Linux profile.
+CUDA = [
+    ("nvidia/parakeet-tdt-0.6b-v3", "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+     {"README.md", "parakeet-tdt-0.6b-v3.nemo"}, None),
+    ("unsloth/Qwen3.5-4B-GGUF", "e87f176479d0855a907a41277aca2f8ee7a09523",
+     {"README.md", "Qwen3.5-4B-Q4_K_M.gguf"}, None),
+    ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987",
+     {"README.md", "config.json", "kokoro-v1_0.pth", "voices/af_heart.pt"}, "kokoro:82m"),
+]
+
+
 def snapshot(repo, revision, destination, profile, only=None):
     url = f"https://huggingface.co/{repo}"
     with tempfile.TemporaryDirectory() as folder:
@@ -253,16 +265,9 @@ def with_runtime_profiles(files):
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", type=Path, help="output path for models.json")
-    args = parser.parse_args()
+def shared():
+    """Weights both runners load the same way, the turn detector and license texts."""
     files = []
-    for name, revision, profile, only in MODELS:
-        directory = f"hub/models--mlx-community--{name}/snapshots/{revision}"
-        files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
-    for repo, revision, only, profile in ORIGINALS:
-        files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
     for repo, revision, only, profile in [*PHONON, SUPERTONIC, CHATTTS, *KITTEN, MMS, OMNIVOICE]:
         directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
         files.extend(snapshot(repo, revision, directory, profile, only))
@@ -284,6 +289,39 @@ def main():
         "sha256": "41003d4a74749c0220e33dd415042164b5a1093ed401f36277234f772d22d3d0",
         "profile": "mms-tts:eng",
     })
+    return files
+
+
+def cuda():
+    """List the x86-64 Linux runner's files and the profiles each one serves."""
+    files = []
+    for repo, revision, only, profile in CUDA:
+        directory = f"hub/models--{repo.replace('/', '--')}/snapshots/{revision}"
+        files.extend(snapshot(repo, revision, directory, profile, only))
+    for repo, revision, only, profile in ORIGINALS:
+        if repo == "Qwen/Qwen3.5-4B":
+            files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
+    files.extend(shared())
+    everyone = sorted({file["profile"] for file in files if "profile" in file})
+    return [{**{key: value for key, value in file.items() if key != "profile"},
+             "profiles": [file["profile"]] if "profile" in file else everyone} for file in files]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path, help="output path for models.json")
+    parser.add_argument("--cuda", action="store_true", help="lock the x86-64 Linux CUDA runner's models")
+    args = parser.parse_args()
+    if args.cuda:
+        args.output.write_text(json.dumps(cuda(), indent=2) + "\n")
+        return
+    files = []
+    for name, revision, profile, only in MODELS:
+        directory = f"hub/models--mlx-community--{name}/snapshots/{revision}"
+        files.extend(snapshot(f"mlx-community/{name}", revision, directory, profile, only))
+    for repo, revision, only, profile in ORIGINALS:
+        files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
+    files.extend(shared())
     args.output.write_text(json.dumps(with_runtime_profiles(with_whisper_profiles(files)), indent=2) + "\n")
 
 
