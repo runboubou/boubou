@@ -1,6 +1,6 @@
 # Boubou
 
-Local voice conversations on Apple Silicon Macs.
+Local voice conversations on Apple Silicon Macs. Liquid models also run on [Linux](#linux).
 
 ## Run
 
@@ -56,6 +56,21 @@ These source and candidate-package capabilities do not imply an npm release.
 Models and runtime downloads are kept in `~/Library/Caches/boubou`.
 Use `list` to see supported model IDs and `doctor [MODEL]` to check cached readiness.
 Without a model ID, `doctor` checks `LFM3-Audio-2B`.
+
+## Linux
+
+Liquid models run on x86-64 and arm64 Linux with glibc 2.38+ (for example
+Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. Build from source with
+Rust 1.88+ and a C compiler, then speak from PCM16 mono 16 kHz WAV files or ask
+about media:
+
+```sh
+cargo run --locked --release -- run LFM3-Audio-2B --input question.wav --output reply.wav
+cargo run --locked --release -- ask LFM3-Omni-2B photo.png "What is in this picture?"
+```
+
+Linux uses llama.cpp's pinned CPU builds; downloads are kept in `~/.cache/boubou`.
+Live microphone conversations, guided startup and the Qwen runner still require macOS.
 
 ## Develop
 

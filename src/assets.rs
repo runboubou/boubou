@@ -23,10 +23,7 @@ pub struct Assets {
 }
 
 pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Result<Assets> {
-    ensure!(
-        cfg!(all(target_os = "macos", target_arch = "aarch64")),
-        "This first release supports Apple Silicon Macs."
-    );
+    let runtime = profile.runtime()?;
     let _lock = preparation_lock(cache_dir)?;
 
     let download = |spec: &Download<'_>, directory: &Path| {
@@ -38,9 +35,9 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
         })
     };
     let model_dir = cache_dir.join(profile.model_directory);
-    let archive = download(&profile.runtime.archive, &cache_dir.join("downloads"))?;
-    let installed = cache_dir.join(profile.runtime.directory);
-    install_runtime(&archive, &installed, profile.runtime.server, false)?;
+    let archive = download(&runtime.archive, &cache_dir.join("downloads"))?;
+    let installed = cache_dir.join(runtime.directory);
+    install_runtime(&archive, &installed, runtime.server, false)?;
 
     // Cache the model's license alongside its weights before making it runnable.
     for spec in profile.model_assets() {
@@ -48,7 +45,7 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
     }
     Ok(Assets {
         profile,
-        server: installed.join(profile.runtime.server),
+        server: installed.join(runtime.server),
         model: model_dir.join(profile.model.name),
         projector: model_dir.join(profile.projector.name),
     })
@@ -123,18 +120,13 @@ pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
             }
         );
     }
-    let archive = cache_dir
-        .join("downloads")
-        .join(profile.runtime.archive.name);
-    let runtime_ready = verified(&archive, &profile.runtime.archive)?
-        && runtime_valid(
-            &archive,
-            &cache_dir.join(profile.runtime.directory),
-            profile.runtime.server,
-        )?;
+    let runtime = profile.runtime()?;
+    let archive = cache_dir.join("downloads").join(runtime.archive.name);
+    let runtime_ready = verified(&archive, &runtime.archive)?
+        && runtime_valid(&archive, &cache_dir.join(runtime.directory), runtime.server)?;
     println!(
-        "Speech engine ({}, macOS arm64): {}",
-        profile.runtime.label,
+        "Speech engine ({}): {}",
+        runtime.label,
         if runtime_ready {
             "verified"
         } else {
