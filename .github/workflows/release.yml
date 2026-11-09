@@ -1,7 +1,8 @@
 name: Release
 
-# Pushing a v* tag (maintainers only) checks every profile, then publishes the
-# exact tested tarball to npm through trusted publishing.
+# Pushing a v* tag (maintainers only) checks every profile, publishes the tested
+# Qwen runner as a GitHub release asset, then publishes the exact tested tarball
+# to npm through trusted publishing.
 on:
   push:
     tags: ['v*']
@@ -18,7 +19,7 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write # GitHub release
       id-token: write # npm trusted publishing and provenance
@@ -31,25 +32,60 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Publish to npm
+      - name: Check the candidate
         run: |
           set -euo pipefail
           tarball=$(find candidate -name 'boubou-*.tgz')
+          runtime=$(find candidate -name runtime.json)
+          runner=$(find candidate -name runner.tar.gz)
           version=$(basename "$tarball" .tgz)
           version=${version#boubou-}
           test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match package $version"; exit 1; }
-          # Prereleases go to their channel (0.1.0-beta.4 -> beta); README installs boubou@beta.
-          channel=latest
-          if [[ "$version" == *-* ]]; then
-            channel=${version#*-}
-            channel=${channel%%.*}
-          fi
-          npm install --global npm@11
-          npm publish "$tarball" --tag "$channel" --access public
-      - name: Create GitHub release
+          # npm publish fails above about 400 MB; the runner is a release asset instead.
+          size=$(stat -c %s "$tarball")
+          test "$size" -le $((32 * 1024 * 1024)) || { echo "npm tarball is $size bytes"; exit 1; }
+          tar -xzOf "$tarball" package/qwen/runtime.json | cmp - "$runtime"
+          url=$(jq -r .url "$runtime")
+          asset=${url##*/}
+          test "$url" = "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$asset" || { echo "Unexpected runner URL $url"; exit 1; }
+          test "$(stat -c %s "$runner")" = "$(jq -r .size "$runtime")"
+          test "$(sha256sum "$runner" | cut -d' ' -f1)" = "$(jq -r .sha256 "$runtime")"
+          mkdir release
+          cp "$runner" "release/$asset"
+          {
+            echo "TARBALL=$tarball"
+            echo "VERSION=$version"
+            echo "RUNNER_URL=$url"
+            echo "RUNNER_SHA=$(jq -r .sha256 "$runtime")"
+          } >> "$GITHUB_ENV"
+      # The package downloads the runner from this release, so it must be public before npm publish.
+      - name: Publish the GitHub release with the runner
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           flags=()
-          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${flags[@]}"
+          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+          # Never replace an uploaded runner: a published package may already point at it.
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes "${flags[@]}"
+          elif ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "${RUNNER_URL##*/}"; then
+            gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY"
+          fi
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          curl -fsSL --retry 5 --retry-all-errors "$RUNNER_URL" -o runner-check.tar.gz
+          test "$(sha256sum runner-check.tar.gz | cut -d' ' -f1)" = "$RUNNER_SHA" || {
+            echo "The release already holds a different runner. Release a new version instead."
+            exit 1
+          }
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          # Prereleases go to their channel (0.1.0-beta.4 -> beta); README installs boubou@beta.
+          channel=latest
+          if [[ "$VERSION" == *-* ]]; then
+            channel=${VERSION#*-}
+            channel=${channel%%.*}
+          fi
+          npm install --global npm@11
+          npm publish "$TARBALL" --tag "$channel" --access public

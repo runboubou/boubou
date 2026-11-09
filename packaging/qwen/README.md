@@ -4,15 +4,19 @@ On an Apple Silicon Mac, from a clean checkout on macOS 15 or newer, use Python 
 
 ```sh
 candidate="$(mktemp -d)"
+version=$(python3 -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
 python3 -B packaging/qwen/lock_models.py "$candidate/models.json"
-python3 -B packaging/qwen/build_runner.py "$candidate"
+python3 -B packaging/qwen/build_runner.py "$candidate" \
+  --url "https://github.com/runboubou/boubou/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
 cargo fetch --locked
 python3 -B packaging/build-macos.py --qwen "$candidate"
 ```
 
-The resulting npm tarball includes the interpreter, native wheels, Silero, NLTK
-and phonemizer data. The first `pull` fetches only the selected profile's verified
-weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
+The runner archive holds the interpreter, native wheels, Silero, NLTK and
+phonemizer data. It is too large for npm, so the Release workflow publishes it
+at that URL and the npm package carries only its size and SHA-256. The first
+`pull` downloads and verifies the runner, then fetches only the selected
+profile's verified weights. Profiles reuse the same runner. The [runtime catalog](runtimes.json) is
 shared by the client, asset locking and runner arguments. Its `guided` entries
 are Qwen 0.6B and 1.7B CustomVoice with fixed Aiden, Pocket TTS English
 (`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
@@ -24,12 +28,17 @@ Guided startup uses English. Other voices, Whisper language modes and the 2B,
 and budgets are estimates for device testing. More parameters do not imply
 better replies or voice quality.
 
-`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Report the machine and measurements in [#5](https://github.com/runboubou/boubou/issues/5).
 
+Before the release exists, place the built runner where `pull` would download it:
+
 ```sh
 export BOUBOU_HOME="$(mktemp -d)"
+sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$candidate/runtime.json")
+mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
+cp "$candidate/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run qwen3-tts:1.7b-customvoice
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run qwen3-tts:0.6b-customvoice
 npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run kokoro:82m
