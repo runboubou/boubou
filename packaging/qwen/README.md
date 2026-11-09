@@ -24,7 +24,7 @@ Guided startup uses English. Other voices, Whisper language modes and the 2B,
 and budgets are estimates for device testing. More parameters do not imply
 better replies or voice quality.
 
-`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses a CPU speaker sampled at startup. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs. To distribute a smaller npm package, pass `--url <public immutable HTTPS URL>` to the runner builder and host its exact `runner.tar.gz` at that URL.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Report the machine and measurements in [#5](https://github.com/runboubou/boubou/issues/5).
 
@@ -43,8 +43,9 @@ npx --yes --package /absolute/path/to/boubou-0.1.0-beta.3.tgz -- boubou run pock
 ## Other English TTS families
 
 These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit and require explicit
-developer selection. MMS is excluded from guided recommendations. The current
-OmniVoice and Drama-3 profiles do not fix a speaker identity.
+developer selection. MMS is excluded from guided recommendations. OmniVoice
+speaks with one fixed voice, designed as a young American man. The Drama-3
+profile does not fix a speaker identity.
 
 | ID | Local TTS engine | Weight terms |
 | --- | --- | --- |
@@ -80,8 +81,8 @@ Choose a Whisper entry explicitly for Chinese or Chinese/English conversations:
 
 Whisper entries detect the input language and reply in that language. Qwen3-TTS
 uses automatic synthesis language and the `Vivian` voice in these entries;
-its default entries keep English with `Aiden`. ChatTTS samples a speaker at
-startup. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
+its default entries keep English with `Aiden`. Both ChatTTS entries use the same
+fixed speaker. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
 
 A profile downloads only its selected recognizer. Paired entries share TTS
 weights and the same 4-bit Qwen3.5-4B language model. Whisper adds recognition

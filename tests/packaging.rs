@@ -990,9 +990,13 @@ with TemporaryDirectory() as folder:
     assert Path.cwd() == work and os.readlink("asset") == str(cache / assets), argv
     assert len(list(work.iterdir())) == 3, argv
     # ChatTTS would drop the digits; the handler's Chat spells them out.
-    language, normalize = sys.modules["ChatTTS"].Chat().normalizer.registered
+    chat = sys.modules["ChatTTS"].Chat()
+    language, normalize = chat.normalizer.registered
     assert language == "en"
     assert normalize("2 of 1,000 is 3.5%, or 45.") == "two of one thousand is three point five percent, or forty five."
+    # The handler's per-start speaker sample returns the chosen speaker instead.
+    speaker = (Path(sys.argv[1]).parent / "voices/chattts.txt").read_text().strip()
+    assert len(speaker) == 859 and chat.sample_random_speaker() == chat.sample_random_speaker() == speaker
 "#,
         )
         .arg(concat!(
@@ -1094,6 +1098,10 @@ with TemporaryDirectory() as folder:
             assert option(device_arg) == device
         else:
             assert option("--drama3_model") == "fishaudio/drama-3"
+        if handler == "omnivoice":
+            # Without a clone prompt OmniVoice picks a new voice for every sentence.
+            assert Path(option("--omnivoice_voice_clone_prompt")).name == "omnivoice.prompt", argv
+            assert Path(option("--omnivoice_voice_clone_prompt")).is_file(), argv
         assert len(list(work.iterdir())) == 3, argv
         assert option("--llm_backend") == "mlx-lm"
         assert Path(option("--model_name")).name == "Qwen3.5-4B-4bit"

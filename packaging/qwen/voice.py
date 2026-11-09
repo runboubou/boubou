@@ -13,6 +13,9 @@ from tempfile import TemporaryDirectory
 # The upstream v1.1.0 default system prompt.
 PROMPT = ("You are a helpful and friendly AI assistant. You are polite, respectful, "
           "and aim to provide concise responses of less than 20 words.")
+# Voices chosen by listening, so a model without preset speakers keeps one voice across
+# sentences and restarts. Upstream would sample or design a new voice instead.
+VOICES = Path(__file__).resolve().parent / "voices"
 
 
 def pocket(voice):
@@ -42,11 +45,18 @@ def spell_numbers(text):
 def chattts(work):
     import ChatTTS
 
+    speaker = (VOICES / "chattts.txt").read_text().strip()
+
     class Chat(ChatTTS.Chat):
         # ChatTTS drops digits unless a text normalizer is registered, and the upstream handler registers none.
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.normalizer.register("en", spell_numbers)
+
+        # The upstream handler samples a new speaker at every start. Keep the chosen one,
+        # sampled with seed 314 from the pinned weights.
+        def sample_random_speaker(self):
+            return speaker
 
     ChatTTS.Chat = Chat
     # The upstream handler loads ChatTTS from asset/ in the working directory, linked here by arguments().
@@ -70,8 +80,11 @@ TTS = {
     "chattts": chattts,
     "mms-tts": lambda path: ["--tts", "facebookMMS", "--facebook_mms_model_name", path,
                               "--facebook_mms_device", "cpu", "--tts_language", "en"],
+    # Without a prompt OmniVoice picks a new voice for every sentence. This prompt was designed as
+    # "male, young adult, moderate pitch, american accent".
     "omnivoice": lambda path: ["--tts", "omnivoice", "--omnivoice_model_name", path,
-                               "--omnivoice_device", "mps", "--omnivoice_language", "en"],
+                               "--omnivoice_device", "mps", "--omnivoice_language", "en",
+                               "--omnivoice_voice_clone_prompt", str(VOICES / "omnivoice.prompt")],
     "drama3": lambda path: ["--tts", "drama3", "--drama3_model", "fishaudio/drama-3"],
 }
 
