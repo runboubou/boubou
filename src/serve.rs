@@ -55,6 +55,17 @@ impl Drop for Seat {
     }
 }
 
+/// Where `boubou serve` listens.
+#[derive(clap::Args)]
+pub struct Options {
+    /// The port that serves the page.
+    #[arg(long, default_value_t = 2682)]
+    port: u16,
+    /// Accept connections from this computer only.
+    #[arg(long)]
+    local: bool,
+}
+
 /// Where the page is. Each address ends in the key, as a fragment, which browsers never put
 /// in a request.
 struct Links {
@@ -71,8 +82,9 @@ pub struct Door {
 impl Door {
     /// Starts serving the page and tells the person where to open it. `cache` keeps the
     /// certificate between starts.
-    pub fn open(port: u16, cache: &Path) -> Result<Self> {
-        let (door, links) = Self::bind(port, cache, network_address())?;
+    pub fn open(options: &Options, cache: &Path) -> Result<Self> {
+        let network = network_address().filter(|_| !options.local);
+        let (door, links) = Self::bind(options.port, cache, network)?;
         let note = "Ready. Open the page in a browser.";
         if !progress::finish(note) {
             eprintln!("{note}");
@@ -105,14 +117,18 @@ impl Door {
             .context(
                 "Cannot prepare the HTTPS certificate. Delete the cache's serve folder and retry.",
             )?;
-        let interface = if network.is_some() {
-            Ipv4Addr::UNSPECIFIED
-        } else {
-            Ipv4Addr::LOCALHOST
+        let listen = |address: Ipv4Addr| {
+            TcpListener::bind((address, port)).with_context(|| {
+                format!("Cannot listen on port {port}. Choose another with --port.")
+            })
         };
-        let listener = TcpListener::bind((interface, port)).with_context(|| {
-            format!("Cannot listen on port {port}. Choose another with --port.")
-        })?;
+        let mut listener = listen(Ipv4Addr::LOCALHOST)?;
+        if network.is_some() {
+            // Loopback came first because macOS lets every-address listeners share a port that
+            // another program holds on loopback, and the local link would then reach that program.
+            drop(listener);
+            listener = listen(Ipv4Addr::UNSPECIFIED)?;
+        }
         let port = listener.local_addr()?.port();
         let mut key = [0; 16];
         File::open("/dev/urandom")?.read_exact(&mut key)?;
