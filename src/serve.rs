@@ -89,9 +89,19 @@ struct Links {
     realtime: Option<String>,
 }
 
+/// A browser that has taken the seat. Its audio starts when the conversation is ready for it,
+/// so nothing it says goes stale in a queue.
+pub struct Guest(Socket, Seat);
+
+impl Guest {
+    pub fn start(self) -> (Remote, Receiver<CaptureFrame>) {
+        Remote::start(self.0, self.1)
+    }
+}
+
 /// Listens for visitors and admits one at a time.
 pub struct Door {
-    arrivals: Receiver<(Socket, Seat)>,
+    arrivals: Receiver<Guest>,
     returning: Cell<bool>,
 }
 
@@ -202,13 +212,13 @@ impl Door {
         &self,
         stopped: &AtomicBool,
         mut idle: impl FnMut() -> Result<()>,
-    ) -> Result<Option<(Remote, Receiver<CaptureFrame>)>> {
+    ) -> Result<Option<Guest>> {
         if self.returning.replace(true) {
             eprintln!("The browser disconnected. Open the link again to continue.");
         }
         while !stopped.load(Ordering::SeqCst) {
-            if let Ok((socket, seat)) = self.arrivals.recv_timeout(Duration::from_millis(20)) {
-                return Ok(Some(Remote::start(socket, seat)));
+            if let Ok(guest) = self.arrivals.recv_timeout(Duration::from_millis(20)) {
+                return Ok(Some(guest));
             }
             idle()?;
         }
@@ -295,7 +305,7 @@ fn trusted(peer: IpAddr, encrypted: bool) -> Option<bool> {
 }
 
 /// Takes a new connection as HTTPS or plain HTTP and answers its request.
-fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<(Socket, Seat)>> {
+fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<Guest>> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut first = [0];
@@ -320,7 +330,7 @@ fn answer(
     socket: &TcpStream,
     trusted: bool,
     desk: &Arc<Desk>,
-) -> Result<Option<(Socket, Seat)>> {
+) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
     let (target, accept, bearer, head) = loop {
@@ -353,7 +363,7 @@ fn answer(
         .filter_map(|pair| pair.strip_prefix("key="))
         .chain(bearer.as_deref())
         .any(|given| same(given, &desk.key));
-    let mut respond = |status: &str, body: &str| -> Result<Option<(Socket, Seat)>> {
+    let mut respond = |status: &str, body: &str| -> Result<Option<Guest>> {
         write!(
             stream,
             "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
@@ -374,10 +384,7 @@ fn answer(
     // Held from here on, so a handshake that fails frees the seat again.
     let seat = Seat(Arc::clone(desk));
     if let Some(realtime) = realtime {
-        eprintln!("A robot or program connected.");
-        let ended = relay(stream, socket, realtime, &request);
-        eprintln!("The robot or program disconnected.");
-        return ended.map(|()| None);
+        return relay(stream, socket, realtime, &request).map(|()| None);
     }
     write!(
         stream,
@@ -393,7 +400,7 @@ fn answer(
     let stream: Box<dyn Stream> = Box::new(stream);
     let socket =
         WebSocket::from_partially_read(stream, request.split_off(head), Role::Server, Some(config));
-    Ok(Some((socket, seat)))
+    Ok(Some(Guest(socket, seat)))
 }
 
 /// Carries a connection to the model server's Realtime API byte for byte, from the request
@@ -412,11 +419,17 @@ fn relay(
         side.set_read_timeout(Some(Duration::from_millis(5)))?;
         side.set_write_timeout(Some(Duration::from_secs(5)))?;
     }
+    eprintln!("A robot or program connected.");
     let mut buffer = [0; 16 * 1024];
-    while pass(&mut visitor, &mut server, &mut buffer)?
-        && pass(&mut server, &mut visitor, &mut buffer)?
-    {}
-    Ok(())
+    let mut carry = || -> io::Result<()> {
+        while pass(&mut visitor, &mut server, &mut buffer)?
+            && pass(&mut server, &mut visitor, &mut buffer)?
+        {}
+        Ok(())
+    };
+    let ended = carry();
+    eprintln!("The robot or program disconnected.");
+    Ok(ended?)
 }
 
 /// Moves what `from` has ready to `to`. False once `from` has closed.
@@ -539,6 +552,7 @@ mod tests {
         door.wait(&AtomicBool::new(false), || Ok(()))
             .unwrap()
             .unwrap()
+            .start()
             .0
     }
 
@@ -645,7 +659,8 @@ mod tests {
         let (mut remote, captured) = door
             .wait(&AtomicBool::new(false), || Ok(()))
             .unwrap()
-            .unwrap();
+            .unwrap()
+            .start();
         remote.enqueue(&[1, 2]).unwrap();
         assert_eq!(page.read().unwrap().into_data().as_ref(), [1, 0, 2, 0]);
         page.send(tungstenite::Message::Binary(vec![0; 640].into()))

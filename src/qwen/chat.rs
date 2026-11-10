@@ -397,8 +397,17 @@ pub(super) fn from_browser(
     stopped: &AtomicBool,
 ) -> Result<()> {
     let door = crate::serve::Door::open(door, cache, Some(server.address))?;
-    while let Some((mut browser, captured)) = door.wait(stopped, || server.check())? {
-        let mut session = server.session(stopped)?;
+    while let Some(guest) = door.wait(stopped, || server.check())? {
+        let mut session = match server.session(stopped) {
+            Ok(session) => session,
+            Err(error) if error.is::<crate::Cancelled>() => return Err(error),
+            Err(error) => {
+                // Turning this page away frees the seat; a runner that died is reported next.
+                eprintln!("Could not start a conversation for the browser: {error:#}");
+                continue;
+            }
+        };
+        let (mut browser, captured) = guest.start();
         let result = converse(server, &mut session, &mut browser, &captured, stopped);
         if !browser.left() {
             return result;
@@ -564,6 +573,27 @@ mod tests {
         json!({"type":"conversation.item.input_audio_transcription.completed","transcript":text})
     }
 
+    fn accept(listener: &TcpListener) -> WebSocket<TcpStream> {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        tungstenite::accept(stream).unwrap()
+    }
+
+    /// Completes session setup as the runner does.
+    fn set_up(socket: &mut WebSocket<TcpStream>) {
+        send(socket, json!({"type":"session.created","session":{}}));
+        let update = receive(socket);
+        let audio = &update["session"]["audio"];
+        assert_eq!(audio["input"]["turn_detection"]["type"], "server_vad");
+        assert_eq!(audio["input"]["turn_detection"]["interrupt_response"], true);
+        send(
+            socket,
+            json!({"type":"session.updated","session":{"audio":{"output":audio["output"]}}}),
+        );
+    }
+
     /// Accepts one client, completes session setup, then runs `script`.
     fn session(
         script: impl FnOnce(&mut WebSocket<TcpStream>) + Send + 'static,
@@ -571,20 +601,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut socket = tungstenite::accept(stream).unwrap();
-            send(&mut socket, json!({"type":"session.created","session":{}}));
-            let update = receive(&mut socket);
-            let audio = &update["session"]["audio"];
-            assert_eq!(audio["input"]["turn_detection"]["type"], "server_vad");
-            assert_eq!(audio["input"]["turn_detection"]["interrupt_response"], true);
-            send(
-                &mut socket,
-                json!({"type":"session.updated","session":{"audio":{"output":audio["output"]}}}),
-            );
+            let mut socket = accept(&listener);
+            set_up(&mut socket);
             script(&mut socket);
         });
         let stream = TcpStream::connect(address).unwrap();
@@ -647,6 +665,36 @@ mod tests {
         assert_eq!(refill(&mut backlog, PLAYBACK_AHEAD - 10).unwrap().len(), 10);
         backlog.clear();
         assert!(refill(&mut backlog, 0).is_none());
+    }
+
+    #[test]
+    fn a_new_conversation_waits_for_the_runner_to_let_go_of_the_last_one() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let runner = thread::spawn(move || {
+            for busy in [true, true, false] {
+                let mut socket = accept(&listener);
+                if busy {
+                    let slots = json!({"message":"All 1 session slots are in use."});
+                    send(&mut socket, json!({"type":"error","error":slots}));
+                } else {
+                    set_up(&mut socket);
+                }
+            }
+        });
+        let child = Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let mut server = Server {
+            address,
+            child,
+            output: Arc::default(),
+            readers: Vec::new(),
+        };
+        server.session(&AtomicBool::new(false)).unwrap();
+        runner.join().unwrap();
     }
 
     #[test]
