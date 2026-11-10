@@ -88,7 +88,8 @@ Browsers share a microphone only with HTTPS pages, so the phone's link uses a
 certificate that Boubou makes for itself. A phone's browser does not know that
 certificate and warns once; continue to the page. If macOS asks whether Boubou
 may accept incoming connections, allow it. The links carry a key that changes
-on every start. `--port` picks another port than 2682.
+on every start. `--port` picks another port than 2682, and `--local` keeps
+Boubou to this computer.
 
 ## Linux
 
@@ -145,10 +146,10 @@ about 2 s and is ready to talk after about 15 s.
 - The network is only used to download pinned model and runtime files from
   Hugging Face and GitHub. Each file must match a SHA-256 hash before it is
   used. After that, `--offline` works with no network at all.
-- `serve` listens on your local network. It answers only private addresses,
-  encrypts every connection from another device, and lets in only a browser
-  that has the key from the link. Your voice travels between that browser and
-  this computer.
+- `serve` listens on your local network unless you pass `--local`. It answers
+  only private addresses, encrypts every connection from another device, and
+  lets in only a browser that has the key from the link. Your voice travels
+  between that browser and this computer.
 - There is no telemetry, no account and no API key.
 
 ## Storage
