@@ -116,7 +116,7 @@
       socket.onopen = () => show('you', 'Stop', 'Listening. Pause and Boubou answers; speak and it stops.');
       socket.onclose = () => end(talk, document.body.dataset.state
         ? 'Boubou stopped or the connection dropped.'
-        : 'Boubou is not running, is talking with another page, or this link is from an earlier start.');
+        : 'Boubou is not running, is talking with someone else, or this link no longer has the right key.');
       socket.onmessage = ({ data }) => (typeof data === 'string' ? clear(talk, JSON.parse(data).clear) : play(talk, data));
       const capture = new AudioWorkletNode(microphone, 'frames');
       capture.port.onmessage = ({ data }) => {

@@ -87,9 +87,12 @@ reply. One page talks at a time.
 Browsers share a microphone only with HTTPS pages, so the phone's link uses a
 certificate that Boubou makes for itself. A phone's browser does not know that
 certificate and warns once; continue to the page. If macOS asks whether Boubou
-may accept incoming connections, allow it. The links carry a key that changes
-on every start. `--port` picks another port than 2682, and `--local` keeps
-Boubou to this computer.
+may accept incoming connections, allow it. `--port` picks another port than
+2682, and `--local` keeps Boubou to this computer.
+
+The links carry a key, and whoever has it can talk. It stays the same between
+starts, so a bookmark or a robot's settings keep working. To replace it, delete
+`serve/key` in the [storage folder](#storage); old links then stop working.
 
 With a modular-pipeline model, `serve` also prints an address for robots and
 programs that speak the OpenAI Realtime API over a WebSocket:
