@@ -654,8 +654,10 @@ fn from_browser(
     chat: &mut dyn Conversation,
     stopped: &AtomicBool,
 ) -> Result<()> {
-    let door = serve::Door::open(door, cache)?;
-    while let Some((mut browser, captured)) = door.wait(stopped, || chat.poll().map(drop))? {
+    // These models have no Realtime API for robots and programs to be carried to.
+    let door = serve::Door::open(door, cache, None)?;
+    while let Some(guest) = door.wait(stopped, || chat.poll().map(drop))? {
+        let (mut browser, captured) = guest.start();
         let result = converse(&mut browser, &captured, chat, stopped, false);
         if !browser.left() {
             return result;

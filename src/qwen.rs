@@ -481,7 +481,11 @@ pub fn run(
         chat::Server::start(command, &stopped)?
     };
     let result = match door {
-        Some(door) => chat::from_browser(&mut server, &mut session, door, cache, &stopped),
+        Some(door) => {
+            // Starting proved the runner ready; its one conversation goes to whoever visits.
+            drop(session);
+            chat::from_browser(&mut server, door, cache, &stopped)
+        }
         None => chat::microphone(&mut server, &mut session, cache, &stopped, &language(id)),
     };
     crate::check_cancel(&stopped)?;

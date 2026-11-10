@@ -91,6 +91,19 @@ may accept incoming connections, allow it. The links carry a key that changes
 on every start. `--port` picks another port than 2682, and `--local` keeps
 Boubou to this computer.
 
+With a modular-pipeline model, `serve` also prints an address for robots and
+programs that speak the OpenAI Realtime API over a WebSocket:
+
+```sh
+boubou serve qwen3-tts:0.6b-customvoice
+```
+
+Give the program the printed `ws://…/v1/realtime?key=…` address. A program
+built on an OpenAI SDK can instead use `http://<address>:2682/v1` as its base
+URL and the key as its API key. These programs cannot check Boubou's
+certificate, so their connection is not encrypted: use them on a network you
+trust.
+
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
@@ -147,9 +160,9 @@ about 2 s and is ready to talk after about 15 s.
   Hugging Face and GitHub. Each file must match a SHA-256 hash before it is
   used. After that, `--offline` works with no network at all.
 - `serve` listens on your local network unless you pass `--local`. It answers
-  only private addresses, encrypts every connection from another device, and
-  lets in only a browser that has the key from the link. Your voice travels
-  between that browser and this computer.
+  only private addresses and lets in only a visitor that has the key from a
+  printed link. A browser on another device is always encrypted; a robot or
+  program is not. Your voice travels between that visitor and this computer.
 - There is no telemetry, no account and no API key.
 
 ## Storage
