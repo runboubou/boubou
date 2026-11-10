@@ -16,7 +16,7 @@ use std::{
     fs::{self, File},
     io::{self, ErrorKind, Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     sync::{
         Arc,
@@ -236,11 +236,13 @@ fn hold(folder: &Path) -> Result<File> {
     Ok(lock)
 }
 
-/// A new file that only its owner can read.
+/// An empty file that only its owner can read, also when it replaces one that others could.
 fn private(path: &Path) -> io::Result<File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true).mode(0o600);
-    options.open(path)
+    let file = options.open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 /// The key that lets a visitor talk. It is made once and kept, so a bookmarked link or a
@@ -254,7 +256,7 @@ fn key(cache: &Path) -> Result<String> {
         File::open("/dev/urandom")?.read_exact(&mut fresh)?;
         private(&stored)?.write_all(crate::assets::hex(&fresh).as_bytes())?;
     }
-    let key = fs::read_to_string(&stored)?;
+    let key = fs::read_to_string(&stored)?.trim().to_owned();
     ensure!(
         key.len() == 32 && key.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "The key in {} is damaged. Delete that file and retry.",
