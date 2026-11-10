@@ -107,19 +107,6 @@ URL and the key as its API key. These programs cannot check Boubou's
 certificate, so their connection is not encrypted: use them on a network you
 trust.
 
-With a modular-pipeline model, `serve` also prints an address for robots and
-programs that speak the OpenAI Realtime API over a WebSocket:
-
-```sh
-boubou serve qwen3-tts:0.6b-customvoice
-```
-
-Give the program the printed `ws://…/v1/realtime?key=…` address. A program
-built on an OpenAI SDK can instead use `http://<address>:2682/v1` as its base
-URL and the key as its API key. These programs cannot check Boubou's
-certificate, so their connection is not encrypted: use them on a network you
-trust.
-
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
