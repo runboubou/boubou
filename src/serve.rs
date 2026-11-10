@@ -16,7 +16,7 @@ use std::{
     fs::{self, File},
     io::{self, ErrorKind, Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     sync::{
         Arc,
@@ -167,9 +167,7 @@ impl Door {
             listener = listen(Ipv4Addr::UNSPECIFIED)?;
         }
         let port = listener.local_addr()?.port();
-        let mut key = [0; 16];
-        File::open("/dev/urandom")?.read_exact(&mut key)?;
-        let key = crate::assets::hex(&key);
+        let key = key(cache)?;
         // The literal address: `localhost` may resolve to IPv6 first, where nothing listens.
         let reachable = network.unwrap_or(Ipv4Addr::LOCALHOST);
         let links = Links {
@@ -229,6 +227,44 @@ impl Door {
     }
 }
 
+/// Makes `folder` and holds it until the returned file is dropped, so that two starts at once
+/// do not both write a secret there.
+fn hold(folder: &Path) -> Result<File> {
+    fs::create_dir_all(folder)?;
+    let lock = File::create(folder.join("lock"))?;
+    fs2::FileExt::lock_exclusive(&lock)?;
+    Ok(lock)
+}
+
+/// An empty file that only its owner can read, also when it replaces one that others could.
+fn private(path: &Path) -> io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true).mode(0o600);
+    let file = options.open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    Ok(file)
+}
+
+/// The key that lets a visitor talk. It is made once and kept, so a bookmarked link or a
+/// robot's settings keep working across starts. Deleting its file replaces it.
+fn key(cache: &Path) -> Result<String> {
+    let folder = cache.join("serve");
+    let _held = hold(&folder)?;
+    let stored = folder.join("key");
+    if !stored.exists() {
+        let mut fresh = [0; 16];
+        File::open("/dev/urandom")?.read_exact(&mut fresh)?;
+        private(&stored)?.write_all(crate::assets::hex(&fresh).as_bytes())?;
+    }
+    let key = fs::read_to_string(&stored)?.trim().to_owned();
+    ensure!(
+        key.len() == 32 && key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "The key in {} is damaged. Delete that file and retry.",
+        stored.display()
+    );
+    Ok(key)
+}
+
 /// This computer's address on a local network such as Wi-Fi or Ethernet, if it has one.
 fn network_address() -> Option<Ipv4Addr> {
     let mut list = std::ptr::null_mut();
@@ -264,11 +300,9 @@ fn network_address() -> Option<Ipv4Addr> {
 fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
     let folder = cache.join("serve").join(address.to_string());
     let (certificate, key) = (folder.join("certificate.der"), folder.join("key.der"));
-    // Held until the pair is read: two starts at once must not mix one's key with the other's
+    // Until the pair is read: two starts at once must not mix one's key with the other's
     // certificate.
-    fs::create_dir_all(&folder)?;
-    let lock = File::create(folder.join("lock"))?;
-    fs2::FileExt::lock_exclusive(&lock)?;
+    let _held = hold(&folder)?;
     let current = key.is_file()
         && fs::metadata(&certificate)
             .and_then(|file| file.modified())
@@ -284,9 +318,7 @@ fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
         request.not_after = (SystemTime::now() + DAY * (CERTIFICATE_DAYS - 1)).into();
         request.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
         let made = request.self_signed(&pair)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true).mode(0o600);
-        options.open(&key)?.write_all(&pair.serialize_der())?;
+        private(&key)?.write_all(&pair.serialize_der())?;
         // Written last: its presence marks a complete pair.
         fs::write(&certificate, made.der())?;
     }
@@ -468,9 +500,18 @@ mod tests {
 
     type Page<S = TcpStream> = WebSocket<S>;
 
+    /// A cache folder of this test's own.
+    fn cache() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let next = NEXT.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("boubou-serve-{}-{next}", std::process::id()))
+    }
+
     /// A door that only this computer can reach, in front of a model without a Realtime API.
     fn local() -> (Door, String) {
-        let (door, links) = Door::bind(0, Path::new("unused"), None, None).unwrap();
+        let cache = cache();
+        let (door, links) = Door::bind(0, &cache, None, None).unwrap();
+        fs::remove_dir_all(cache).unwrap();
         assert!(links.network.is_none() && links.realtime.is_none());
         (door, links.here)
     }
@@ -656,7 +697,7 @@ mod tests {
 
     #[test]
     fn the_network_talks_over_https_with_a_certificate_that_lasts() {
-        let cache = std::env::temp_dir().join(format!("boubou-serve-{}", std::process::id()));
+        let cache = cache();
         // Loopback stands in for the Wi-Fi address.
         let network = Ipv4Addr::LOCALHOST;
         let (door, links) = Door::bind(0, &cache, Some(network), None).unwrap();
@@ -694,32 +735,37 @@ mod tests {
         assert_eq!(key(&links.here), key(&link));
         assert!(request(&links.here, "GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200 "));
 
-        // A later start presents the same certificate, so a browser's trust carries over.
-        Door::bind(0, &cache, Some(network), None).unwrap();
+        // A later start presents the same certificate and key, so a browser's trust and a
+        // saved link carry over.
+        let (_, later) = Door::bind(0, &cache, Some(network), None).unwrap();
         assert_eq!(fs::read(&stored).unwrap(), certificate);
-        let mode = std::os::unix::fs::PermissionsExt::mode(
-            &fs::metadata(stored.with_file_name("key.der"))
-                .unwrap()
-                .permissions(),
-        );
-        assert_eq!(mode & 0o077, 0, "Only the owner may read the key");
+        assert_eq!(key(&later.here), key(&link));
+        for secret in ["serve/127.0.0.1/key.der", "serve/key"] {
+            let file = fs::metadata(cache.join(secret)).unwrap();
+            let mode = std::os::unix::fs::PermissionsExt::mode(&file.permissions());
+            assert_eq!(mode & 0o077, 0, "Only the owner may read {secret}");
+        }
+        fs::write(cache.join("serve/key"), "not a key").unwrap();
+        assert!(Door::bind(0, &cache, Some(network), None).is_err());
         fs::remove_dir_all(cache).unwrap();
     }
 
     #[test]
-    fn starts_at_the_same_time_keep_a_matching_key_and_certificate() {
-        let cache = std::env::temp_dir().join(format!("boubou-identity-{}", std::process::id()));
+    fn starts_at_the_same_time_agree_on_the_key_and_the_certificate() {
+        let cache = cache();
         let address = Ipv4Addr::LOCALHOST;
-        let made: Vec<_> = thread::scope(|scope| {
-            let starts: Vec<_> = (0..8)
-                .map(|_| scope.spawn(|| identity(&cache, address).map(drop)))
-                .collect();
+        let start = || -> Result<String> {
+            identity(&cache, address)?;
+            super::key(&cache)
+        };
+        let keys: Vec<_> = thread::scope(|scope| {
+            let starts: Vec<_> = (0..8).map(|_| scope.spawn(start)).collect();
             starts
                 .into_iter()
-                .map(|start| start.join().unwrap())
+                .map(|start| start.join().unwrap().unwrap())
                 .collect()
         });
-        assert!(made.iter().all(Result::is_ok), "{made:?}");
+        assert!(keys.iter().all(|key| *key == keys[0]), "{keys:?}");
         // Loading checks that the stored key belongs to the stored certificate.
         identity(&cache, address).unwrap();
         fs::remove_dir_all(cache).unwrap();
@@ -727,8 +773,9 @@ mod tests {
 
     #[test]
     fn robots_and_programs_are_carried_to_the_realtime_api() {
-        let model = Some(model_server());
-        let (door, links) = Door::bind(0, Path::new("unused"), None, model).unwrap();
+        let cache = cache();
+        let (door, links) = Door::bind(0, &cache, None, Some(model_server())).unwrap();
+        fs::remove_dir_all(cache).unwrap();
         let link = links.realtime.unwrap();
         let key = key(&links.here);
         assert_eq!(link.split("key=").nth(1), Some(key));
