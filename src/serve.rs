@@ -12,7 +12,7 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs
 use std::{
     cell::Cell,
     fs::{self, File},
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
     os::unix::fs::OpenOptionsExt,
     path::Path,
@@ -80,7 +80,7 @@ impl Door {
         eprintln!("\n  {:<16}  {}", progress::HERE, links.here);
         if let Some(link) = &links.network {
             eprintln!("  {:<16}  {link}", "On your network");
-            if tui::Paint::detect().colored() {
+            if tui::interactive(&io::stderr()) && tui::Paint::detect().colored() {
                 let code = qrcode::QrCode::new(link)?
                     .render::<qrcode::render::unicode::Dense1x2>()
                     .build();
@@ -101,7 +101,10 @@ impl Door {
     fn bind(port: u16, cache: &Path, network: Option<Ipv4Addr>) -> Result<(Self, Links)> {
         let identity = network
             .map(|address| identity(cache, address))
-            .transpose()?;
+            .transpose()
+            .context(
+                "Cannot prepare the HTTPS certificate. Delete the cache's serve folder and retry.",
+            )?;
         let interface = if network.is_some() {
             Ipv4Addr::UNSPECIFIED
         } else {

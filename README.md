@@ -86,8 +86,9 @@ reply. One page talks at a time.
 
 Browsers share a microphone only with HTTPS pages, so the phone's link uses a
 certificate that Boubou makes for itself. A phone's browser does not know that
-certificate and warns once; continue to the page. The links carry a key that
-changes on every start. `--port` picks another port than 2682.
+certificate and warns once; continue to the page. If macOS asks whether Boubou
+may accept incoming connections, allow it. The links carry a key that changes
+on every start. `--port` picks another port than 2682.
 
 ## Linux
 
