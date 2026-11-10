@@ -207,6 +207,20 @@ def read_aloud():
         voice = next(handler for handler in unit.handlers
                      if getattr(handler, "queue_out", None) is unit.output_queue)
 
+        class Mouth:
+            """Where the voice puts what it says: the client's queue, or a reading's until its end."""
+
+            reading = None
+
+            def put(self, item):
+                heard = self.reading or unit.output_queue
+                # The voice ends a reading itself, so nothing it says next can go astray.
+                if isinstance(item, bytes) and item == AUDIO_RESPONSE_DONE:
+                    self.reading = None
+                heard.put(item)
+
+        voice.queue_out = mouth = Mouth()
+
         @app.post("/v1/audio/speech")
         def speech(request: dict):
             text, wanted = request.get("input"), request.get("response_format", "wav")
@@ -220,8 +234,7 @@ def read_aloud():
                 time.sleep(0.05)
             if unit.session is not None or not turn.acquire(blocking=False):
                 raise HTTPException(409, "The voice is busy with a conversation or another text.")
-            spoken = queue.Queue()
-            usual, voice.queue_out = voice.queue_out, spoken
+            mouth.reading = spoken = queue.Queue()
             try:
                 # Sentence by sentence, as the language model's reply arrives, and in the pipeline's
                 # current generation: a conversation that starts cancels it, which stops a reading
@@ -237,7 +250,7 @@ def read_aloud():
             except queue.Empty:
                 raise HTTPException(500, "The voice did not finish.") from None
             finally:
-                voice.queue_out = usual
+                mouth.reading = None
                 turn.release()
             if not chunks:
                 raise HTTPException(500, "The voice said nothing.")
