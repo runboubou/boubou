@@ -89,12 +89,15 @@ struct Links {
     realtime: Option<String>,
 }
 
-/// A browser that has taken the seat. Its audio starts when the conversation is ready for it,
-/// so nothing it says goes stale in a queue.
+/// A browser that has taken the seat. Its audio starts when the conversation is ready for it.
 pub struct Guest(Socket, Seat);
 
 impl Guest {
-    pub fn start(self) -> (Remote, Receiver<CaptureFrame>) {
+    pub fn start(mut self) -> (Remote, Receiver<CaptureFrame>) {
+        // The page has been sending since it connected. What piled up while the conversation
+        // was being prepared is stale, and would arrive as one burst; reading stops at the
+        // first pause, which a live microphone leaves between frames.
+        while self.0.read().is_ok() {}
         Remote::start(self.0, self.1)
     }
 }
@@ -616,6 +619,25 @@ mod tests {
         };
         assert!(remote.left());
         assert!(!wait(&door).left());
+    }
+
+    #[test]
+    fn audio_sent_before_the_conversation_was_ready_is_dropped() {
+        let (door, link) = local();
+        let mut page = plain(&link, key(&link)).unwrap();
+        let frame =
+            |sample: i16| tungstenite::Message::Binary(sample.to_le_bytes().repeat(320).into());
+        // Two seconds of microphone pile up while the model prepares the conversation.
+        for _ in 0..100 {
+            page.send(frame(1)).unwrap();
+        }
+        let guest = door.wait(&AtomicBool::new(false), || Ok(()));
+        thread::sleep(Duration::from_millis(50));
+        let (remote, captured) = guest.unwrap().unwrap().start();
+        page.send(frame(2)).unwrap();
+        let heard = captured.recv_timeout(Duration::from_secs(5));
+        assert!(matches!(heard, Ok(CaptureFrame::Samples(frame)) if frame.samples == [2; 320]));
+        assert!(!remote.left());
     }
 
     #[test]
