@@ -452,7 +452,8 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
     integrity::model_snapshots(root, &listed, &selected)
 }
 
-pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
+/// Talks through this computer's audio devices, or through a browser page served on `port`.
+pub fn run(id: &str, cache: &Path, offline: bool, port: Option<u16>) -> Result<()> {
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -474,7 +475,10 @@ pub fn run(id: &str, cache: &Path, offline: bool) -> Result<()> {
         let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
         chat::Server::start(command, &stopped)?
     };
-    let result = chat::converse(&mut server, &mut session, cache, &stopped, &language(id));
+    let result = match port {
+        Some(port) => chat::from_browser(&mut server, &mut session, port, &stopped),
+        None => chat::microphone(&mut server, &mut session, cache, &stopped, &language(id)),
+    };
     crate::check_cancel(&stopped)?;
     result
 }

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Boubou</title>
+<style>
+  :root { --accent: #f2c21b; --level: 0; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100dvh; display: grid; place-items: center;
+    padding: 32px 24px; background: #000; color: #f4f4f6;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center;
+  }
+  main { display: grid; justify-items: center; gap: 28px; max-width: 30ch; }
+  h1 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: .08em; }
+  button {
+    width: 168px; aspect-ratio: 1; border-radius: 50%; cursor: pointer;
+    border: 2px solid var(--accent); background: none; color: var(--accent); font: inherit;
+    font-weight: 600; transform: scale(calc(1 + var(--level) * .12));
+    box-shadow: 0 0 calc(var(--level) * 64px) color-mix(in srgb, var(--accent) 55%, transparent);
+    transition: transform .08s linear, box-shadow .08s linear, background-color .2s, color .2s;
+  }
+  button:focus-visible { outline: 2px solid #f4f4f6; outline-offset: 6px; }
+  [data-state="you"] button { --accent: #f4f4f6; }
+  [data-state="boubou"] button { background: var(--accent); color: #000; }
+  p { margin: 0; min-height: 3em; color: #9a9aa2; text-wrap: balance; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; transform: none; } }
+</style>
+<main>
+  <h1>BOUBOU</h1>
+  <button type="button">Start talking</button>
+  <p role="status">Your voice goes to the computer running Boubou and nowhere else.</p>
+</main>
+<script>
+  const button = document.querySelector('button');
+  const status = document.querySelector('p');
+  const privacy = status.textContent;
+  // Runs on the audio thread: packs the microphone into 20 ms frames of PCM16.
+  const frames = `registerProcessor('frames', class extends AudioWorkletProcessor {
+    frame = new Int16Array(320);
+    filled = 0;
+    process([[channel]]) {
+      for (const sample of channel ?? []) {
+        this.frame[this.filled++] = Math.max(-1, Math.min(1, sample)) * 32767;
+        if (this.filled === this.frame.length) {
+          this.port.postMessage(this.frame.slice());
+          this.filled = 0;
+        }
+      }
+      return true;
+    }
+  });`;
+  // The conversation in progress: its socket, audio contexts and scheduled speech.
+  let session;
+
+  function show(state, label, note) {
+    document.body.dataset.state = state;
+    document.body.style.setProperty('--level', 0);
+    button.textContent = label;
+    status.textContent = note;
+  }
+
+  function level(pcm) {
+    let peak = 0;
+    for (const sample of pcm) peak = Math.max(peak, Math.abs(sample));
+    return Math.min(1, peak / 12000);
+  }
+
+  // Safe to repeat: a start that was still waiting for the microphone releases it afterwards.
+  function end(talk, note) {
+    if (talk.socket) {
+      talk.socket.onclose = talk.socket.onmessage = null;
+      talk.socket.close();
+    }
+    talk.stream?.getTracks().forEach((track) => track.stop());
+    talk.playing.clear();
+    for (const context of [talk.microphone, talk.speaker]) {
+      if (context && context.state !== 'closed') context.close();
+    }
+    if (session !== talk) return;
+    session = null;
+    show('', 'Start talking', note);
+  }
+
+  async function start() {
+    const key = location.hash.slice(1);
+    if (!key) return show('', 'Start talking', 'This link is incomplete. Open the whole link that Boubou printed.');
+    if (!navigator.mediaDevices || !window.AudioWorkletNode) {
+      return show('', 'Start talking', 'This browser shares its microphone only with secure pages. Open the link on the computer running Boubou.');
+    }
+    // Created in the tap, so the browser lets it play.
+    const speaker = new AudioContext({ sampleRate: 24000 });
+    const talk = session = { speaker, epoch: 0, next: 0, playing: new Set() };
+    show('', 'Connecting', '');
+    try {
+      talk.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const microphone = talk.microphone = new AudioContext({ sampleRate: 16000 });
+      if (microphone.sampleRate !== 16000 || speaker.sampleRate !== 24000) {
+        throw new Error('This browser cannot record at 16 kHz and play at 24 kHz.');
+      }
+      await microphone.audioWorklet.addModule(URL.createObjectURL(new Blob([frames], { type: 'text/javascript' })));
+      if (session !== talk) return end(talk);
+      // Boubou expects audio from the moment the page connects, so connect last.
+      const socket = talk.socket = new WebSocket(`${location.origin.replace('http', 'ws')}/talk?key=${key}`);
+      socket.binaryType = 'arraybuffer';
+      socket.onopen = () => show('you', 'Stop', 'Listening. Pause and Boubou answers; speak and it stops.');
+      socket.onclose = () => end(talk, document.body.dataset.state
+        ? 'Boubou stopped or the connection dropped.'
+        : 'Boubou is not running, is talking with another page, or this link is from an earlier start.');
+      socket.onmessage = ({ data }) => (typeof data === 'string' ? clear(talk, JSON.parse(data).clear) : play(talk, data));
+      const capture = new AudioWorkletNode(microphone, 'frames');
+      capture.port.onmessage = ({ data }) => {
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(data);
+        if (!talk.playing.size) {
+          document.body.dataset.state = 'you';
+          document.body.style.setProperty('--level', level(data));
+        }
+      };
+      microphone.createMediaStreamSource(talk.stream).connect(capture).connect(microphone.destination);
+    } catch (error) {
+      end(talk, error.name === 'NotAllowedError' ? 'Boubou needs the microphone. Allow it for this page and try again.' : error.message);
+    }
+  }
+
+  function play(talk, data) {
+    const { speaker, socket, playing, epoch } = talk;
+    const pcm = new Int16Array(data);
+    const buffer = speaker.createBuffer(1, pcm.length, 24000);
+    const samples = buffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) samples[i] = pcm[i] / 32768;
+    const source = speaker.createBufferSource();
+    source.buffer = buffer;
+    source.connect(speaker.destination);
+    // Chunks play back to back; after a gap, a short lead absorbs network jitter.
+    const at = Math.max(talk.next, speaker.currentTime + 0.05);
+    source.start(at);
+    talk.next = at + buffer.duration;
+    playing.add(source);
+    setTimeout(() => {
+      if (!playing.has(source)) return;
+      document.body.dataset.state = 'boubou';
+      document.body.style.setProperty('--level', level(pcm));
+    }, (at - speaker.currentTime) * 1000);
+    source.onended = () => {
+      // Interrupted speech is not reported: Boubou has already stopped counting it.
+      if (playing.delete(source) && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ epoch, played: pcm.length }));
+      }
+    };
+  }
+
+  function clear(talk, epoch) {
+    for (const source of talk.playing) source.stop();
+    talk.playing.clear();
+    talk.epoch = epoch;
+    talk.next = 0;
+  }
+
+  button.onclick = () => (session ? end(session, privacy) : start());
+</script>
+</html>

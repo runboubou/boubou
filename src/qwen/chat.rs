@@ -349,28 +349,58 @@ fn refill(backlog: &mut VecDeque<i16>, queued: usize) -> Option<Vec<i16>> {
     (room > 0).then(|| backlog.drain(..room).collect())
 }
 
-pub(super) fn converse(
+/// A conversation through this computer's microphone and speakers.
+pub(super) fn microphone(
     server: &mut Server,
     session: &mut Session,
     cache: &std::path::Path,
     stopped: &AtomicBool,
     language: &str,
 ) -> Result<()> {
-    use crate::{
-        audio::{Audio, CaptureFrame},
-        talk::Note,
-    };
-    use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
-    use std::sync::{atomic::Ordering, mpsc::TryRecvError};
-
     let (mut audio, captured) = {
         let _progress = crate::progress::opening_audio();
-        Audio::start(cache, true, stopped)?
+        crate::audio::Audio::start(cache, true, stopped)?
     };
     let language = language.trim_end_matches(" (Whisper)");
     if !crate::progress::finish(&crate::progress::ready(language)) {
         eprintln!("Ready. Speak {language}.");
     }
+    converse(server, session, &mut audio, &captured, stopped)
+}
+
+/// Lends the conversation to one browser page at a time, until Ctrl+C.
+pub(super) fn from_browser(
+    server: &mut Server,
+    session: &mut Session,
+    port: u16,
+    stopped: &AtomicBool,
+) -> Result<()> {
+    let door = crate::serve::Door::open(port)?;
+    while let Some((mut browser, captured)) = door.wait(stopped, || {
+        server.check()?;
+        session.poll().map(drop)
+    })? {
+        let result = converse(server, session, &mut browser, &captured, stopped);
+        if !browser.left() {
+            return result;
+        }
+        // Whatever the page was in the middle of ends with it.
+        session.interrupt()?;
+    }
+    Ok(())
+}
+
+fn converse(
+    server: &mut Server,
+    session: &mut Session,
+    audio: &mut dyn crate::audio::Device,
+    captured: &std::sync::mpsc::Receiver<crate::audio::CaptureFrame>,
+    stopped: &AtomicBool,
+) -> Result<()> {
+    use crate::{audio::CaptureFrame, talk::Note};
+    use crossterm::event::{self as keys, Event as Input, KeyCode, KeyModifiers};
+    use std::sync::{atomic::Ordering, mpsc::TryRecvError};
+
     let _terminal = crate::Terminal::enter()?;
     let mut panel = crate::talk::Panel::new(false);
     panel.note(Note::Intro);
