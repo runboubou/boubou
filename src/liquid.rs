@@ -755,16 +755,22 @@ http.server.HTTPServer(('127.0.0.1',port),Handler).serve_forever()
                 }
                 chat.append_audio(pcm).unwrap();
                 chat.finish_audio().unwrap();
-                let deadline = Instant::now() + Duration::from_secs(120);
+                // A stall is no output for as long as the client's own read timeout. A whole
+                // 1024-token reply takes longer than that on a hosted runner.
+                let mut last_output = Instant::now();
                 let mut text = String::new();
                 let mut samples = 0;
                 while chat.busy() {
-                    assert!(Instant::now() < deadline, "Real Liquid response stalled");
+                    assert!(
+                        last_output.elapsed() < Duration::from_secs(120),
+                        "Real Liquid response stalled"
+                    );
                     match chat.poll().unwrap() {
                         Some(Output::Text(delta)) => text.push_str(&delta),
                         Some(Output::Audio(pcm)) => samples += pcm.len(),
-                        _ => {}
+                        _ => continue,
                     }
+                    last_output = Instant::now();
                 }
                 assert!(samples > 0, "Real model returned no audio");
                 eprintln!(
