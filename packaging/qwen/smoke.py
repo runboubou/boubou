@@ -1,6 +1,7 @@
 """Exercise the installed offline speech pipeline without opening audio devices."""
 
 import base64
+import io
 import json
 import os
 import runpy
@@ -8,7 +9,9 @@ import socket
 import subprocess
 import sys
 import time
+import wave
 from pathlib import Path
+from urllib.request import ProxyHandler, Request, build_opener
 
 from websockets.sync.client import connect
 
@@ -54,11 +57,22 @@ def check(model, cache, manifest):
                         heard = True
                 elif event["type"] == "response.done":
                     if event["response"]["status"] == "completed" and heard:
-                        return
+                        break
                     raise RuntimeError(f"{model} produced no completed spoken response")
                 elif event["type"] == "error":
                     raise RuntimeError(f"{model}: {event['error']}")
-            raise TimeoutError(f"{model} timed out waiting for audio")
+            else:
+                raise TimeoutError(f"{model} timed out waiting for audio")
+        # After the conversation, the same voice reads a text aloud.
+        request = Request(f"http://127.0.0.1:{port}/v1/audio/speech", b'{"input": "Hello. Dinner is ready."}',
+                          {"Content-Type": "application/json"})
+        start = time.monotonic()
+        with build_opener(ProxyHandler({})).open(request, timeout=180) as response:
+            with wave.open(io.BytesIO(response.read())) as wav:
+                speech = wav.readframes(wav.getnframes())
+                if wav.getparams()[:3] != (1, 2, 24000) or not any(speech):
+                    raise RuntimeError(f"{model} read nothing aloud")
+        print(f"{model}: read {len(speech) / 48000:.2f}s of speech aloud in {time.monotonic()-start:.2f}s", flush=True)
     finally:
         child.terminate()
         try:

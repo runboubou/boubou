@@ -156,6 +156,7 @@ for text in ("Tell me a long story.", "Stop. What is the capital of France?"):
     chat.add_item(make_user_message(text))
 assert [message["role"] for message in chat.to_transformers_chat()] == ["user", "user"]
 assert len(chat.buffer) == 2
+runner["read_aloud"]()
 with tempfile.TemporaryDirectory() as work:
     runner["link_espeak_data"](Path(work))
     assert en.G2P(fallback=espeak.EspeakFallback(british=False))("Boubou")[0]

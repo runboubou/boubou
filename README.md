@@ -107,6 +107,19 @@ URL and the key as its API key. These programs cannot check Boubou's
 certificate, so their connection is not encrypted: use them on a network you
 trust.
 
+The same address and key read text aloud in the model's voice, as OpenAI's
+`/v1/audio/speech` does:
+
+```sh
+curl http://<address>:2682/v1/audio/speech -H "Authorization: Bearer <key>" \
+  --json '{"input": "Dinner is ready."}' -o dinner.wav
+```
+
+The answer is a 24 kHz WAV file, or raw PCM with `"response_format": "pcm"`,
+sent once the whole text has been spoken. `model` and `voice` are ignored: the
+voice is the one `serve` started with. While someone is talking the answer is
+409, and nobody can start talking while a text is being read.
+
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
