@@ -75,16 +75,15 @@ enum Action {
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
     },
-    /// Talk with a model through a page in a browser on this computer.
+    /// Talk with a model through a browser page, on this computer or a phone on the same Wi-Fi.
     Serve {
         #[arg(value_parser = profiles::value_parser())]
         model: profiles::Model,
         /// Use cached assets only. Never download or check for updates.
         #[arg(long)]
         offline: bool,
-        /// The local port that serves the page.
-        #[arg(long, default_value_t = 2682)]
-        port: u16,
+        #[command(flatten)]
+        door: serve::Options,
     },
     /// Download and verify the selected model and its inference backend.
     Pull {
@@ -351,7 +350,7 @@ fn run() -> Result<()> {
         Action::Serve {
             model,
             offline,
-            port,
+            door,
         } => {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let _checklist = checklist(
@@ -364,10 +363,10 @@ fn run() -> Result<()> {
             match model {
                 profiles::Model::Liquid(profile) => {
                     with_liquid(profile, &cache, offline, |chat, stopped| {
-                        from_browser(port, chat, stopped)
+                        from_browser(&door, &cache, chat, stopped)
                     })
                 }
-                profiles::Model::Qwen(id) => qwen::run(id, &cache, offline, Some(port)),
+                profiles::Model::Qwen(id) => qwen::run(id, &cache, offline, Some(&door)),
             }
         }
     })();
@@ -649,8 +648,13 @@ fn microphone(
 }
 
 /// Lends the conversation to one browser page at a time, until Ctrl+C.
-fn from_browser(port: u16, chat: &mut dyn Conversation, stopped: &AtomicBool) -> Result<()> {
-    let door = serve::Door::open(port)?;
+fn from_browser(
+    door: &serve::Options,
+    cache: &Path,
+    chat: &mut dyn Conversation,
+    stopped: &AtomicBool,
+) -> Result<()> {
+    let door = serve::Door::open(door, cache)?;
     while let Some((mut browser, captured)) = door.wait(stopped, || chat.poll().map(drop))? {
         let result = converse(&mut browser, &captured, chat, stopped, false);
         if !browser.left() {
