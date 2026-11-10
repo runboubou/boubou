@@ -299,7 +299,9 @@ fn guided_start_exits_when_its_terminal_closes() {
         prompt.expect(MENU);
         prompt._slave = fs::File::open("/dev/null").unwrap();
         prompt.master = fs::File::open("/dev/null").unwrap();
-        let status = prompt.exit_within(Duration::from_secs(2));
+        // The bug this guards against never exited. On a busy Mac, a hung-up controlling terminal
+        // can take a few seconds to close, so a tight limit only makes the test flaky.
+        let status = prompt.exit_within(Duration::from_secs(10));
         assert!(
             !status.success(),
             "{status:?} with controlling={controlling}"
