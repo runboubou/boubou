@@ -373,9 +373,10 @@ pub(super) fn from_browser(
     server: &mut Server,
     session: &mut Session,
     port: u16,
+    cache: &std::path::Path,
     stopped: &AtomicBool,
 ) -> Result<()> {
-    let door = crate::serve::Door::open(port)?;
+    let door = crate::serve::Door::open(port, cache)?;
     while let Some((mut browser, captured)) = door.wait(stopped, || {
         server.check()?;
         session.poll().map(drop)

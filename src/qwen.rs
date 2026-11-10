@@ -476,7 +476,7 @@ pub fn run(id: &str, cache: &Path, offline: bool, port: Option<u16>) -> Result<(
         chat::Server::start(command, &stopped)?
     };
     let result = match port {
-        Some(port) => chat::from_browser(&mut server, &mut session, port, &stopped),
+        Some(port) => chat::from_browser(&mut server, &mut session, port, cache, &stopped),
         None => chat::microphone(&mut server, &mut session, cache, &stopped, &language(id)),
     };
     crate::check_cancel(&stopped)?;

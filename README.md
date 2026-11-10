@@ -72,18 +72,22 @@ Images can be PNG or JPEG up to 2048 × 2048. Videos can be MP4 or MOV with a
 constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 `ffmpeg` and `ffprobe` installed. Files are limited to 64 MiB.
 
-`serve` moves the microphone and speakers to a page in a browser on the same
-computer:
+`serve` moves the microphone and speakers to a page in a browser, on this
+computer or on a phone on the same Wi-Fi:
 
 ```sh
 boubou serve LFM3-Audio-2B
 ```
 
-Open the link it prints, allow the microphone and talk. The page relies on the
-browser's echo cancellation, and interrupting starts to work two seconds into
-the first reply. Boubou accepts connections from this computer only, and one
-page talks at a time. The link carries a key that changes on every start.
-`--port` picks another port than 2682.
+Open the first link it prints on this computer, or scan the QR code with a
+phone. Allow the microphone and talk. The page relies on the browser's echo
+cancellation, and interrupting starts to work two seconds into the first
+reply. One page talks at a time.
+
+Browsers share a microphone only with HTTPS pages, so the phone's link uses a
+certificate that Boubou makes for itself. A phone's browser does not know that
+certificate and warns once; continue to the page. The links carry a key that
+changes on every start. `--port` picks another port than 2682.
 
 ## Linux
 
@@ -140,6 +144,10 @@ about 2 s and is ready to talk after about 15 s.
 - The network is only used to download pinned model and runtime files from
   Hugging Face and GitHub. Each file must match a SHA-256 hash before it is
   used. After that, `--offline` works with no network at all.
+- `serve` listens on your local network. It answers only private addresses,
+  encrypts every connection from another device, and lets in only a browser
+  that has the key from the link. Your voice travels between that browser and
+  this computer.
 - There is no telemetry, no account and no API key.
 
 ## Storage
