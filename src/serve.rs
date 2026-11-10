@@ -1,7 +1,9 @@
 //! `boubou serve`: a page in a browser is the conversation's microphone and speaker. This
 //! computer opens it over loopback. Other devices on the local network open it over HTTPS,
 //! which browsers require before they share a microphone, with a certificate Boubou issues to
-//! itself. One page talks at a time, and only a page opened from a printed link can.
+//! itself. Robots and programs that speak the OpenAI Realtime API connect to the same door
+//! and are carried to the model server's own implementation of it. One visitor talks at a
+//! time, and only one that holds the key from a printed link can.
 
 use crate::{
     audio::{CaptureFrame, Remote},
@@ -12,8 +14,8 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs
 use std::{
     cell::Cell,
     fs::{self, File},
-    io::{self, Read, Write},
-    net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
+    io::{self, ErrorKind, Read, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::{
@@ -46,12 +48,23 @@ impl<T: Read + Write + Send> Stream for T {}
 
 type Socket = WebSocket<Box<dyn Stream>>;
 
-/// Held by the browser that is talking. Dropping it lets the next one in.
-struct Seat(Arc<AtomicBool>);
+/// What answering a request takes.
+struct Desk {
+    key: String,
+    /// Set while someone is talking.
+    seated: AtomicBool,
+    /// Proves the network address to browsers.
+    identity: Option<Arc<ServerConfig>>,
+    /// The model server's own Realtime API, where it has one.
+    realtime: Option<SocketAddr>,
+}
+
+/// Held by whoever is talking. Dropping it lets the next visitor in.
+struct Seat(Arc<Desk>);
 
 impl Drop for Seat {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        self.0.seated.store(false, Ordering::SeqCst);
     }
 }
 
@@ -66,30 +79,36 @@ pub struct Options {
     local: bool,
 }
 
-/// Where the page is. Each address ends in the key, as a fragment, which browsers never put
-/// in a request.
+/// Where to connect. The page's addresses end in the key as a fragment, which browsers never
+/// put in a request.
 struct Links {
     here: String,
     network: Option<String>,
+    /// For robots and programs, which cannot check Boubou's certificate and so connect
+    /// without encryption.
+    realtime: Option<String>,
 }
 
-/// Listens for browsers and admits one at a time.
+/// Listens for visitors and admits one at a time.
 pub struct Door {
     arrivals: Receiver<(Socket, Seat)>,
     returning: Cell<bool>,
 }
 
 impl Door {
-    /// Starts serving the page and tells the person where to open it. `cache` keeps the
-    /// certificate between starts.
-    pub fn open(options: &Options, cache: &Path) -> Result<Self> {
+    /// Starts serving and tells the person where to connect. `cache` keeps the certificate
+    /// between starts. `realtime` is the model server's own Realtime API, where it has one.
+    pub fn open(options: &Options, cache: &Path, realtime: Option<SocketAddr>) -> Result<Self> {
         let network = network_address().filter(|_| !options.local);
-        let (door, links) = Self::bind(options.port, cache, network)?;
+        let (door, links) = Self::bind(options.port, cache, network, realtime)?;
         let note = "Ready. Open the page in a browser.";
         if !progress::finish(note) {
             eprintln!("{note}");
         }
         eprintln!("\n  {:<16}  {}", progress::HERE, links.here);
+        if let Some(link) = &links.realtime {
+            eprintln!("  {:<16}  {link}", "Robots and apps");
+        }
         if let Some(link) = &links.network {
             eprintln!("  {:<16}  {link}", "On your network");
             if tui::interactive(&io::stderr()) && tui::Paint::detect().colored() {
@@ -110,7 +129,12 @@ impl Door {
     }
 
     /// Listens on `network` as well as loopback when this computer has such an address.
-    fn bind(port: u16, cache: &Path, network: Option<Ipv4Addr>) -> Result<(Self, Links)> {
+    fn bind(
+        port: u16,
+        cache: &Path,
+        network: Option<Ipv4Addr>,
+        realtime: Option<SocketAddr>,
+    ) -> Result<(Self, Links)> {
         let identity = network
             .map(|address| identity(cache, address))
             .transpose()
@@ -132,28 +156,34 @@ impl Door {
         let port = listener.local_addr()?.port();
         let mut key = [0; 16];
         File::open("/dev/urandom")?.read_exact(&mut key)?;
-        let key: Arc<str> = crate::assets::hex(&key).into();
+        let key = crate::assets::hex(&key);
+        // The literal address: `localhost` may resolve to IPv6 first, where nothing listens.
+        let reachable = network.unwrap_or(Ipv4Addr::LOCALHOST);
         let links = Links {
-            // The literal address: `localhost` may resolve to IPv6 first, where nothing listens.
             here: format!("http://127.0.0.1:{port}/#{key}"),
             network: network.map(|address| format!("https://{address}:{port}/#{key}")),
+            realtime: realtime.map(|_| format!("ws://{reachable}:{port}/v1/realtime?key={key}")),
         };
+        let desk = Arc::new(Desk {
+            key,
+            seated: AtomicBool::new(false),
+            identity,
+            realtime,
+        });
         let (admitted, arrivals) = mpsc::channel();
-        let seated = Arc::new(AtomicBool::new(false));
         thread::Builder::new()
             .name("boubou-serve".into())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
-                    // Every request in progress holds the key.
-                    if Arc::strong_count(&key) > MAX_REQUESTS {
+                    // Every request in progress holds the desk.
+                    if Arc::strong_count(&desk) > MAX_REQUESTS {
                         continue;
                     }
-                    let (key, seated, admitted) = (key.clone(), seated.clone(), admitted.clone());
-                    let identity = identity.clone();
+                    let (desk, admitted) = (desk.clone(), admitted.clone());
                     // Browsers open connections they leave idle; each waits on its own thread.
                     thread::spawn(move || {
                         // A failed request costs only its own connection.
-                        if let Ok(Some(arrival)) = accept(stream, identity, &key, &seated) {
+                        if let Ok(Some(arrival)) = accept(stream, &desk) {
                             let _ = admitted.send(arrival);
                         }
                     });
@@ -256,50 +286,44 @@ fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
     Ok(Arc::new(config))
 }
 
-/// Whether to answer a connection: any from this computer, and encrypted ones from private
-/// addresses. Plain HTTP from the network would carry the key and the voice in the clear.
-fn welcome(peer: IpAddr, encrypted: bool) -> bool {
-    peer.is_loopback() || encrypted && matches!(peer, IpAddr::V4(peer) if peer.is_private())
+/// Whether a connection may use the page: any from this computer, and encrypted ones from the
+/// network. Plain HTTP would carry a browser's key and voice across the network in the clear.
+/// `None` for peers that get no answer at all: only private addresses are on the local network.
+fn trusted(peer: IpAddr, encrypted: bool) -> Option<bool> {
+    let private = matches!(peer, IpAddr::V4(peer) if peer.is_private());
+    (peer.is_loopback() || private).then_some(peer.is_loopback() || encrypted)
 }
 
 /// Takes a new connection as HTTPS or plain HTTP and answers its request.
-fn accept(
-    stream: TcpStream,
-    identity: Option<Arc<ServerConfig>>,
-    key: &str,
-    seated: &Arc<AtomicBool>,
-) -> Result<Option<(Socket, Seat)>> {
+fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<(Socket, Seat)>> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let mut first = [0];
     ensure!(stream.peek(&mut first)? == 1, "The connection closed");
     // A TLS connection opens with a handshake record, type 22.
-    let identity = identity.filter(|_| first[0] == 22);
-    ensure!(
-        welcome(stream.peer_addr()?.ip(), identity.is_some()),
-        "Not from here"
-    );
+    let identity = desk.identity.clone().filter(|_| first[0] == 22);
+    let trusted = trusted(stream.peer_addr()?.ip(), identity.is_some()).context("Not from here")?;
     let socket = stream.try_clone()?;
     match identity {
         Some(identity) => {
             let session = ServerConnection::new(identity)?;
-            answer(StreamOwned::new(session, stream), &socket, key, seated)
+            answer(StreamOwned::new(session, stream), &socket, trusted, desk)
         }
-        None => answer(stream, &socket, key, seated),
+        None => answer(stream, &socket, trusted, desk),
     }
 }
 
-/// Serves the page, or gives the seat to a browser that holds the key. `socket` is the
-/// connection underneath `stream`.
+/// Serves the page, gives the seat to a browser that holds the key, or carries a robot or
+/// program that holds it to the Realtime API. `socket` is the connection underneath `stream`.
 fn answer(
     mut stream: impl Stream + 'static,
     socket: &TcpStream,
-    key: &str,
-    seated: &Arc<AtomicBool>,
+    trusted: bool,
+    desk: &Arc<Desk>,
 ) -> Result<Option<(Socket, Seat)>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
-    let (target, accept, head) = loop {
+    let (target, accept, bearer, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
@@ -310,57 +334,105 @@ fn answer(
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut parsed = httparse::Request::new(&mut headers);
         if let httparse::Status::Complete(head) = parsed.parse(&request)? {
-            let accept = parsed
-                .headers
-                .iter()
-                .find(|header| header.name.eq_ignore_ascii_case("Sec-WebSocket-Key"))
-                .map(|header| derive_accept_key(header.value));
+            let header = |name: &str| {
+                let mut headers = parsed.headers.iter();
+                headers.find(|header| header.name.eq_ignore_ascii_case(name))
+            };
+            let accept = header("Sec-WebSocket-Key").map(|key| derive_accept_key(key.value));
+            // Programs built for OpenAI send the key as their API key.
+            let bearer = header("Authorization")
+                .and_then(|sent| sent.value.strip_prefix(b"Bearer "))
+                .map(|key| String::from_utf8_lossy(key).into_owned());
             let target = parsed.path.filter(|_| parsed.method == Some("GET"));
-            break (target.unwrap_or_default().to_owned(), accept, head);
+            break (target.unwrap_or_default().to_owned(), accept, bearer, head);
         }
     };
-    let (status, body) = match (target.as_str(), accept) {
-        ("/", None) => ("200 OK", PAGE),
-        (target, Some(accept))
-            if target
-                .strip_prefix("/talk?key=")
-                .is_some_and(|given| same(given, key)) =>
-        {
-            if seated.swap(true, Ordering::SeqCst) {
-                ("409 Conflict", "")
-            } else {
-                // Held from here on, so a handshake that fails frees the seat again.
-                let seat = Seat(Arc::clone(seated));
-                write!(
-                    stream,
-                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-                )?;
-                stream.flush()?;
-                socket.set_nodelay(true)?;
-                // The device sends queued speech between reads.
-                socket.set_read_timeout(Some(Duration::from_millis(10)))?;
-                let config = WebSocketConfig::default()
-                    .max_message_size(Some(MAX_MESSAGE))
-                    .max_frame_size(Some(MAX_MESSAGE));
-                let stream: Box<dyn Stream> = Box::new(stream);
-                let socket = WebSocket::from_partially_read(
-                    stream,
-                    request.split_off(head),
-                    Role::Server,
-                    Some(config),
-                );
-                return Ok(Some((socket, seat)));
-            }
-        }
-        _ => ("404 Not Found", ""),
+    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
+    let keyed = query
+        .split('&')
+        .filter_map(|pair| pair.strip_prefix("key="))
+        .chain(bearer.as_deref())
+        .any(|given| same(given, &desk.key));
+    let mut respond = |status: &str, body: &str| -> Result<Option<(Socket, Seat)>> {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )?;
+        stream.flush()?;
+        Ok(None)
     };
+    let (accept, realtime) = match (path, accept, desk.realtime) {
+        ("/", None, _) if trusted => return respond("200 OK", PAGE),
+        ("/talk", Some(accept), _) if trusted && keyed => (accept, None),
+        ("/v1/realtime", Some(accept), Some(realtime)) if keyed => (accept, Some(realtime)),
+        _ => return respond("404 Not Found", ""),
+    };
+    if desk.seated.swap(true, Ordering::SeqCst) {
+        return respond("409 Conflict", "");
+    }
+    // Held from here on, so a handshake that fails frees the seat again.
+    let seat = Seat(Arc::clone(desk));
+    if let Some(realtime) = realtime {
+        eprintln!("A robot or program connected.");
+        let ended = relay(stream, socket, realtime, &request);
+        eprintln!("The robot or program disconnected.");
+        return ended.map(|()| None);
+    }
     write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
     )?;
     stream.flush()?;
-    Ok(None)
+    socket.set_nodelay(true)?;
+    // The device sends queued speech between reads.
+    socket.set_read_timeout(Some(Duration::from_millis(10)))?;
+    let config = WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE))
+        .max_frame_size(Some(MAX_MESSAGE));
+    let stream: Box<dyn Stream> = Box::new(stream);
+    let socket =
+        WebSocket::from_partially_read(stream, request.split_off(head), Role::Server, Some(config));
+    Ok(Some((socket, seat)))
+}
+
+/// Carries a connection to the model server's Realtime API byte for byte, from the request
+/// already read, until either side closes. The model server answers the handshake itself.
+fn relay(
+    mut visitor: impl Stream,
+    socket: &TcpStream,
+    realtime: SocketAddr,
+    request: &[u8],
+) -> Result<()> {
+    let mut server = TcpStream::connect_timeout(&realtime, Duration::from_secs(2))?;
+    server.write_all(request)?;
+    // Each side is read in turn, for a few milliseconds at a time.
+    for side in [socket, &server] {
+        side.set_nodelay(true)?;
+        side.set_read_timeout(Some(Duration::from_millis(5)))?;
+        side.set_write_timeout(Some(Duration::from_secs(5)))?;
+    }
+    let mut buffer = [0; 16 * 1024];
+    while pass(&mut visitor, &mut server, &mut buffer)?
+        && pass(&mut server, &mut visitor, &mut buffer)?
+    {}
+    Ok(())
+}
+
+/// Moves what `from` has ready to `to`. False once `from` has closed.
+fn pass(from: &mut impl Read, to: &mut impl Write, buffer: &mut [u8]) -> io::Result<bool> {
+    match from.read(buffer) {
+        Ok(0) => Ok(false),
+        Ok(read) => {
+            to.write_all(&buffer[..read])?;
+            to.flush()?;
+            Ok(true)
+        }
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Compares without stopping at the first difference.
@@ -380,11 +452,55 @@ mod tests {
 
     type Page<S = TcpStream> = WebSocket<S>;
 
-    /// A door that only this computer can reach.
+    /// A door that only this computer can reach, in front of a model without a Realtime API.
     fn local() -> (Door, String) {
-        let (door, links) = Door::bind(0, Path::new("unused"), None).unwrap();
-        assert!(links.network.is_none());
+        let (door, links) = Door::bind(0, Path::new("unused"), None, None).unwrap();
+        assert!(links.network.is_none() && links.realtime.is_none());
         (door, links.here)
+    }
+
+    /// A stand-in for a model server's Realtime API: it greets, then echoes.
+    fn model_server() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                thread::spawn(move || {
+                    let mut socket = tungstenite::accept(stream).unwrap();
+                    socket.send("created".into()).unwrap();
+                    while let Ok(message) = socket.read() {
+                        if message.is_text() {
+                            socket.send(message).unwrap();
+                        }
+                    }
+                });
+            }
+        });
+        address
+    }
+
+    /// Connects as a robot or program would, with the key in the address or as an API key.
+    fn realtime(link: &str, query: &str, bearer: Option<&str>) -> tungstenite::Result<Page> {
+        use tungstenite::client::IntoClientRequest;
+        let url = format!("ws://{}/v1/realtime{query}", address(link));
+        let mut request = url.into_client_request().unwrap();
+        if let Some(bearer) = bearer {
+            let value = format!("Bearer {bearer}").parse().unwrap();
+            request.headers_mut().insert("Authorization", value);
+        }
+        handshake(request, TcpStream::connect(address(link)).unwrap())
+    }
+
+    fn handshake<S: Read + Write>(
+        request: impl tungstenite::client::IntoClientRequest,
+        stream: S,
+    ) -> tungstenite::Result<Page<S>> {
+        tungstenite::client(request, stream)
+            .map(|(socket, _)| socket)
+            .map_err(|error| match error {
+                tungstenite::HandshakeError::Failure(error) => error,
+                tungstenite::HandshakeError::Interrupted(_) => unreachable!("blocking socket"),
+            })
     }
 
     fn request(link: &str, text: &str) -> String {
@@ -405,13 +521,7 @@ mod tests {
     }
 
     fn talk<S: Read + Write>(link: &str, key: &str, stream: S) -> tungstenite::Result<Page<S>> {
-        let url = format!("ws://{}/talk?key={key}", address(link));
-        tungstenite::client(url, stream)
-            .map(|(socket, _)| socket)
-            .map_err(|error| match error {
-                tungstenite::HandshakeError::Failure(error) => error,
-                tungstenite::HandshakeError::Interrupted(_) => unreachable!("blocking socket"),
-            })
+        handshake(format!("ws://{}/talk?key={key}", address(link)), stream)
     }
 
     fn plain(link: &str, key: &str) -> tungstenite::Result<Page> {
@@ -513,7 +623,7 @@ mod tests {
         let cache = std::env::temp_dir().join(format!("boubou-serve-{}", std::process::id()));
         // Loopback stands in for the Wi-Fi address.
         let network = Ipv4Addr::LOCALHOST;
-        let (door, links) = Door::bind(0, &cache, Some(network)).unwrap();
+        let (door, links) = Door::bind(0, &cache, Some(network), None).unwrap();
         let link = links.network.unwrap();
         assert!(link.starts_with("https://127.0.0.1:"), "{link}");
 
@@ -548,7 +658,7 @@ mod tests {
         assert!(request(&links.here, "GET / HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 200 "));
 
         // A later start presents the same certificate, so a browser's trust carries over.
-        Door::bind(0, &cache, Some(network)).unwrap();
+        Door::bind(0, &cache, Some(network), None).unwrap();
         assert_eq!(fs::read(&stored).unwrap(), certificate);
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &fs::metadata(stored.with_file_name("key.der"))
@@ -579,15 +689,62 @@ mod tests {
     }
 
     #[test]
-    fn the_network_is_welcome_only_encrypted_and_only_from_private_addresses() {
-        let welcome = |peer: &str, encrypted| welcome(peer.parse().unwrap(), encrypted);
-        assert!(welcome("127.0.0.1", false) && welcome("127.0.0.1", true));
+    fn robots_and_programs_are_carried_to_the_realtime_api() {
+        let model = Some(model_server());
+        let (door, links) = Door::bind(0, Path::new("unused"), None, model).unwrap();
+        let link = links.realtime.unwrap();
+        let key = key(&links.here);
+        assert_eq!(link.split("key=").nth(1), Some(key));
+        assert_eq!(status(realtime(&link, "", None)), 404);
+        assert_eq!(status(realtime(&link, "?key=wrong", Some("wrong"))), 404);
+        // A model without a Realtime API has nothing to offer them.
+        let (_other, other) = local();
+        let other_key = format!("?key={}", self::key(&other));
+        assert_eq!(status(realtime(&other, &other_key, None)), 404);
+
+        let mut robot = realtime(&link, &format!("?model=any&key={key}"), None).unwrap();
+        assert_eq!(robot.read().unwrap().to_text().unwrap(), "created");
+        robot.send("hello".into()).unwrap();
+        assert_eq!(robot.read().unwrap().to_text().unwrap(), "hello");
+        assert_eq!(
+            status(plain(&links.here, key)),
+            409,
+            "One visitor at a time"
+        );
+        robot.close(None).unwrap();
+        drop(robot);
+
+        // Once it has left, a program that sends the key as its API key takes the seat.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut program = loop {
+            match realtime(&link, "", Some(key)) {
+                Ok(program) => break program,
+                refused => assert_eq!(status(refused), 409),
+            }
+            assert!(Instant::now() < deadline, "The seat was never freed");
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert_eq!(program.read().unwrap().to_text().unwrap(), "created");
+        // Neither took the conversation's audio device.
+        let stopped = AtomicBool::new(false);
+        let idle = || {
+            stopped.store(true, Ordering::SeqCst);
+            Ok(())
+        };
+        assert!(door.wait(&stopped, idle).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_network_reaches_the_page_only_encrypted_and_only_from_private_addresses() {
+        let trusted = |peer: &str, encrypted| trusted(peer.parse().unwrap(), encrypted);
+        assert_eq!(trusted("127.0.0.1", false), Some(true));
         for private in ["192.168.1.7", "10.0.0.9", "172.16.3.4"] {
-            assert!(welcome(private, true), "{private}");
-            assert!(!welcome(private, false), "{private} without encryption");
+            assert_eq!(trusted(private, true), Some(true), "{private}");
+            // Enough for a robot with the key, not for the page.
+            assert_eq!(trusted(private, false), Some(false), "{private}");
         }
         for elsewhere in ["8.8.8.8", "100.100.1.1", "198.18.0.1", "2001:db8::1"] {
-            assert!(!welcome(elsewhere, true), "{elsewhere}");
+            assert_eq!(trusted(elsewhere, true), None, "{elsewhere}");
         }
         if let Some(address) = network_address() {
             assert!(address.is_private());
