@@ -72,6 +72,19 @@ Images can be PNG or JPEG up to 2048 × 2048. Videos can be MP4 or MOV with a
 constant frame rate, up to 10 seconds, 512 × 512 and 60 fps, and need
 `ffmpeg` and `ffprobe` installed. Files are limited to 64 MiB.
 
+`serve` moves the microphone and speakers to a page in a browser on the same
+computer:
+
+```sh
+boubou serve LFM3-Audio-2B
+```
+
+Open the link it prints, allow the microphone and talk. The page relies on the
+browser's echo cancellation, and interrupting starts to work two seconds into
+the first reply. Boubou accepts connections from this computer only, and one
+page talks at a time. The link carries a key that changes on every start.
+`--port` picks another port than 2682.
+
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or

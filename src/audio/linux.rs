@@ -4,6 +4,8 @@
 //! speech, so a conversation can keep listening while it speaks.
 
 use super::CapturedAudio;
+#[cfg(target_os = "linux")]
+use super::{Device, Gate, Speech};
 use anyhow::{Result, bail};
 use std::{
     collections::VecDeque,
@@ -29,6 +31,7 @@ const PLAYBACK_RATE: u32 = 24_000;
 /// 20 ms at 16 kHz, the frame the conversation loop consumes.
 const FRAME: usize = 320;
 /// The echo canceller works on 10 ms chunks.
+#[cfg(target_os = "linux")]
 const RENDER_CHUNK: usize = PLAYBACK_RATE as usize / 100;
 #[cfg(target_os = "linux")]
 const CAPTURE_CHUNK: usize = CAPTURE_RATE as usize / 100;
@@ -124,24 +127,26 @@ impl Audio {
         };
         Ok((audio, receiver))
     }
+}
 
-    /// Schedules PCM16 mono audio at 24 kHz.
-    pub fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
+#[cfg(target_os = "linux")]
+impl Device for Audio {
+    fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
         self.check_error()?;
         self.playback.lock().expect("audio playback lock").push(pcm)
     }
 
-    /// Discards scheduled speech; the device plays out at most its current buffer.
-    pub fn clear(&mut self) -> Result<()> {
+    /// The device plays out at most its current buffer.
+    fn clear(&mut self) -> Result<()> {
         self.playback.lock().expect("audio playback lock").0.clear();
         Ok(())
     }
 
-    pub fn pending_samples(&self) -> usize {
+    fn pending_samples(&self) -> usize {
         self.playback.lock().expect("audio playback lock").0.len()
     }
 
-    pub fn check_error(&self) -> Result<()> {
+    fn check_error(&self) -> Result<()> {
         if let Some(message) = self.error.lock().expect("audio error lock").as_ref() {
             bail!("{message}");
         }
@@ -202,7 +207,8 @@ impl Echo {
         for &sample in pcm {
             self.rendered.push(sample);
             if self.rendered.len() == RENDER_CHUNK {
-                self.gate.render(&self.rendered);
+                self.gate
+                    .render(self.rendered.iter().any(|&sample| sample != 0));
                 self.canceller
                     .process_render_i16(&self.rendered, &mut processed)?;
                 self.rendered.clear();
@@ -218,73 +224,6 @@ impl Echo {
             self.canceller.process_capture_i16(&input, chunk)?;
         }
         Ok(())
-    }
-}
-
-/// Neural speech detection on the echo-cancelled microphone, in 16 ms windows.
-#[cfg(target_os = "linux")]
-#[derive(Default)]
-struct Speech {
-    detector: earshot::Detector,
-    window: Vec<i16>,
-}
-
-#[cfg(target_os = "linux")]
-impl Speech {
-    /// The highest speech probability among windows completed by these samples.
-    fn push(&mut self, pcm: &[i16]) -> f32 {
-        let mut score = 0.0_f32;
-        for &sample in pcm {
-            self.window.push(sample);
-            if self.window.len() == 256 {
-                score = score.max(self.detector.predict_i16(&self.window));
-                self.window.clear();
-            }
-        }
-        score
-    }
-}
-
-/// AEC3 needs about a second of reply to find the echo path. Until two seconds of audible
-/// reply have played, speech counts only after half a second without playback. Even then,
-/// echo can leak through briefly as a reply starts or resumes, so speech over it must be clear.
-struct Gate {
-    audible: u32,
-    quiet: u32,
-}
-
-impl Gate {
-    /// In 10 ms playback chunks.
-    const CONVERGED: u32 = 200;
-    const SETTLED: u32 = 50;
-    /// Speech probabilities; echo leaks in a real room scored up to 0.75, people over 0.8.
-    const SPEECH: f32 = 0.5;
-    const OVER_REPLY: f32 = 0.8;
-
-    fn render(&mut self, chunk: &[i16]) {
-        if chunk.iter().any(|&sample| sample != 0) {
-            self.audible = self.audible.saturating_add(1);
-            self.quiet = 0;
-        } else {
-            self.quiet = self.quiet.saturating_add(1);
-        }
-    }
-
-    fn near_end(&self, score: f32) -> bool {
-        if self.quiet >= Self::SETTLED {
-            score >= Self::SPEECH
-        } else {
-            self.audible >= Self::CONVERGED && score >= Self::OVER_REPLY
-        }
-    }
-}
-
-impl Default for Gate {
-    fn default() -> Self {
-        Self {
-            audible: 0,
-            quiet: Self::SETTLED,
-        }
     }
 }
 
@@ -386,38 +325,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("30-second playback queue")
-        );
-    }
-
-    #[test]
-    fn speech_interrupts_playback_only_once_cancelled_and_clear() {
-        let mut gate = Gate::default();
-        assert!(gate.near_end(0.6), "nothing has played yet");
-        assert!(!gate.near_end(0.4));
-        for _ in 0..10 {
-            gate.render(&[1000; RENDER_CHUNK]);
-        }
-        assert!(
-            !gate.near_end(0.95),
-            "the first reply's echo is not cancelled yet"
-        );
-        for _ in 0..Gate::SETTLED {
-            gate.render(&[0; RENDER_CHUNK]);
-        }
-        assert!(
-            gate.near_end(0.6),
-            "a turn may start once playback has stopped"
-        );
-        for _ in 0..Gate::CONVERGED {
-            gate.render(&[1000; RENDER_CHUNK]);
-        }
-        assert!(
-            !gate.near_end(0.75),
-            "a leak of echo does not interrupt playback"
-        );
-        assert!(
-            gate.near_end(0.9),
-            "after convergence, clear speech interrupts playback"
         );
     }
 

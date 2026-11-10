@@ -1,5 +1,6 @@
 #[cfg(any(target_os = "linux", test))]
 mod linux;
+mod remote;
 
 #[cfg(target_os = "macos")]
 use anyhow::{Context, bail, ensure};
@@ -24,6 +25,7 @@ use std::{io::Read, time::Instant};
 
 #[cfg(target_os = "linux")]
 pub use linux::Audio;
+pub use remote::Remote;
 
 pub struct CapturedAudio {
     pub samples: Vec<i16>,
@@ -36,6 +38,83 @@ pub enum CaptureFrame {
     /// 20 ms of mono PCM16 at 16 kHz, echo-cancelled on macOS.
     Samples(CapturedAudio),
     Error(String),
+}
+
+/// What a conversation needs from the device that hears and speaks for it.
+pub trait Device {
+    /// Schedules PCM16 mono audio at 24 kHz.
+    fn enqueue(&mut self, pcm: &[i16]) -> Result<()>;
+    /// Discards scheduled audio that has not played yet.
+    fn clear(&mut self) -> Result<()>;
+    fn pending_samples(&self) -> usize;
+    /// Must be checked by the session loop even when the capture channel is full.
+    fn check_error(&self) -> Result<()>;
+}
+
+/// Neural speech detection on an echo-cancelled microphone, in 16 ms windows.
+#[derive(Default)]
+struct Speech {
+    detector: earshot::Detector,
+    window: Vec<i16>,
+}
+
+impl Speech {
+    /// The highest speech probability among windows completed by these samples.
+    fn push(&mut self, pcm: &[i16]) -> f32 {
+        let mut score = 0.0_f32;
+        for &sample in pcm {
+            self.window.push(sample);
+            if self.window.len() == 256 {
+                score = score.max(self.detector.predict_i16(&self.window));
+                self.window.clear();
+            }
+        }
+        score
+    }
+}
+
+/// An echo canceller needs about a second of reply to find the echo path. Until two seconds of
+/// audible reply have played, speech counts only after half a second without playback. Even then,
+/// echo can leak through briefly as a reply starts or resumes, so speech over it must be clear.
+struct Gate {
+    audible: u32,
+    quiet: u32,
+}
+
+impl Gate {
+    /// In 10 ms playback chunks.
+    const CONVERGED: u32 = 200;
+    const SETTLED: u32 = 50;
+    /// Speech probabilities; echo leaks in a real room scored up to 0.75, people over 0.8.
+    const SPEECH: f32 = 0.5;
+    const OVER_REPLY: f32 = 0.8;
+
+    /// Counts one 10 ms playback chunk.
+    fn render(&mut self, audible: bool) {
+        if audible {
+            self.audible = self.audible.saturating_add(1);
+            self.quiet = 0;
+        } else {
+            self.quiet = self.quiet.saturating_add(1);
+        }
+    }
+
+    fn near_end(&self, score: f32) -> bool {
+        if self.quiet >= Self::SETTLED {
+            score >= Self::SPEECH
+        } else {
+            self.audible >= Self::CONVERGED && score >= Self::OVER_REPLY
+        }
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            audible: 0,
+            quiet: Self::SETTLED,
+        }
+    }
 }
 
 /// Owns the native audio process and its bounded capture and playback queues.
@@ -215,8 +294,20 @@ impl Audio {
         }
     }
 
-    /// Schedules PCM16 mono audio at 24 kHz. Playback progress comes from the device.
-    pub fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
+    fn command(&mut self, kind: u8, payload: &[u8]) -> Result<()> {
+        self.input.write_all(&[kind])?;
+        self.input
+            .write_all(&(payload.len() as u32).to_le_bytes())?;
+        self.input.write_all(payload)?;
+        self.input.flush()?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Device for Audio {
+    /// Playback progress comes from the device.
+    fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
         self.check_error()?;
         if pcm.is_empty() {
             return Ok(());
@@ -239,8 +330,8 @@ impl Audio {
             .context("Could not send speech to the audio device")
     }
 
-    /// Discards scheduled audio and stops the currently playing native buffer.
-    pub fn clear(&mut self) -> Result<()> {
+    /// Also stops the currently playing native buffer.
+    fn clear(&mut self) -> Result<()> {
         let mut state = self.playback.lock().expect("audio playback lock");
         let epoch = state.clear();
         drop(state);
@@ -251,24 +342,14 @@ impl Audio {
         Ok(())
     }
 
-    pub fn pending_samples(&self) -> usize {
+    fn pending_samples(&self) -> usize {
         self.playback.lock().expect("audio playback lock").pending
     }
 
-    /// Must be checked by the session loop even when the capture channel is full.
-    pub fn check_error(&self) -> Result<()> {
+    fn check_error(&self) -> Result<()> {
         if let Some(message) = self.error.lock().expect("audio error lock").as_ref() {
             bail!("{message}");
         }
-        Ok(())
-    }
-
-    fn command(&mut self, kind: u8, payload: &[u8]) -> Result<()> {
-        self.input.write_all(&[kind])?;
-        self.input
-            .write_all(&(payload.len() as u32).to_le_bytes())?;
-        self.input.write_all(payload)?;
-        self.input.flush()?;
         Ok(())
     }
 }
@@ -531,6 +612,38 @@ mod tests {
         assert_eq!(playback.pending, 160);
         playback.acknowledge(epoch, 320);
         assert_eq!(playback.pending, 0);
+    }
+
+    #[test]
+    fn speech_interrupts_playback_only_once_cancelled_and_clear() {
+        let mut gate = Gate::default();
+        assert!(gate.near_end(0.6), "nothing has played yet");
+        assert!(!gate.near_end(0.4));
+        for _ in 0..10 {
+            gate.render(true);
+        }
+        assert!(
+            !gate.near_end(0.95),
+            "the first reply's echo is not cancelled yet"
+        );
+        for _ in 0..Gate::SETTLED {
+            gate.render(false);
+        }
+        assert!(
+            gate.near_end(0.6),
+            "a turn may start once playback has stopped"
+        );
+        for _ in 0..Gate::CONVERGED {
+            gate.render(true);
+        }
+        assert!(
+            !gate.near_end(0.75),
+            "a leak of echo does not interrupt playback"
+        );
+        assert!(
+            gate.near_end(0.9),
+            "after convergence, clear speech interrupts playback"
+        );
     }
 
     #[test]

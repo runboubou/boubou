@@ -16,6 +16,7 @@ mod profiles;
 mod progress;
 mod qwen;
 mod realtime;
+mod serve;
 mod talk;
 mod tui;
 mod voice;
@@ -33,7 +34,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
-        mpsc::TryRecvError,
+        mpsc::{Receiver, TryRecvError},
     },
     time::{Duration, Instant},
 };
@@ -73,6 +74,17 @@ enum Action {
         /// Save spoken replies to a PCM16 mono 24 kHz WAV (requires --input).
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
+    },
+    /// Talk with a model through a page in a browser on this computer.
+    Serve {
+        #[arg(value_parser = profiles::value_parser())]
+        model: profiles::Model,
+        /// Use cached assets only. Never download or check for updates.
+        #[arg(long)]
+        offline: bool,
+        /// The local port that serves the page.
+        #[arg(long, default_value_t = 2682)]
+        port: u16,
     },
     /// Download and verify the selected model and its inference backend.
     Pull {
@@ -317,7 +329,7 @@ fn run() -> Result<()> {
                         io::stdin().is_terminal(),
                         "Qwen voice chat needs a terminal."
                     );
-                    return qwen::run(id, &cache, offline);
+                    return qwen::run(id, &cache, offline, None);
                 }
             };
             if input.is_empty() {
@@ -328,34 +340,35 @@ fn run() -> Result<()> {
             }
             // Validate file inputs before downloading models or acquiring audio devices.
             let turns: Vec<Vec<i16>> = input.iter().map(|p| read_wav(p)).collect::<Result<_>>()?;
-            let files = assets::prepare(model, &cache, offline)?;
-            let stopped = Arc::new(AtomicBool::new(false));
-            let flag = stopped.clone();
-            ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
-            check_cancel(&stopped)?;
-            let backend = backend::Backend::start(&files, &cache, &stopped)?;
-            let converse = |chat: &mut dyn Conversation| {
+            with_liquid(model, &cache, offline, |chat, stopped| {
                 if turns.is_empty() {
-                    microphone(&cache, chat, &stopped, manual, model.voice_chat_language)
+                    microphone(&cache, chat, stopped, manual, model.voice_chat_language)
                 } else {
-                    from_files(turns, output.as_deref(), chat, &stopped)
+                    from_files(turns, output.as_deref(), chat, stopped)
                 }
-            };
-            let result = match model.protocol {
-                profiles::Protocol::Realtime => {
-                    let mut connection = {
-                        let _progress =
-                            progress::Progress::new("Connecting the voice session", None);
-                        Realtime::connect(&backend.address, files.profile, &stopped)?
-                    };
-                    converse(&mut connection).map_err(|error| backend.explain_failure(error))
+            })
+        }
+        Action::Serve {
+            model,
+            offline,
+            port,
+        } => {
+            ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
+            let _checklist = checklist(
+                format!("boubou serve {}", model.id()),
+                check.take(),
+                model,
+                &cache,
+                true,
+            );
+            match model {
+                profiles::Model::Liquid(profile) => {
+                    with_liquid(profile, &cache, offline, |chat, stopped| {
+                        from_browser(port, chat, stopped)
+                    })
                 }
-                profiles::Protocol::LiquidAudio { .. } => {
-                    converse(&mut liquid::Liquid::new(files, cache.clone(), backend))
-                }
-            };
-            check_cancel(&stopped)?;
-            result
+                profiles::Model::Qwen(id) => qwen::run(id, &cache, offline, Some(port)),
+            }
         }
     })();
     #[cfg(target_os = "macos")]
@@ -365,7 +378,37 @@ fn run() -> Result<()> {
     result
 }
 
-/// The startup checklist for `run` and `pull` on a terminal.
+/// Loads a Liquid model and lends its conversation to `converse`.
+fn with_liquid(
+    model: &'static profiles::Profile,
+    cache: &Path,
+    offline: bool,
+    converse: impl FnOnce(&mut dyn Conversation, &AtomicBool) -> Result<()>,
+) -> Result<()> {
+    let files = assets::prepare(model, cache, offline)?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = stopped.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
+    check_cancel(&stopped)?;
+    let backend = backend::Backend::start(&files, cache, &stopped)?;
+    let result = match model.protocol {
+        profiles::Protocol::Realtime => {
+            let mut connection = {
+                let _progress = progress::Progress::new("Connecting the voice session", None);
+                Realtime::connect(&backend.address, files.profile, &stopped)?
+            };
+            converse(&mut connection, &stopped).map_err(|error| backend.explain_failure(error))
+        }
+        profiles::Protocol::LiquidAudio { .. } => converse(
+            &mut liquid::Liquid::new(files, cache.to_path_buf(), backend),
+            &stopped,
+        ),
+    };
+    check_cancel(&stopped)?;
+    result
+}
+
+/// The startup checklist for `run`, `serve` and `pull` on a terminal.
 fn checklist(
     command: String,
     check: Option<String>,
@@ -602,6 +645,32 @@ fn microphone(
     if !progress::finish(&crate::progress::ready(language)) {
         eprintln!("Ready. Speak {language}.");
     }
+    converse(&mut audio, &captured, chat, stopped, manual)
+}
+
+/// Lends the conversation to one browser page at a time, until Ctrl+C.
+fn from_browser(port: u16, chat: &mut dyn Conversation, stopped: &AtomicBool) -> Result<()> {
+    let door = serve::Door::open(port)?;
+    while let Some((mut browser, captured)) = door.wait(stopped, || chat.poll().map(drop))? {
+        let result = converse(&mut browser, &captured, chat, stopped, false);
+        if !browser.left() {
+            return result;
+        }
+        // Whatever the page was in the middle of ends with it.
+        chat.interrupt()?;
+        chat.end_input_without_response()?;
+    }
+    Ok(())
+}
+
+/// One conversation through an audio device, until it is stopped or the device fails.
+fn converse(
+    audio: &mut dyn audio::Device,
+    captured: &Receiver<audio::CaptureFrame>,
+    chat: &mut dyn Conversation,
+    stopped: &AtomicBool,
+    manual: bool,
+) -> Result<()> {
     let _terminal = Terminal::enter()?;
     let mut panel = talk::Panel::new(manual);
     panel.note(talk::Note::Intro);
@@ -1013,11 +1082,13 @@ mod tests {
 
     #[test]
     fn model_name_is_explicit_and_matches_the_upstream_model() {
-        for command in ["run", "pull"] {
+        for command in ["run", "serve", "pull"] {
             for profile in profiles::PROFILES {
                 let cli = Cli::try_parse_from(["boubou", command, profile.id]).unwrap();
                 let selected = match cli.command.unwrap() {
-                    Action::Run { model, .. } | Action::Pull { model, .. } => model,
+                    Action::Run { model, .. }
+                    | Action::Serve { model, .. }
+                    | Action::Pull { model, .. } => model,
                     _ => unreachable!(),
                 };
                 assert!(

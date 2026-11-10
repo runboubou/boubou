@@ -15,9 +15,12 @@ clap = { version = "4.5", features = ["derive", "env"] }
 crossterm = "0.29"
 ctrlc = { version = "3.4", features = ["termination"] }
 dirs = "7"
+# Speech detection for audio that arrives without the platform's own: Linux and browsers.
+earshot = "1.2"
 flate2 = "1"
 fs2 = "0.4"
 hound = "3.5"
+httparse = "1"
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
@@ -28,11 +31,10 @@ tar = "0.4"
 tungstenite = "0.30"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2"] }
 
-# Linux plays and records through the default ALSA devices (PipeWire or PulseAudio),
-# cancels the reply's echo with WebRTC AEC3 and detects speech, all in-process.
+# Linux plays and records through the default ALSA devices (PipeWire or PulseAudio)
+# and cancels the reply's echo with WebRTC AEC3, all in-process.
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.18"
-earshot = "1.2"
 sonora = "0.3"
 
 [profile.release]

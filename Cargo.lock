@@ -149,6 +149,7 @@ dependencies = [
  "flate2",
  "fs2",
  "hound",
+ "httparse",
  "libc",
  "reqwest",
  "serde",
