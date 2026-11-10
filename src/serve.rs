@@ -17,7 +17,7 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tungstenite::{
     WebSocket,
@@ -70,7 +70,8 @@ impl Door {
         let mut key = [0; 16];
         File::open("/dev/urandom")?.read_exact(&mut key)?;
         let key: Arc<str> = crate::assets::hex(&key).into();
-        let link = format!("http://localhost:{}/#{key}", listener.local_addr()?.port());
+        // The literal address: `localhost` may resolve to IPv6 first, where nothing listens.
+        let link = format!("http://{}/#{key}", listener.local_addr()?);
         let (admitted, arrivals) = mpsc::channel();
         let seated = Arc::new(AtomicBool::new(false));
         thread::Builder::new()
@@ -122,12 +123,13 @@ fn answer(
 ) -> Result<Option<(Socket, Seat)>> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
     let (target, accept, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
-            read > 0 && request.len() + read <= 8192,
+            read > 0 && request.len() + read <= 8192 && Instant::now() < deadline,
             "Not an HTTP request"
         );
         request.extend_from_slice(&chunk[..read]);
@@ -198,7 +200,6 @@ fn same(given: &str, key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::audio::Device;
-    use std::time::Instant;
 
     fn request(link: &str, text: &str) -> String {
         let mut stream = TcpStream::connect(address(link)).unwrap();

@@ -24,14 +24,10 @@ const CHUNK: usize = 2_400;
 /// A connected page streams its microphone and reports playback continuously.
 const UNRESPONSIVE: Duration = Duration::from_secs(5);
 
-enum Command {
-    Play(Vec<i16>),
-    Clear(u64),
-}
-
 /// Owns one browser connection; dropping it closes the connection.
 pub struct Remote {
-    commands: Sender<Command>,
+    /// Messages for the page: binary speech, or the playback epoch that replaces what it holds.
+    outgoing: Sender<Message>,
     playback: Arc<Mutex<Playback>>,
     gone: Arc<AtomicBool>,
 }
@@ -43,7 +39,7 @@ impl Remote {
         socket: WebSocket<S>,
         held: impl Send + 'static,
     ) -> (Self, Receiver<CaptureFrame>) {
-        let (commands, queued) = mpsc::channel();
+        let (outgoing, queued) = mpsc::channel();
         let (frames, captured) = mpsc::sync_channel(64);
         let playback = Arc::new(Mutex::new(Playback::default()));
         let gone = Arc::new(AtomicBool::new(false));
@@ -57,7 +53,7 @@ impl Remote {
             ended.store(true, Ordering::SeqCst);
         });
         let remote = Self {
-            commands,
+            outgoing,
             playback,
             gone,
         };
@@ -74,15 +70,17 @@ impl Device for Remote {
     fn enqueue(&mut self, pcm: &[i16]) -> Result<()> {
         self.playback.lock().expect("audio playback lock").pending += pcm.len();
         for chunk in pcm.chunks(CHUNK) {
+            let bytes: Vec<u8> = chunk.iter().copied().flat_map(i16::to_le_bytes).collect();
             // A browser that left is reported by `check_error`.
-            let _ = self.commands.send(Command::Play(chunk.to_vec()));
+            let _ = self.outgoing.send(Message::Binary(bytes.into()));
         }
         Ok(())
     }
 
     fn clear(&mut self) -> Result<()> {
         let epoch = self.playback.lock().expect("audio playback lock").clear();
-        let _ = self.commands.send(Command::Clear(epoch));
+        let clear = json!({"clear": epoch}).to_string();
+        let _ = self.outgoing.send(Message::Text(clear.into()));
         Ok(())
     }
 
@@ -99,7 +97,7 @@ impl Device for Remote {
 /// Sends queued speech and reads microphone frames and playback reports until either side leaves.
 fn exchange<S: Read + Write>(
     mut socket: WebSocket<S>,
-    commands: &Receiver<Command>,
+    outgoing: &Receiver<Message>,
     frames: &SyncSender<CaptureFrame>,
     playback: &Mutex<Playback>,
 ) -> Result<()> {
@@ -108,22 +106,15 @@ fn exchange<S: Read + Write>(
     let mut played = Instant::now();
     loop {
         loop {
-            let message = match commands.try_recv() {
-                Ok(Command::Play(pcm)) => {
-                    let bytes: Vec<u8> = pcm.into_iter().flat_map(i16::to_le_bytes).collect();
-                    Message::Binary(bytes.into())
-                }
-                Ok(Command::Clear(epoch)) => {
-                    Message::Text(json!({"clear": epoch}).to_string().into())
-                }
+            match outgoing.try_recv() {
+                Ok(message) => socket.send(message)?,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     let _ = socket.close(None);
                     let _ = socket.flush();
                     return Ok(());
                 }
-            };
-            socket.send(message)?;
+            }
         }
         let playing = playback.lock().expect("audio playback lock").pending > 0;
         if !playing {
@@ -303,6 +294,25 @@ mod tests {
         browser.send(Message::Binary(vec![0; 100].into())).unwrap();
         until("the frame to be rejected", || remote.left());
         assert!(captured.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_page_that_stops_streaming_or_never_plays_is_released() {
+        let (silent, _captured, _browser) = connect();
+        // This page keeps its microphone streaming but never reports the speech as played.
+        let (mut stuck, captured, mut browser) = connect();
+        stuck.enqueue(&[1; 480]).unwrap();
+        let began = Instant::now();
+        while !(silent.left() && stuck.left()) {
+            assert!(
+                began.elapsed() < UNRESPONSIVE + Duration::from_secs(3),
+                "An unresponsive page kept its connection"
+            );
+            let _ = browser.send(Message::Binary(vec![0; FRAME_BYTES].into()));
+            captured.try_iter().for_each(drop);
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(began.elapsed() >= UNRESPONSIVE - Duration::from_millis(100));
     }
 
     #[test]

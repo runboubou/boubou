@@ -74,6 +74,7 @@
       talk.socket.close();
     }
     talk.stream?.getTracks().forEach((track) => track.stop());
+    talk.playing.clear();
     for (const context of [talk.microphone, talk.speaker]) {
       if (context && context.state !== 'closed') context.close();
     }
