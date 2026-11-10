@@ -221,6 +221,11 @@ fn network_address() -> Option<Ipv4Addr> {
 fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
     let folder = cache.join("serve").join(address.to_string());
     let (certificate, key) = (folder.join("certificate.der"), folder.join("key.der"));
+    // Held until the pair is read: two starts at once must not mix one's key with the other's
+    // certificate.
+    fs::create_dir_all(&folder)?;
+    let lock = File::create(folder.join("lock"))?;
+    fs2::FileExt::lock_exclusive(&lock)?;
     let current = key.is_file()
         && fs::metadata(&certificate)
             .and_then(|file| file.modified())
@@ -236,7 +241,6 @@ fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
         request.not_after = (SystemTime::now() + DAY * (CERTIFICATE_DAYS - 1)).into();
         request.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
         let made = request.self_signed(&pair)?;
-        fs::create_dir_all(&folder)?;
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(true).mode(0o600);
         options.open(&key)?.write_all(&pair.serialize_der())?;
@@ -552,6 +556,25 @@ mod tests {
                 .permissions(),
         );
         assert_eq!(mode & 0o077, 0, "Only the owner may read the key");
+        fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn starts_at_the_same_time_keep_a_matching_key_and_certificate() {
+        let cache = std::env::temp_dir().join(format!("boubou-identity-{}", std::process::id()));
+        let address = Ipv4Addr::LOCALHOST;
+        let made: Vec<_> = thread::scope(|scope| {
+            let starts: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| identity(&cache, address).map(drop)))
+                .collect();
+            starts
+                .into_iter()
+                .map(|start| start.join().unwrap())
+                .collect()
+        });
+        assert!(made.iter().all(Result::is_ok), "{made:?}");
+        // Loading checks that the stored key belongs to the stored certificate.
+        identity(&cache, address).unwrap();
         fs::remove_dir_all(cache).unwrap();
     }
 
