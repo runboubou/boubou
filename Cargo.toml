@@ -8,6 +8,9 @@ repository = "https://github.com/runboubou/boubou"
 license = "MIT"
 publish = false
 
+[workspace]
+members = ["names"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.23"
@@ -39,6 +42,10 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.18"
 sonora = "0.3"
+
+[dev-dependencies]
+# Reads signing requests in tests, as the names service does.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring", "x509-parser"] }
 
 [profile.release]
 lto = "thin"

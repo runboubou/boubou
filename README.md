@@ -84,11 +84,14 @@ phone. Allow the microphone and talk. The page relies on the browser's echo
 cancellation, and interrupting starts to work two seconds into the first
 reply. One page talks at a time.
 
-Browsers share a microphone only with HTTPS pages, so the phone's link uses a
-certificate that Boubou makes for itself. A phone's browser does not know that
-certificate and warns once; continue to the page. If macOS asks whether Boubou
-may accept incoming connections, allow it. `--port` picks another port than
-2682, and `--local` keeps Boubou to this computer.
+Browsers share a microphone only with HTTPS pages, so the phone's link is a name
+such as `192-168-1-20.<id>.lan.runboubou.com` with a Let's Encrypt certificate,
+which browsers trust. Some routers refuse names that point at local addresses;
+then use the address link printed below the QR code, whose certificate Boubou
+makes for itself, and continue past the browser's warning once. `--self-signed`
+prints only that link. If macOS asks whether Boubou may accept incoming
+connections, allow it. `--port` picks another port than 2682, and `--local`
+keeps Boubou to this computer.
 
 The links carry a key, and whoever has it can talk. It stays the same between
 starts, so a bookmark or a robot's settings keep working. To replace it, delete
@@ -101,11 +104,11 @@ programs that speak the OpenAI Realtime API over a WebSocket:
 boubou serve qwen3-tts:0.6b-customvoice
 ```
 
-Give the program the printed `ws://…/v1/realtime?key=…` address. A program
-built on an OpenAI SDK can instead use `http://<address>:2682/v1` as its base
-URL and the key as its API key. These programs cannot check Boubou's
-certificate, so their connection is not encrypted: use them on a network you
-trust.
+Give the program the printed `wss://…/v1/realtime?key=…` address. A program
+built on an OpenAI SDK can instead use `https://<name>:2682/v1` as its base URL
+and the key as its API key. Where the name does not work, `ws://<address>:2682`
+and `http://<address>:2682/v1` do, without encryption: use them on a network
+you trust.
 
 The same address and key read text aloud in the model's voice, as OpenAI's
 `/v1/audio/speech` does:
@@ -173,12 +176,18 @@ about 2 s and is ready to talk after about 15 s.
 - Inference runs on your machine. Boubou does not upload audio, transcripts or
   replies, and does not save them unless you pass `--output`.
 - The network is only used to download pinned model and runtime files from
-  Hugging Face and GitHub. Each file must match a SHA-256 hash before it is
-  used. After that, `--offline` works with no network at all.
+  Hugging Face and GitHub, and by `serve` to get the certificate for its name.
+  Each file must match a SHA-256 hash before it is used. After that,
+  `--offline` works with no network at all.
 - `serve` listens on your local network unless you pass `--local`. It answers
   only private addresses and lets in only a visitor that has the key from a
   printed link. A browser on another device is always encrypted; a robot or
-  program is not. Your voice travels between that visitor and this computer.
+  program is when it uses the name. Your voice travels between that visitor and
+  this computer.
+- `serve` sends `lan.runboubou.com` a signing request for its name, every two
+  months or so; its private key stays on this computer. That service also
+  answers the DNS lookups for the name, which spell your local address. Pass
+  `--self-signed`, `--local` or `--offline` to contact it never.
 - There is no telemetry, no account and no API key.
 
 ## Storage

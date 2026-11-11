@@ -32,12 +32,17 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Format
         run: cargo fmt --all -- --check
+      # Each package alone, so Boubou is tested with the dependency features it ships with.
       - name: Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo clippy --locked -p boubou-names --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked --all-targets --all-features
+        run: |
+          cargo test --locked --all-targets --all-features
+          cargo test --locked -p boubou-names
       - name: Minimum supported Rust version
-        run: cargo +1.91 check --locked --all-targets --all-features
+        run: cargo +1.91 check --locked --workspace --all-targets --all-features
       - name: Review gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Native playback cancellation
@@ -59,7 +64,12 @@ jobs:
       - name: ALSA headers
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Each package alone, so Boubou is tested with the dependency features it ships with.
       - name: Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: |
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo clippy --locked -p boubou-names --all-targets -- -D warnings
       - name: Test
-        run: cargo test --locked --all-targets --all-features
+        run: |
+          cargo test --locked --all-targets --all-features
+          cargo test --locked -p boubou-names
