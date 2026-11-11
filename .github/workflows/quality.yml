@@ -62,7 +62,13 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
       - name: ALSA headers
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
+        # Canonical's mirror names sometimes stop resolving. apt verifies the archive's signatures,
+        # so a kernel.org mirror after the runner's own list is a safe fallback.
+        run: |
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            echo 'http://mirrors.edge.kernel.org/ubuntu/' | sudo tee -a /etc/apt/apt-mirrors.txt > /dev/null
+          fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Each package alone, so Boubou is tested with the dependency features it ships with.
       - name: Clippy
