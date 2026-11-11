@@ -155,21 +155,18 @@ async fn own_certificate(
     let public_key = key.subject_public_key_info();
     let kept = std::fs::read_to_string(&chain_path)
         .ok()
-        .and_then(|chain| Issued::read(chain, &public_key).ok())
-        .filter(Issued::current);
-    let issued = match kept {
-        Some(kept) => kept,
-        None => {
-            let mut params = rcgen::CertificateParams::new(vec![domain.to_owned()])?;
-            params.distinguished_name = rcgen::DistinguishedName::new();
-            let csr = params.serialize_request(&key)?;
-            let chain = issuer.order(domain, csr.der()).await?;
-            let issued = Issued::read(chain, &public_key)?;
-            issue::write_private(&chain_path, issued.chain.as_bytes())?;
-            eprintln!("Certified {domain}.");
-            issued
-        }
-    };
+        .and_then(|chain| Issued::read(chain, &public_key).ok());
+    let issued = renewed(kept, || async {
+        let mut params = rcgen::CertificateParams::new(vec![domain.to_owned()])?;
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        let csr = params.serialize_request(&key)?;
+        let chain = issuer.order(domain, csr.der()).await?;
+        let issued = Issued::read(chain, &public_key)?;
+        issue::write_private(&chain_path, issued.chain.as_bytes())?;
+        eprintln!("Certified {domain}.");
+        Ok(issued)
+    })
+    .await?;
     let chain =
         CertificateDer::pem_slice_iter(issued.chain.as_bytes()).collect::<Result<Vec<_>, _>>()?;
     let key = PrivatePkcs8KeyDer::from(key.serialize_der());
@@ -180,6 +177,27 @@ async fn own_certificate(
         .with_single_cert(chain, key.into())?;
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(Arc::new(config))
+}
+
+/// `kept` while it is current, and otherwise a `renew`ed chain. When renewing fails, `kept`
+/// serves until it expires, so an outage at Let's Encrypt never takes the service down early.
+async fn renewed<F: Future<Output = Result<Issued>>>(
+    kept: Option<Issued>,
+    renew: impl FnOnce() -> F,
+) -> Result<Issued> {
+    match kept {
+        Some(kept) if kept.current() => Ok(kept),
+        kept => match renew().await {
+            Ok(fresh) => Ok(fresh),
+            Err(error) => match kept.filter(Issued::valid) {
+                Some(kept) => {
+                    eprintln!("Cannot renew the service's certificate yet: {error:#}");
+                    Ok(kept)
+                }
+                None => Err(error),
+            },
+        },
+    }
 }
 
 async fn dns_udp(socket: UdpSocket, zone: Arc<Zone>) {
@@ -325,5 +343,32 @@ mod tests {
             server_folder("https://localhost:14000/dir"),
             "localhost_14000"
         );
+    }
+
+    #[tokio::test]
+    async fn a_valid_certificate_serves_until_it_expires_when_renewing_fails() {
+        let now = issue::now();
+        let issued = |renew, expires| Issued {
+            chain: String::new(),
+            renew,
+            expires,
+        };
+        let failing = || async { Err(anyhow::anyhow!("Let's Encrypt is down")) };
+        let fresh = || async { Ok(issued(now + 200, now + 300)) };
+        // Current: no renewal is attempted.
+        let current = renewed(Some(issued(now + 100, now + 200)), failing).await;
+        assert_eq!(current.unwrap().renew, now + 100);
+        // Due: renewed when that works, kept when it does not.
+        let due = || Some(issued(now - 10, now + 100));
+        assert_eq!(renewed(due(), fresh).await.unwrap().renew, now + 200);
+        assert_eq!(renewed(due(), failing).await.unwrap().renew, now - 10);
+        // Expired or missing: only a renewal will do.
+        assert!(
+            renewed(Some(issued(now - 20, now - 10)), failing)
+                .await
+                .is_err()
+        );
+        assert!(renewed(None, failing).await.is_err());
+        assert_eq!(renewed(None, fresh).await.unwrap().renew, now + 200);
     }
 }

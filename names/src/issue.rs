@@ -72,8 +72,14 @@ impl Issued {
         })
     }
 
+    /// Not yet due for renewal.
     pub fn current(&self) -> bool {
         now() < self.renew
+    }
+
+    /// Not yet expired.
+    pub fn valid(&self) -> bool {
+        now() < self.expires
     }
 
     pub fn json(&self) -> String {
@@ -86,7 +92,7 @@ impl Issued {
     }
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs())
