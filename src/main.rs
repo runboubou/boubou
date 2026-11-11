@@ -353,6 +353,7 @@ fn run() -> Result<()> {
             door,
         } => {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
+            let door = if offline { door.offline() } else { door };
             let _checklist = checklist(
                 format!("boubou serve {}", model.id()),
                 check.take(),

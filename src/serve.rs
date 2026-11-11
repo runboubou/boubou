@@ -1,17 +1,22 @@
 //! `boubou serve`: a page in a browser is the conversation's microphone and speaker. This
 //! computer opens it over loopback. Other devices on the local network open it over HTTPS,
-//! which browsers require before they share a microphone, with a certificate Boubou issues to
-//! itself. Robots and programs that speak the OpenAI Realtime API, or send text to read aloud
-//! as they would to OpenAI, connect to the same door and are carried to the model server's own
-//! implementation. One visitor at a time has the model, and only one that holds the key from
-//! a printed link can.
+//! which browsers require before they share a microphone: by a name browsers trust, from
+//! [`names`], or by address with a certificate Boubou issues to itself. Robots and programs
+//! that speak the OpenAI Realtime API, or send text to read aloud as they would to OpenAI,
+//! connect to the same door and are carried to the model server's own implementation. One
+//! visitor at a time has the model, and only one that holds the key from a printed link can.
 
 use crate::{
     audio::{CaptureFrame, Remote},
     progress, tui,
 };
 use anyhow::{Context, Result, ensure};
-use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs8KeyDer};
+use rustls::{
+    ServerConfig, ServerConnection, StreamOwned,
+    pki_types::PrivatePkcs8KeyDer,
+    server::{ClientHello, ResolvesServerCert},
+    sign::CertifiedKey,
+};
 use std::{
     cell::Cell,
     fs::{self, File},
@@ -32,6 +37,8 @@ use tungstenite::{
     handshake::derive_accept_key,
     protocol::{Role, WebSocketConfig},
 };
+
+mod names;
 
 const PAGE: &str = include_str!("serve.html");
 /// Far above a 20 ms frame or a playback report.
@@ -78,6 +85,18 @@ pub struct Options {
     /// Accept connections from this computer only.
     #[arg(long)]
     local: bool,
+    /// Offer the network address with Boubou's own certificate only, which phones warn about
+    /// once, and ask lan.runboubou.com for no certificate.
+    #[arg(long)]
+    self_signed: bool,
+}
+
+impl Options {
+    /// Contacts no names service, as `--offline` promises no network.
+    pub fn offline(mut self) -> Self {
+        self.self_signed = true;
+        self
+    }
 }
 
 /// Where to connect. The page's addresses end in the key as a fragment, which browsers never
@@ -85,8 +104,11 @@ pub struct Options {
 struct Links {
     here: String,
     network: Option<String>,
-    /// For robots and programs, which cannot check Boubou's certificate and so connect
-    /// without encryption.
+    /// The network address itself, when `network` is a name: for networks whose router does
+    /// not let names point at local addresses.
+    fallback: Option<String>,
+    /// For robots and programs: encrypted by name, or in the clear by address, since they
+    /// cannot check Boubou's own certificate.
     realtime: Option<String>,
 }
 
@@ -115,7 +137,8 @@ impl Door {
     /// has one.
     pub fn open(options: &Options, cache: &Path, api: Option<SocketAddr>) -> Result<Self> {
         let network = network_address().filter(|_| !options.local);
-        let (door, links) = Self::bind(options.port, cache, network, api)?;
+        let service = (!options.self_signed).then_some(names::SERVICE);
+        let (door, links) = Self::bind(options.port, cache, network, api, service)?;
         let note = "Ready. Open the page in a browser.";
         if !progress::finish(note) {
             eprintln!("{note}");
@@ -135,23 +158,34 @@ impl Door {
                     eprintln!("  \x1b[30;107m{line}\x1b[0m");
                 }
             }
-            eprintln!(
-                "  A phone's browser warns once that it does not know Boubou's certificate. Continue to the page."
-            );
+            match &links.fallback {
+                Some(address) => eprintln!(
+                    "  If the page does not open, use {address} and continue past the browser's warning."
+                ),
+                None => eprintln!(
+                    "  A phone's browser warns once that it does not know Boubou's certificate. Continue to the page."
+                ),
+            }
         }
         eprintln!();
         Ok(door)
     }
 
-    /// Listens on `network` as well as loopback when this computer has such an address.
+    /// Listens on `network` as well as loopback when this computer has such an address, by a
+    /// name certified by the names `service` when it is given and answers.
     fn bind(
         port: u16,
         cache: &Path,
         network: Option<Ipv4Addr>,
         api: Option<SocketAddr>,
+        service: Option<&str>,
     ) -> Result<(Self, Links)> {
+        let names = match (network, service) {
+            (Some(_), Some(service)) => Some(names::start(cache, service)?),
+            _ => None,
+        };
         let identity = network
-            .map(|address| identity(cache, address))
+            .map(|address| identity(cache, address, names.clone()))
             .transpose()
             .context(
                 "Cannot prepare the HTTPS certificate. Delete the cache's serve folder and retry.",
@@ -172,10 +206,20 @@ impl Door {
         let key = key(cache)?;
         // The literal address: `localhost` may resolve to IPv6 first, where nothing listens.
         let reachable = network.unwrap_or(Ipv4Addr::LOCALHOST);
+        let named = network.zip(names.filter(|names| names.certificate().is_some()));
+        let named = named.map(|(address, names)| names.name(address));
+        let by_address = network.map(|address| format!("https://{address}:{port}/#{key}"));
         let links = Links {
             here: format!("http://127.0.0.1:{port}/#{key}"),
-            network: network.map(|address| format!("https://{address}:{port}/#{key}")),
-            realtime: api.map(|_| format!("ws://{reachable}:{port}/v1/realtime?key={key}")),
+            network: match &named {
+                Some(name) => Some(format!("https://{name}:{port}/#{key}")),
+                None => by_address.clone(),
+            },
+            fallback: named.as_ref().and(by_address),
+            realtime: api.map(|_| match &named {
+                Some(name) => format!("wss://{name}:{port}/v1/realtime?key={key}"),
+                None => format!("ws://{reachable}:{port}/v1/realtime?key={key}"),
+            }),
         };
         let desk = Arc::new(Desk {
             key,
@@ -297,9 +341,30 @@ fn network_address() -> Option<Ipv4Addr> {
     found
 }
 
-/// The certificate and key that prove this address to a browser. They are made once and
-/// kept, so a browser that was told to trust the certificate keeps trusting it.
-fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
+/// Chooses the certificate a browser is shown: the one for this computer's names when it
+/// asked for one of them, and Boubou's own for its address otherwise.
+#[derive(Debug)]
+struct Certificates {
+    own: Arc<CertifiedKey>,
+    names: Option<Arc<names::Names>>,
+}
+
+impl ResolvesServerCert for Certificates {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let asked = hello.server_name().zip(self.names.as_ref());
+        let named = asked.and_then(|(name, names)| names.certificate_for(name));
+        Some(named.unwrap_or_else(|| self.own.clone()))
+    }
+}
+
+/// HTTPS for this computer's names, through `names`, and for `address`, with a certificate and
+/// key Boubou makes for it. Those are made once and kept, so a browser that was told to trust
+/// the certificate keeps trusting it.
+fn identity(
+    cache: &Path,
+    address: Ipv4Addr,
+    names: Option<Arc<names::Names>>,
+) -> Result<Arc<ServerConfig>> {
     let folder = cache.join("serve").join(address.to_string());
     let (certificate, key) = (folder.join("certificate.der"), folder.join("key.der"));
     // Until the pair is read: two starts at once must not mix one's key with the other's
@@ -326,10 +391,16 @@ fn identity(cache: &Path, address: Ipv4Addr) -> Result<Arc<ServerConfig>> {
     }
     let key = PrivatePkcs8KeyDer::from(fs::read(key)?);
     let provider = Arc::new(rustls::crypto::ring::default_provider());
+    // Checks that the stored key belongs to the stored certificate.
+    let own = CertifiedKey::from_der(vec![fs::read(certificate)?.into()], key.into(), &provider)?;
+    let certificates = Certificates {
+        own: Arc::new(own),
+        names,
+    };
     let config = ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .with_no_client_auth()
-        .with_single_cert(vec![fs::read(certificate)?.into()], key.into())?;
+        .with_cert_resolver(Arc::new(certificates));
     Ok(Arc::new(config))
 }
 
@@ -528,7 +599,7 @@ mod tests {
     /// A door that only this computer can reach, in front of a model without a Realtime API.
     fn local() -> (Door, String) {
         let cache = cache();
-        let (door, links) = Door::bind(0, &cache, None, None).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, None, None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         assert!(links.network.is_none() && links.realtime.is_none());
         (door, links.here)
@@ -723,7 +794,7 @@ mod tests {
         let cache = cache();
         // Loopback stands in for the Wi-Fi address.
         let network = Ipv4Addr::LOCALHOST;
-        let (door, links) = Door::bind(0, &cache, Some(network), None).unwrap();
+        let (door, links) = Door::bind(0, &cache, Some(network), None, None).unwrap();
         let link = links.network.unwrap();
         assert!(link.starts_with("https://127.0.0.1:"), "{link}");
 
@@ -760,7 +831,7 @@ mod tests {
 
         // A later start presents the same certificate and key, so a browser's trust and a
         // saved link carry over.
-        let (_, later) = Door::bind(0, &cache, Some(network), None).unwrap();
+        let (_, later) = Door::bind(0, &cache, Some(network), None, None).unwrap();
         assert_eq!(fs::read(&stored).unwrap(), certificate);
         assert_eq!(key(&later.here), key(&link));
         for secret in ["serve/127.0.0.1/key.der", "serve/key"] {
@@ -769,7 +840,7 @@ mod tests {
             assert_eq!(mode & 0o077, 0, "Only the owner may read {secret}");
         }
         fs::write(cache.join("serve/key"), "not a key").unwrap();
-        assert!(Door::bind(0, &cache, Some(network), None).is_err());
+        assert!(Door::bind(0, &cache, Some(network), None, None).is_err());
         fs::remove_dir_all(cache).unwrap();
     }
 
@@ -778,7 +849,7 @@ mod tests {
         let cache = cache();
         let address = Ipv4Addr::LOCALHOST;
         let start = || -> Result<String> {
-            identity(&cache, address)?;
+            identity(&cache, address, None)?;
             super::key(&cache)
         };
         let keys: Vec<_> = thread::scope(|scope| {
@@ -790,14 +861,146 @@ mod tests {
         });
         assert!(keys.iter().all(|key| *key == keys[0]), "{keys:?}");
         // Loading checks that the stored key belongs to the stored certificate.
-        identity(&cache, address).unwrap();
+        identity(&cache, address, None).unwrap();
+        fs::remove_dir_all(cache).unwrap();
+    }
+
+    /// A stand-in for the names service: `authority` certifies what each request asks for,
+    /// once the request is checked the way the service checks it. Counts the requests.
+    fn names_service(authority: rcgen::Issuer<'static, rcgen::KeyPair>) -> (String, Receiver<()>) {
+        use rcgen::PublicKeyData;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (asked, requests) = mpsc::channel();
+        thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut request = Vec::new();
+                let body = loop {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    request.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&request).to_lowercase();
+                    let Some(head) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let length = text.split("content-length: ").nth(1).unwrap();
+                    let length: usize = length.split("\r\n").next().unwrap().parse().unwrap();
+                    if request.len() >= head + 4 + length {
+                        break request[head + 4..].to_vec();
+                    }
+                };
+                asked.send(()).unwrap();
+                let csr = rcgen::CertificateSigningRequestParams::from_der(&body.into()).unwrap();
+                let id = names::id(&csr.public_key.subject_public_key_info());
+                let wildcard = format!("*.{id}.{}", names::ZONE).try_into().unwrap();
+                assert_eq!(
+                    csr.params.subject_alt_names,
+                    [rcgen::SanType::DnsName(wildcard)]
+                );
+                let certificate = csr.signed_by(&authority).unwrap();
+                let now = SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap();
+                let answer = serde_json::json!({
+                    "certificate": certificate.pem(),
+                    "renew": now.as_secs() + 60 * DAY.as_secs(),
+                    "expires": now.as_secs() + 90 * DAY.as_secs(),
+                })
+                .to_string();
+                let length = answer.len();
+                let response =
+                    format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n{answer}");
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{address}/v1/certificate"), requests)
+    }
+
+    /// A TLS client that trusts only `root` and asks for `name`.
+    fn client(root: &[u8], name: rustls::pki_types::ServerName<'static>, port: u16) -> impl Stream {
+        let mut trusted = rustls::RootCertStore::empty();
+        trusted.add(root.to_vec().into()).unwrap();
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(trusted)
+            .with_no_client_auth();
+        let session = rustls::ClientConnection::new(Arc::new(config), name).unwrap();
+        StreamOwned::new(session, TcpStream::connect(("127.0.0.1", port)).unwrap())
+    }
+
+    #[test]
+    fn phones_reach_the_page_by_a_name_browsers_trust() {
+        let cache = cache();
+        let network = Ipv4Addr::LOCALHOST;
+        let authority_key = rcgen::KeyPair::generate().unwrap();
+        let mut authority = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        authority.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root = authority
+            .self_signed(&authority_key)
+            .unwrap()
+            .der()
+            .to_vec();
+        let (service, requests) = names_service(rcgen::Issuer::new(authority, authority_key));
+
+        let (door, links) = Door::bind(0, &cache, Some(network), None, Some(&service)).unwrap();
+        assert!(requests.try_recv().is_ok());
+        let link = links.network.unwrap();
+        let name = address(&link).split(':').next().unwrap().to_owned();
+        let id = name.split('.').nth(1).unwrap();
+        assert_eq!(name, format!("127-0-0-1.{id}.{}", names::ZONE));
+        let port: u16 = address(&link).split(':').nth(1).unwrap().parse().unwrap();
+        // Where the router will not point names at local addresses, the address still works.
+        let fallback = links.fallback.unwrap();
+        assert_eq!(
+            fallback,
+            format!("https://127.0.0.1:{port}/#{}", key(&link))
+        );
+
+        // A browser that asks for the name gets the certificate for it, and talks.
+        let stream = client(&root, name.clone().try_into().unwrap(), port);
+        let mut page = talk(&link, key(&link), stream).unwrap();
+        let mut remote = wait(&door);
+        remote.enqueue(&[1, 2]).unwrap();
+        assert_eq!(page.read().unwrap().into_data().as_ref(), [1, 0, 2, 0]);
+        drop((page, remote));
+        // One that asks for the address gets Boubou's own certificate for it.
+        let own = fs::read(cache.join("serve/127.0.0.1/certificate.der")).unwrap();
+        let mut stream = client(&own, IpAddr::from(network).into(), port);
+        stream.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        let mut page = String::new();
+        let _ = stream.read_to_string(&mut page);
+        assert!(page.starts_with("HTTP/1.1 200 "), "{page}");
+
+        // A later start uses the kept certificate without asking again, also when the service
+        // is gone.
+        let gone = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let gone = format!("http://{gone}/v1/certificate");
+        let (_, later) = Door::bind(0, &cache, Some(network), None, Some(&gone)).unwrap();
+        assert!(requests.try_recv().is_err());
+        assert!(later.network.unwrap().contains(&name));
+        let kept = fs::metadata(cache.join("serve/name/key.der")).unwrap();
+        assert_eq!(
+            std::os::unix::fs::PermissionsExt::mode(&kept.permissions()) & 0o077,
+            0
+        );
+
+        // Without a certificate, and the service gone, phones are sent to the address.
+        fs::remove_file(cache.join("serve/name/certificate.json")).unwrap();
+        let (_, alone) = Door::bind(0, &cache, Some(network), None, Some(&gone)).unwrap();
+        assert!(alone.network.unwrap().starts_with("https://127.0.0.1:"));
+        assert!(alone.fallback.is_none());
         fs::remove_dir_all(cache).unwrap();
     }
 
     #[test]
     fn robots_and_programs_are_carried_to_the_realtime_api() {
         let cache = cache();
-        let (door, links) = Door::bind(0, &cache, None, Some(model_server())).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, Some(model_server()), None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         let link = links.realtime.unwrap();
         let key = key(&links.here);
@@ -856,7 +1059,7 @@ mod tests {
             }
         });
         let cache = cache();
-        let (_door, links) = Door::bind(0, &cache, None, Some(api)).unwrap();
+        let (_door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         let (link, key) = (links.here.as_str(), key(&links.here));
         // More text than the door reads before it decides.
