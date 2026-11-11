@@ -43,7 +43,7 @@ Allow microphone access. The first run downloads about **1.4 GB**. Then speak En
 
 <kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
 
-The published beta provides the command above. The picker and other commands below are available from source while the [next release](https://github.com/runboubou/boubou/issues/5) is prepared.
+The guided picker shown above is available in the current macOS source build.
 
 <details>
 <summary>Build from source / Linux</summary>
@@ -62,7 +62,7 @@ On macOS, run `./target/release/boubou` to open the picker shown above. Liquid m
 </details>
 
 <details>
-<summary>More commands, phones and browsers (source build)</summary>
+<summary>More commands, phones and browsers</summary>
 
 ```sh
 boubou list
@@ -70,7 +70,8 @@ boubou pull LFM3-Omni-2B
 boubou run LFM3-Omni-2B --offline
 boubou doctor LFM3-Omni-2B
 boubou ask LFM3-Omni-2B photo.png "What is in this picture?"
-boubou serve LFM3-Audio-2B
+npx boubou@beta serve LFM3-Audio-2B
+npx boubou@beta serve LFM3-Omni-2B
 ```
 
 `serve` prints a browser link and a QR code for a phone on the same Wi-Fi. Allow microphone access and talk; one client can use the conversation at a time. Keep the printed link private: it contains the access key. Use `--local` to listen only on this computer.
