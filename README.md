@@ -43,7 +43,7 @@ Allow microphone access. The first run downloads about **1.4 GB**. Then speak En
 
 <kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
 
-On macOS, run `npx boubou@beta` to choose a Liquid model from the menu. Run modular voices by their IDs from `boubou list`.
+On macOS, run `npx boubou@beta` to choose from the menu: the Liquid models and, on Macs with 16 GB of memory and macOS 15 or later, three modular voices (Qwen3-TTS 0.6B, Pocket TTS and Phonon). Run other modular voices by their IDs from `boubou list`.
 
 <details>
 <summary>Build from source / Linux</summary>

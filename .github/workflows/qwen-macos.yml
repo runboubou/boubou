@@ -1,7 +1,7 @@
 name: Qwen Mac runtime
 
 # Pull requests that change the modular runtime build the package and check two
-# profiles. Quality covers the Rust side of every pull request. The
+# guided profiles. Quality covers the Rust side of every pull request. The
 # weekly run, manual runs and releases check every profile.
 on:
   pull_request:

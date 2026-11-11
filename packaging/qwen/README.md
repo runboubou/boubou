@@ -20,13 +20,16 @@ profile's verified weights. Profiles reuse the same runner. `runtime.json` also
 records a digest of the unpacked runner, so each start hashes the installed
 files on several threads instead of re-reading the archive, which is removed
 once installed. The [runtime catalog](runtimes.json) is
-shared by the client, asset locking and runner arguments. Guided startup offers
-only the Liquid Audio and Liquid Omni integrated voices, preferring Audio, so no
-catalog entry is `guided`. Every profile here, including Qwen 0.6B and 1.7B
-CustomVoice with fixed Aiden, Pocket TTS English (`english_2026-10`, Alba) and
-Phonon 31M English, requires explicit developer selection. Memory groups
-and budgets are estimates for device testing. More parameters do not imply
-better replies or voice quality.
+shared by the client, asset locking and runner arguments. Its `guided` entries
+are Qwen 0.6B CustomVoice with fixed Aiden, Pocket TTS English
+(`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
+Qwen3.5-4B. Guided startup lists the Liquid Audio and Liquid Omni integrated
+voices first, then these.
+
+Guided startup uses English. Other voices, including Qwen 1.7B CustomVoice,
+Whisper language modes and the 2B, 9B and 27B LLM combinations require explicit
+developer selection. Memory groups and budgets are estimates for device
+testing. More parameters do not imply better replies or voice quality.
 
 `kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU. `boubou list` shows supported IDs.
 
