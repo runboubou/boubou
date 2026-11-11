@@ -178,6 +178,98 @@ def preserve_qwen_user_turns():
     chat._append_user_message = append_user_message
 
 
+def read_aloud():
+    """Add OpenAI's request for speech from text, POST /v1/audio/speech, to the pipeline's server.
+
+    The pipeline only speaks inside a conversation. Between conversations, this hands the text to
+    the pipeline's voice as the language model would and collects what the voice says.
+    """
+    import io
+    import queue
+    import threading
+    import time
+    import wave
+
+    import numpy as np
+    from fastapi import HTTPException, Response
+    from nltk import sent_tokenize
+    from scipy.signal import resample_poly
+    from speech_to_speech.api.openai_realtime import server
+    from speech_to_speech.pipeline.messages import AUDIO_RESPONSE_DONE, EndOfResponse, TTSInput
+
+    create_app = server.create_app
+    turn = threading.Lock()
+
+    def with_speech(pool, **options):
+        app = create_app(pool=pool, **options)
+        unit = pool[0]
+        # The voice is the handler that fills the queue of audio for the client.
+        voice = next(handler for handler in unit.handlers
+                     if getattr(handler, "queue_out", None) is unit.output_queue)
+
+        class Mouth:
+            """Where the voice puts what it says: the client's queue, or a reading's until its end."""
+
+            reading = None
+
+            def put(self, item):
+                heard = self.reading or unit.output_queue
+                # The voice ends a reading itself, so nothing it says next can go astray.
+                if isinstance(item, bytes) and item == AUDIO_RESPONSE_DONE:
+                    self.reading = None
+                heard.put(item)
+
+        voice.queue_out = mouth = Mouth()
+
+        @app.post("/v1/audio/speech")
+        def speech(request: dict):
+            text, wanted = request.get("input"), request.get("response_format", "wav")
+            if not isinstance(text, str) or not text.strip():
+                raise HTTPException(400, "Put the text to read in `input`.")
+            if wanted not in ("wav", "pcm"):
+                raise HTTPException(400, "Set `response_format` to `wav` or `pcm`.")
+            # A conversation that just ended holds the pipeline for a moment longer.
+            patience = time.monotonic() + 10
+            while unit.session is not None and time.monotonic() < patience:
+                time.sleep(0.05)
+            if unit.session is not None or not turn.acquire(blocking=False):
+                raise HTTPException(409, "The voice is busy with a conversation or another text.")
+            mouth.reading = spoken = queue.Queue()
+            try:
+                # Sentence by sentence, as the language model's reply arrives, and in the pipeline's
+                # current generation: a conversation that starts cancels it, which stops a reading
+                # that nobody is waiting for any more.
+                generation = unit.cancel_scope.generation
+                for sentence in sent_tokenize(text):
+                    voice.queue_in.put(TTSInput(text=sentence, cancel_generation=generation))
+                voice.queue_in.put(EndOfResponse())
+                chunks = []
+                while not isinstance(chunk := spoken.get(timeout=300), bytes) or chunk != AUDIO_RESPONSE_DONE:
+                    audio = getattr(chunk, "audio", chunk)
+                    chunks.append(np.frombuffer(audio, np.int16) if isinstance(audio, bytes) else audio)
+            except queue.Empty:
+                raise HTTPException(500, "The voice did not finish.") from None
+            finally:
+                mouth.reading = None
+                turn.release()
+            if not chunks:
+                raise HTTPException(500, "The voice said nothing.")
+            # The pipeline speaks at 16 kHz; OpenAI's WAV and PCM are 24 kHz.
+            samples = resample_poly(np.concatenate(chunks).astype(np.float32), 3, 2)
+            pcm = np.clip(samples, -32768, 32767).astype("<i2").tobytes()
+            if wanted == "pcm":
+                return Response(pcm, media_type="audio/pcm")
+            file = io.BytesIO()
+            with wave.open(file, "wb") as wav:
+                wav.setparams((1, 2, 24000, 0, "NONE", "NONE"))
+                wav.writeframes(pcm)
+            return Response(file.getvalue(), media_type="audio/wav")
+
+        return app
+
+    server.create_app = with_speech
+
+
 def run(command, model, cache, manifest, *extra):
     # Keep model-name aliases and compiled caches outside the verified package.
     with TemporaryDirectory(prefix="boubou-qwen-") as work:
@@ -203,6 +295,7 @@ def run(command, model, cache, manifest, *extra):
             link_espeak_data(work)
         from speech_to_speech.s2s_pipeline import run_pipeline_command
         preserve_qwen_user_turns()
+        read_aloud()
         # Upstream v1.1.0 sets this to its package directory during import.
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(work / "inductor")
         run_pipeline_command(command, [*options, *extra])

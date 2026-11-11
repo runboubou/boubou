@@ -784,6 +784,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Thread
+from unittest.mock import MagicMock
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -817,6 +818,8 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
                 assert response.status == 204
             for host in ("localhost", "::1", "kept.invalid"):
                 assert urllib.request.proxy_bypass(host), host
+            # The pipeline builds its server with the request for speech from text added.
+            assert realtime.server.create_app.__name__ == "with_speech"
 
         package = types.ModuleType("speech_to_speech")
         package.__path__ = []
@@ -842,6 +845,12 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
         sys.modules["speech_to_speech.s2s_pipeline"] = pipeline
         sys.modules["speech_to_speech.LLM"] = llm
         sys.modules["speech_to_speech.LLM.chat"] = chat
+        realtime = MagicMock()
+        sys.modules["speech_to_speech.api.openai_realtime"] = realtime
+        # What that request needs once the server runs, which this stand-in never does.
+        for name in ("fastapi", "nltk", "numpy", "scipy", "scipy.signal", "speech_to_speech.api",
+                     "speech_to_speech.pipeline", "speech_to_speech.pipeline.messages"):
+            sys.modules[name] = MagicMock()
         with TemporaryDirectory() as folder:
             cache = Path(folder)
             manifest = cache / "models.json"

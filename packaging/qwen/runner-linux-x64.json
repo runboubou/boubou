@@ -1,9 +1,9 @@
 {
-  "url": "https://huggingface.co/runboubou/runtimes/resolve/f3c4124dd2045870d1397d2e96ee8d93d45fbf20/qwen/linux-x64/b4ef907608cfe90221e3f1c702d710ecc9a37cd73569ba4b69b43716406ca8fa.tar.gz",
-  "size": 3615076864,
-  "sha256": "b4ef907608cfe90221e3f1c702d710ecc9a37cd73569ba4b69b43716406ca8fa",
-  "tree_sha256": "4ca66a1bb74fc220d383e9811e25c52d5ac6a46a03b1af72c41a17195e726bed",
-  "sources_sha256": "27a9019ff13eaf50487129de2658a222fd9af33be1c0f6f0ee6639f14dac3a93",
+  "url": "https://huggingface.co/runboubou/runtimes/resolve/ea6a988c89dbb73eae7c397a2249d12c6642f533/qwen/linux-x64/fd089ebecdea368412ed7c8cc82cf0b59278bf7798f7717d7a7e88e3b9ca054d.tar.gz",
+  "size": 3615064140,
+  "sha256": "fd089ebecdea368412ed7c8cc82cf0b59278bf7798f7717d7a7e88e3b9ca054d",
+  "tree_sha256": "8a4a15a7f5c1586329ba35d5c5543ac804d68fa012a1befe6efd133677598cda",
+  "sources_sha256": "6b54546bf1299abffe504253316459625b71b561e7c3671ef8bc116eb5873969",
   "min_nvidia_driver": "580.65.06",
   "min_glibc": "2.39"
 }

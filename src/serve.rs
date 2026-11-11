@@ -1,9 +1,10 @@
 //! `boubou serve`: a page in a browser is the conversation's microphone and speaker. This
 //! computer opens it over loopback. Other devices on the local network open it over HTTPS,
 //! which browsers require before they share a microphone, with a certificate Boubou issues to
-//! itself. Robots and programs that speak the OpenAI Realtime API connect to the same door
-//! and are carried to the model server's own implementation of it. One visitor talks at a
-//! time, and only one that holds the key from a printed link can.
+//! itself. Robots and programs that speak the OpenAI Realtime API, or send text to read aloud
+//! as they would to OpenAI, connect to the same door and are carried to the model server's own
+//! implementation. One visitor at a time has the model, and only one that holds the key from
+//! a printed link can.
 
 use crate::{
     audio::{CaptureFrame, Remote},
@@ -51,15 +52,15 @@ type Socket = WebSocket<Box<dyn Stream>>;
 /// What answering a request takes.
 struct Desk {
     key: String,
-    /// Set while someone is talking.
+    /// Set while someone is talking, or a text is being read aloud.
     seated: AtomicBool,
     /// Proves the network address to browsers.
     identity: Option<Arc<ServerConfig>>,
-    /// The model server's own Realtime API, where it has one.
-    realtime: Option<SocketAddr>,
+    /// The model server's own API for robots and programs, where it has one.
+    api: Option<SocketAddr>,
 }
 
-/// Held by whoever is talking. Dropping it lets the next visitor in.
+/// Held by whoever has the model. Dropping it lets the next visitor in.
 struct Seat(Arc<Desk>);
 
 impl Drop for Seat {
@@ -110,10 +111,11 @@ pub struct Door {
 
 impl Door {
     /// Starts serving and tells the person where to connect. `cache` keeps the certificate
-    /// between starts. `realtime` is the model server's own Realtime API, where it has one.
-    pub fn open(options: &Options, cache: &Path, realtime: Option<SocketAddr>) -> Result<Self> {
+    /// between starts. `api` is the model server's own API for robots and programs, where it
+    /// has one.
+    pub fn open(options: &Options, cache: &Path, api: Option<SocketAddr>) -> Result<Self> {
         let network = network_address().filter(|_| !options.local);
-        let (door, links) = Self::bind(options.port, cache, network, realtime)?;
+        let (door, links) = Self::bind(options.port, cache, network, api)?;
         let note = "Ready. Open the page in a browser.";
         if !progress::finish(note) {
             eprintln!("{note}");
@@ -146,7 +148,7 @@ impl Door {
         port: u16,
         cache: &Path,
         network: Option<Ipv4Addr>,
-        realtime: Option<SocketAddr>,
+        api: Option<SocketAddr>,
     ) -> Result<(Self, Links)> {
         let identity = network
             .map(|address| identity(cache, address))
@@ -173,13 +175,13 @@ impl Door {
         let links = Links {
             here: format!("http://127.0.0.1:{port}/#{key}"),
             network: network.map(|address| format!("https://{address}:{port}/#{key}")),
-            realtime: realtime.map(|_| format!("ws://{reachable}:{port}/v1/realtime?key={key}")),
+            realtime: api.map(|_| format!("ws://{reachable}:{port}/v1/realtime?key={key}")),
         };
         let desk = Arc::new(Desk {
             key,
             seated: AtomicBool::new(false),
             identity,
-            realtime,
+            api,
         });
         let (admitted, arrivals) = mpsc::channel();
         thread::Builder::new()
@@ -359,7 +361,8 @@ fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<Guest>> {
 }
 
 /// Serves the page, gives the seat to a browser that holds the key, or carries a robot or
-/// program that holds it to the Realtime API. `socket` is the connection underneath `stream`.
+/// program that holds it to the model server's API. `socket` is the connection underneath
+/// `stream`.
 fn answer(
     mut stream: impl Stream + 'static,
     socket: &TcpStream,
@@ -368,7 +371,7 @@ fn answer(
 ) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
-    let (target, accept, bearer, head) = loop {
+    let (method, target, accept, bearer, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
@@ -388,8 +391,9 @@ fn answer(
             let bearer = header("Authorization")
                 .and_then(|sent| sent.value.strip_prefix(b"Bearer "))
                 .map(|key| String::from_utf8_lossy(key).into_owned());
-            let target = parsed.path.filter(|_| parsed.method == Some("GET"));
-            break (target.unwrap_or_default().to_owned(), accept, bearer, head);
+            let method = parsed.method.unwrap_or_default().to_owned();
+            let target = parsed.path.unwrap_or_default().to_owned();
+            break (method, target, accept, bearer, head);
         }
     };
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -407,10 +411,12 @@ fn answer(
         stream.flush()?;
         Ok(None)
     };
-    let (accept, realtime) = match (path, accept, desk.realtime) {
-        ("/", None, _) if trusted => return respond("200 OK", PAGE),
-        ("/talk", Some(accept), _) if trusted && keyed => (accept, None),
-        ("/v1/realtime", Some(accept), Some(realtime)) if keyed => (accept, Some(realtime)),
+    let (accept, api) = match (method.as_str(), path, accept, desk.api) {
+        ("GET", "/", None, _) if trusted => return respond("200 OK", PAGE),
+        ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
+        ("GET", "/v1/realtime", Some(accept), Some(api)) if keyed => (accept, Some(api)),
+        // A text to read aloud, which opens no socket.
+        ("POST", "/v1/audio/speech", None, Some(api)) if keyed => (String::new(), Some(api)),
         _ => return respond("404 Not Found", ""),
     };
     if desk.seated.swap(true, Ordering::SeqCst) {
@@ -418,8 +424,8 @@ fn answer(
     }
     // Held from here on, so a handshake that fails frees the seat again.
     let seat = Seat(Arc::clone(desk));
-    if let Some(realtime) = realtime {
-        return relay(stream, socket, realtime, &request).map(|()| None);
+    if let Some(api) = api {
+        return relay(stream, socket, api, request, method == "POST").map(|()| None);
     }
     write!(
         stream,
@@ -438,23 +444,33 @@ fn answer(
     Ok(Some(Guest(socket, seat)))
 }
 
-/// Carries a connection to the model server's Realtime API byte for byte, from the request
-/// already read, until either side closes. The model server answers the handshake itself.
+/// Carries a connection to the model server's API byte for byte, from the request already
+/// read, until either side closes. The model server answers a robot's handshake itself. A
+/// text to read aloud is asked for `once`: the model server closes when it has answered,
+/// which frees the seat.
 fn relay(
     mut visitor: impl Stream,
     socket: &TcpStream,
-    realtime: SocketAddr,
-    request: &[u8],
+    api: SocketAddr,
+    mut request: Vec<u8>,
+    once: bool,
 ) -> Result<()> {
-    let mut server = TcpStream::connect_timeout(&realtime, Duration::from_secs(2))?;
-    server.write_all(request)?;
+    if once {
+        let line = request.iter().position(|&byte| byte == b'\n');
+        let headers = line.map_or(0, |end| end + 1);
+        request.splice(headers..headers, *b"Connection: close\r\n");
+    }
+    let mut server = TcpStream::connect_timeout(&api, Duration::from_secs(2))?;
+    server.write_all(&request)?;
     // Each side is read in turn, for a few milliseconds at a time.
     for side in [socket, &server] {
         side.set_nodelay(true)?;
         side.set_read_timeout(Some(Duration::from_millis(5)))?;
         side.set_write_timeout(Some(Duration::from_secs(5)))?;
     }
-    eprintln!("A robot or program connected.");
+    if !once {
+        eprintln!("A robot or program connected.");
+    }
     let mut buffer = [0; 16 * 1024];
     let mut carry = || -> io::Result<()> {
         while pass(&mut visitor, &mut server, &mut buffer)?
@@ -463,7 +479,9 @@ fn relay(
         Ok(())
     };
     let ended = carry();
-    eprintln!("The robot or program disconnected.");
+    if !once {
+        eprintln!("The robot or program disconnected.");
+    }
     Ok(ended?)
 }
 
@@ -592,6 +610,19 @@ mod tests {
         }
     }
 
+    /// Visits again until whoever held the seat has left it.
+    fn once_free(mut visit: impl FnMut() -> tungstenite::Result<Page>) -> Page {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match visit() {
+                Ok(visitor) => return visitor,
+                refused => assert_eq!(status(refused), 409),
+            }
+            assert!(Instant::now() < deadline, "The seat was never freed");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     fn wait(door: &Door) -> Remote {
         door.wait(&AtomicBool::new(false), || Ok(()))
             .unwrap()
@@ -649,15 +680,7 @@ mod tests {
 
         // The seat frees once the first browser's connection has ended.
         first.close(None).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let _second = loop {
-            match plain(&link, key) {
-                Ok(second) => break second,
-                refused => assert_eq!(status(refused), 409),
-            }
-            assert!(Instant::now() < deadline, "The seat was never freed");
-            thread::sleep(Duration::from_millis(2));
-        };
+        let _second = once_free(|| plain(&link, key));
         assert!(remote.left());
         assert!(!wait(&door).left());
     }
@@ -799,15 +822,7 @@ mod tests {
         drop(robot);
 
         // Once it has left, a program that sends the key as its API key takes the seat.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut program = loop {
-            match realtime(&link, "", Some(key)) {
-                Ok(program) => break program,
-                refused => assert_eq!(status(refused), 409),
-            }
-            assert!(Instant::now() < deadline, "The seat was never freed");
-            thread::sleep(Duration::from_millis(2));
-        };
+        let mut program = once_free(|| realtime(&link, "", Some(key)));
         assert_eq!(program.read().unwrap().to_text().unwrap(), "created");
         // Neither took the conversation's audio device.
         let stopped = AtomicBool::new(false);
@@ -816,6 +831,71 @@ mod tests {
             Ok(())
         };
         assert!(door.wait(&stopped, idle).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_text_is_read_aloud_by_the_model_server_while_its_program_holds_the_seat() {
+        // A stand-in for the model server's voice. Once let, it answers with what it was sent.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = listener.local_addr().unwrap();
+        let (received, arrived) = mpsc::channel();
+        let (finish, finished) = mpsc::channel();
+        thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut sent = Vec::new();
+                while !sent.ends_with(b"}") {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    sent.extend_from_slice(&chunk[..read]);
+                }
+                received.send(()).unwrap();
+                // The program, or the test, may have left.
+                let _ = finished.recv();
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", sent.len());
+                let _ = stream.write_all(&[head.as_bytes(), &sent].concat());
+            }
+        });
+        let cache = cache();
+        let (_door, links) = Door::bind(0, &cache, None, Some(api)).unwrap();
+        fs::remove_dir_all(cache).unwrap();
+        let (link, key) = (links.here.as_str(), key(&links.here));
+        // More text than the door reads before it decides.
+        let body = format!(r#"{{"input":"{}"}}"#, "word ".repeat(1000));
+        let post = |key: &str, body: &str| {
+            let length = body.len();
+            format!(
+                "POST /v1/audio/speech HTTP/1.1\r\nAuthorization: Bearer {key}\r\nContent-Length: {length}\r\n\r\n{body}"
+            )
+        };
+        let ask = || {
+            let mut program = TcpStream::connect(address(link)).unwrap();
+            program.write_all(post(key, &body).as_bytes()).unwrap();
+            let asked = arrived.recv_timeout(Duration::from_secs(5));
+            asked.expect("The seat was taken, or the model server never asked");
+            assert_eq!(status(plain(link, key)), 409, "The voice is busy");
+            program
+        };
+
+        assert!(request(link, &post("wrong", "")).starts_with("HTTP/1.1 404 "));
+        let got = format!("GET /v1/audio/speech?key={key} HTTP/1.1\r\n\r\n");
+        assert!(request(link, &got).starts_with("HTTP/1.1 404 "));
+        // A model without a voice of its own to ask.
+        let (_other, other) = local();
+        let unvoiced = request(&other, &post(self::key(&other), ""));
+        assert!(unvoiced.starts_with("HTTP/1.1 404 "), "{unvoiced}");
+
+        let mut program = ask();
+        finish.send(()).unwrap();
+        let mut answer = String::new();
+        program.read_to_string(&mut answer).unwrap();
+        // The model server was asked to answer once, and its answer came back whole.
+        assert!(answer.starts_with("HTTP/1.1 200 OK\r\n"), "{answer}");
+        assert!(answer.contains("POST /v1/audio/speech HTTP/1.1\r\nConnection: close\r\nAuth"));
+        assert!(answer.ends_with(&body));
+
+        // The answer freed the seat for the next program, which frees it by leaving early.
+        drop(ask());
+        once_free(|| plain(link, key));
     }
 
     #[test]
