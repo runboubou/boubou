@@ -40,14 +40,11 @@ All three are [Liquid AI](https://huggingface.co/LiquidAI) models served by
 Boubou also has a modular pipeline: Parakeet or Whisper for speech
 recognition, Qwen3.5 for replies, and a choice of voices including Qwen3-TTS,
 Kokoro, Pocket TTS and Supertonic. It runs in a prebuilt Python runtime on
-macOS 15 or on x86-64 Linux with an NVIDIA GPU, and is not published yet. To
-build it yourself, see [packaging/qwen](packaging/qwen/README.md).
+macOS 15 or on x86-64 Linux with an NVIDIA GPU. The menu offers only the
+Liquid models; run one of these voices by its ID from `boubou list`. To build
+the runtime yourself, see [packaging/qwen](packaging/qwen/README.md).
 
 ## Usage
-
-The published beta only includes `run LFM3-Audio-2B`. Everything below works
-from a [source build](#build-from-source) and ships in the next release
-([#5](https://github.com/runboubou/boubou/issues/5)).
 
 ```sh
 boubou                          # check this machine and pick a model from a menu
@@ -126,9 +123,9 @@ voice is the one `serve` started with. While someone is talking the answer is
 ## Linux
 
 The three Liquid models also run on x86-64 and arm64 Linux with glibc 2.38 or
-later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. From
-the next release, the npm package also runs on x86-64 Linux with Node.js 18 or
-later; on arm64, [build from source](#build-from-source). Then talk:
+later (for example Ubuntu 24.04 or Debian 13), OpenSSL 3 and `libgomp`. The
+npm package also runs on x86-64 Linux with Node.js 18 or later; on arm64,
+[build from source](#build-from-source). Then talk:
 
 ```sh
 npx boubou@beta run LFM3-Audio-2B
@@ -156,7 +153,7 @@ voice except Qwen3-TTS, ChatTTS and the Whisper entries. You need:
 - About 10 GB of free disk while the runtime installs and 6.2 GB after it,
   plus 5.3 GB of models shared by every voice and 0.02 to 3.3 GB for each voice.
 
-From the next release, talk with:
+Talk with:
 
 ```sh
 npx boubou@beta run kokoro:82m
