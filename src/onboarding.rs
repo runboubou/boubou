@@ -954,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn offers_only_the_liquid_voices_that_fit() {
+    fn offers_liquid_first_then_the_guided_voices_that_fit() {
         let setups = catalog_setups();
         for total in [8, 16, 24, 32, 64, 128] {
             let device = Device {
@@ -976,7 +976,13 @@ mod tests {
             let expected = if total == 8 {
                 vec![DEFAULT.id]
             } else {
-                vec![DEFAULT.id, profiles::OMNI.id]
+                vec![
+                    DEFAULT.id,
+                    profiles::OMNI.id,
+                    "qwen3-tts:0.6b-customvoice",
+                    "pocket-tts:english_2026-10",
+                    "phonon:31m-en",
+                ]
             };
             assert_eq!(actual, expected, "{total} GiB");
         }
@@ -990,9 +996,11 @@ mod tests {
             apple_silicon: true,
             macos: (15, 0, 0),
             memory: 128 * GIB,
-            available: 7 * GIB,
+            available: 15 * GIB,
             disk: 100 * GIB,
         };
+        assert_eq!(available_setups(&device, &setups).len(), 5);
+        device.available = 11 * GIB;
         let choices = available_setups(&device, &setups);
         assert_eq!(
             choices

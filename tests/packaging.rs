@@ -342,7 +342,7 @@ fn guided_start_redraws_when_the_terminal_resizes() {
 }
 
 #[test]
-fn guided_start_leaves_packaged_voices_out_of_the_menu() {
+fn guided_start_filters_incompatible_packaged_voices_before_download() {
     let package = Package::new();
     let release = package.0.join("qwen");
     fs::create_dir(&release).unwrap();
@@ -350,7 +350,7 @@ fn guided_start_leaves_packaged_voices_out_of_the_menu() {
         release.join("runtime.json"),
         serde_json::json!({
             "url":"https://example.invalid/runner.tar.gz", "size":1,
-            "sha256":"a".repeat(64), "tree_sha256":"a".repeat(64), "min_macos":"13.0"
+            "sha256":"a".repeat(64), "tree_sha256":"a".repeat(64), "min_macos":"99.0"
         })
         .to_string(),
     )
