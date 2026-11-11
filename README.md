@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <sub>Current source build on macOS. Illustrative conversation; setup time condensed. <a href="https://github.com/runboubou/boubou/issues/5">Release progress</a>.</sub>
+  <sub>macOS terminal workflow. Illustrative conversation; setup time condensed.</sub>
 </p>
 
 ## Quick start
@@ -43,10 +43,12 @@ Allow microphone access. The first run downloads about **1.4 GB**. Then speak En
 
 <kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
 
-The guided picker shown above is available in the current macOS source build.
+On macOS, run `npx boubou@beta` to choose a Liquid model from the menu. Run modular voices by their IDs from `boubou list`.
 
 <details>
 <summary>Build from source / Linux</summary>
+
+The npm command also works on x86-64 Linux. Build from source for arm64 Linux.
 
 You need Rust 1.91+ and Xcode Command Line Tools on macOS. On Linux, install a C compiler, `pkg-config` and ALSA development headers.
 

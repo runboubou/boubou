@@ -7,7 +7,7 @@
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 16,
     "memory_gib": 12,
-    "guided": true
+    "guided": false
   },
   {
     "id": "qwen3-tts:1.7b-customvoice",
@@ -17,7 +17,7 @@
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 32,
     "memory_gib": 16,
-    "guided": true
+    "guided": false
   },
   {
     "id": "pocket-tts:english_2026-10",
@@ -27,7 +27,7 @@
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 16,
     "memory_gib": 12,
-    "guided": true
+    "guided": false
   },
   {
     "id": "phonon:31m-en",
@@ -37,7 +37,7 @@
     "llm": "Qwen3.5-4B-4bit",
     "recommended_memory_gib": 16,
     "memory_gib": 12,
-    "guided": true
+    "guided": false
   },
   {
     "id": "mms-tts:eng",

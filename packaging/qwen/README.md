@@ -20,14 +20,11 @@ profile's verified weights. Profiles reuse the same runner. `runtime.json` also
 records a digest of the unpacked runner, so each start hashes the installed
 files on several threads instead of re-reading the archive, which is removed
 once installed. The [runtime catalog](runtimes.json) is
-shared by the client, asset locking and runner arguments. Its `guided` entries
-are Qwen 0.6B and 1.7B CustomVoice with fixed Aiden, Pocket TTS English
-(`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
-Qwen3.5-4B. The client also offers Liquid Audio and Liquid Omni integrated
-voices, preferring Audio within that family.
-
-Guided startup uses English. Other voices, Whisper language modes and the 2B,
-9B and 27B LLM combinations require explicit developer selection. Memory groups
+shared by the client, asset locking and runner arguments. Guided startup offers
+only the Liquid Audio and Liquid Omni integrated voices, preferring Audio, so no
+catalog entry is `guided`. Every profile here, including Qwen 0.6B and 1.7B
+CustomVoice with fixed Aiden, Pocket TTS English (`english_2026-10`, Alba) and
+Phonon 31M English, requires explicit developer selection. Memory groups
 and budgets are estimates for device testing. More parameters do not imply
 better replies or voice quality.
 
@@ -42,21 +39,21 @@ export BOUBOU_HOME="$(mktemp -d)"
 sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$candidate/runtime.json")
 mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
 cp "$candidate/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run qwen3-tts:1.7b-customvoice
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run qwen3-tts:0.6b-customvoice
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run kokoro:82m
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run kitten-tts:mini-0.8
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run phonon:31m-en
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run supertonic:3
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run chattts:en
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.4.tgz -- boubou run pocket-tts:french_24l
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run qwen3-tts:1.7b-customvoice
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run qwen3-tts:0.6b-customvoice
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run kokoro:82m
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run kitten-tts:mini-0.8
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run phonon:31m-en
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run supertonic:3
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run chattts:en
+npx --yes --package /absolute/path/to/boubou-0.1.0-beta.5.tgz -- boubou run pocket-tts:french_24l
 ```
 
 ## Other English TTS families
 
 These entries use Parakeet TDT v3 and Qwen3.5-4B-4bit and require explicit
-developer selection. MMS is excluded from guided recommendations. OmniVoice
-speaks with one fixed voice, designed as a young American man.
+developer selection. OmniVoice speaks with one fixed voice, designed as a young
+American man.
 
 | ID | Local TTS engine | Weight terms |
 | --- | --- | --- |
