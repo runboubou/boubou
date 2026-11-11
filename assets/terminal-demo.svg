@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" id="terminal-demo" width="1040" height="650" viewBox="0 0 1040 650" role="img" aria-labelledby="demo-title demo-desc">
+<title id="demo-title">Boubou: from a terminal command to a local voice conversation</title>
+<desc id="demo-desc">An illustrative, thirty-second loop of the current macOS source build. Run boubou, choose Liquid Audio, download and verify the model, speak, hear a reply, then interrupt by speaking again. Setup time is condensed. No real audio or personal transcript is used.</desc>
+<style>
+text { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+.sans { font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+.scene { opacity:0; }
+.phase4 { opacity:1; }
+@keyframes blink {0%,49%{opacity:1}50%,100%{opacity:0}}
+.cursor {animation:blink 1s steps(1) infinite;}
+@keyframes type {0%,1%{width:0}8%,100%{width:84px}}
+.type {animation:type 30s steps(6,end) infinite;}
+@keyframes typeCursor {0%,1%{transform:translateX(0)}8%,100%{transform:translateX(84px)}}
+.type-cursor {animation:blink 1s steps(1) infinite,typeCursor 30s steps(6,end) infinite;}
+@keyframes prepReady {0%,35.9%{opacity:0}36.5%,100%{opacity:1}}
+.prep-ready {animation:prepReady 30s linear infinite;}
+@keyframes load {0%,27%{width:0}35.5%,100%{width:730px}}
+.load {animation:load 30s ease-in-out infinite;}
+@keyframes reply {0%,57%{width:0}70%,100%{width:770px}}
+.reply {animation:reply 30s steps(55,end) infinite;}
+@keyframes wave {0%,100%{transform:scaleY(.25)}25%{transform:scaleY(.7)}55%{transform:scaleY(1)}75%{transform:scaleY(.45)}}
+.wave {transform-box:fill-box;transform-origin:center;animation:wave .8s ease-in-out infinite;}
+@keyframes progress {from{width:0}to{width:1040px}}
+.progress {animation:progress 30s linear infinite;}
+@keyframes phase0{0%,9.800%{opacity:1}10.000%,100%{opacity:0}}
+.phase0{animation:phase0 30s linear infinite;}
+@keyframes phase1{0%,9.800%{opacity:0}10.000%,26.467%{opacity:1}26.667%,100%{opacity:0}}
+.phase1{animation:phase1 30s linear infinite;}
+@keyframes phase2{0%,26.467%{opacity:0}26.667%,39.800%{opacity:1}40.000%,100%{opacity:0}}
+.phase2{animation:phase2 30s linear infinite;}
+@keyframes phase3{0%,39.800%{opacity:0}40.000%,56.467%{opacity:1}56.667%,100%{opacity:0}}
+.phase3{animation:phase3 30s linear infinite;}
+@keyframes phase4{0%,56.467%{opacity:0}56.667%,76.467%{opacity:1}76.667%,100%{opacity:0}}
+.phase4{animation:phase4 30s linear infinite;}
+@keyframes phase5{0%,76.467%{opacity:0}76.667%,99.8%{opacity:1}100%{opacity:0}}
+.phase5{animation:phase5 30s linear infinite;}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene,.phase0,.phase1,.phase2,.phase3,.phase5{animation:none!important;opacity:0}
+  .phase4{animation:none!important;opacity:1}
+  .wave,.cursor,.progress{animation:none!important}
+  .reply{animation:none!important;width:770px}
+}
+</style>
+<defs><clipPath id="type-clip"><rect class="type" x="68" y="87" width="126" height="40"/></clipPath><clipPath id="reply-clip"><rect class="reply" x="159" y="248" width="770" height="36"/></clipPath><clipPath id="terminal-clip"><rect width="1040" height="575" rx="14"/></clipPath></defs>
+<g clip-path="url(#terminal-clip)">
+<rect x="0" y="0" width="1040" height="575" rx="0" fill="#171719" />
+<rect x="0" y="0" width="1040" height="48" rx="0" fill="#202023" />
+<circle cx="25" cy="24" r="5" fill="#67676e"/><circle cx="43" cy="24" r="5" fill="#67676e"/><circle cx="61" cy="24" r="5" fill="#67676e"/>
+<text x="520" y="29" fill="#adadb6" font-size="13" class="sans" text-anchor="middle">boubou — terminal</text>
+<path d="M0 48H1040" stroke="#343438"/>
+<g class="scene phase0">
+<text x="44" y="116" fill="#f2c21b" font-size="22" >$</text>
+<g clip-path="url(#type-clip)">
+<text x="68" y="116" fill="#f4f4f6" font-size="22" >boubou</text>
+</g>
+<rect x="68" y="96" width="11" height="24" rx="1" fill="#f2c21b" class="type-cursor"/>
+<text x="44" y="183" fill="#a4a4af" font-size="18" >A voice conversation, right here.</text>
+<text x="44" y="213" fill="#777782" font-size="16" >No account. No API key.</text>
+<text x="44" y="530" fill="#777782" font-size="14" >One command to begin.</text>
+</g>
+<g class="scene phase1">
+<text x="45" y="98" fill="#f4f4f6" font-size="22" font-weight="700">boubou</text><text x="989" y="98" fill="#f2c21b" font-size="14" text-anchor="end">○ On this Mac</text><path d="M44 116H996" stroke="#343438"/>
+<text x="44" y="160" fill="#f4f4f6" font-size="21" font-weight="600">Choose a voice for this Mac</text>
+<text x="44" y="189" fill="#95959f" font-size="15" >Apple Silicon · 16 GiB memory</text>
+<rect x="44" y="215" width="952" height="46" rx="7" fill="#2c2c32" />
+<text x="63" y="244" fill="#f2c21b" font-size="23" >›</text>
+<text x="94" y="244" fill="#f4f4f6" font-size="17" font-weight="600">Liquid Audio 2B</text>
+<text x="394" y="244" fill="#adadb6" font-size="16" >One model hears and speaks</text>
+<text x="974" y="244" fill="#c2c2ca" font-size="16" text-anchor="end">1.4 GB</text>
+<text x="94" y="293" fill="#b8b8c0" font-size="17" >Liquid Omni 2.17B</text>
+<text x="394" y="293" fill="#83838e" font-size="16" >Voice, images and video</text>
+<text x="974" y="293" fill="#95959f" font-size="16" text-anchor="end">1.6 GB</text>
+<text x="63" y="342" fill="#95959f" font-size="16" >Use a model you already chose…</text>
+<text x="44" y="389" fill="#8f8f9a" font-size="15" >English · one model hears, thinks and speaks</text>
+<rect x="44" y="425" width="952" height="54" rx="7" fill="none" stroke="#595961"/>
+<text x="65" y="458" fill="#f4f4f6" font-size="17" >$ boubou run LFM3-Audio-2B</text>
+<text x="973" y="458" fill="#f2c21b" font-size="21" text-anchor="end">↵</text>
+<text x="44" y="529" fill="#8e8e98" font-size="14" >↑↓ choose   ↵ run   esc back   ctrl+c exit</text>
+</g>
+<g class="scene phase2">
+<text x="45" y="98" fill="#f4f4f6" font-size="22" font-weight="700">boubou</text><text x="989" y="98" fill="#f2c21b" font-size="14" text-anchor="end">○ On this Mac</text><path d="M44 116H996" stroke="#343438"/>
+<text x="44" y="164" fill="#f4f4f6" font-size="19" >$ boubou run LFM3-Audio-2B</text>
+<text x="46" y="216" fill="#f2c21b" font-size="19" >✓</text>
+<text x="78" y="216" fill="#f4f4f6" font-size="17" >Check this Mac</text>
+<text x="78" y="242" fill="#8e8e98" font-size="14" >Apple Silicon · ready for local inference</text>
+<text x="46" y="285" fill="#f2c21b" font-size="19" >↓</text>
+<text x="78" y="285" fill="#f4f4f6" font-size="17" >Download pinned model files</text>
+<rect x="78" y="311" width="730" height="6" rx="3" fill="#393940" />
+<rect x="78" y="311" width="730" height="6" rx="3" fill="#f2c21b" class="load"/>
+<text x="974" y="320" fill="#a4a4ae" font-size="14" text-anchor="end">1.4 GB</text>
+<g class="prep-ready">
+<text x="46" y="369" fill="#f2c21b" font-size="19" >✓</text>
+<text x="78" y="369" fill="#f4f4f6" font-size="17" >Verify every file</text>
+<text x="78" y="395" fill="#8e8e98" font-size="14" >Each one must match its pinned SHA-256</text>
+<text x="46" y="444" fill="#f2c21b" font-size="19" >✓</text>
+<text x="78" y="444" fill="#f4f4f6" font-size="17" >Start on this Mac</text>
+<text x="78" y="470" fill="#8e8e98" font-size="14" >Opening microphone and speakers</text>
+<text x="44" y="541" fill="#f2c21b" font-size="15" >Ready. Speak English. Speech stays on this Mac.</text>
+</g></g>
+<g class="scene phase3">
+<text x="45" y="98" fill="#f4f4f6" font-size="22" font-weight="700">boubou</text><text x="989" y="98" fill="#f2c21b" font-size="14" text-anchor="end">○ On this Mac</text><path d="M44 116H996" stroke="#343438"/>
+<text x="44" y="159" fill="#95959f" font-size="15" >Ready. Speak English. Speech stays on this Mac.</text>
+<text x="44" y="222" fill="#f4f4f6" font-size="16" font-weight="700">you</text>
+<text x="159" y="222" fill="#f4f4f6" font-size="19" >Hey Boubou, tell me about toucans.</text>
+<text x="159" y="277" fill="#777782" font-size="15" >Pause when you’re done.</text>
+<rect x="44" y="408" width="952" height="105" rx="8" fill="none" stroke="#393940"/><text x="68" y="446" fill="#f4f4f6" font-size="16" font-weight="700">you</text><text x="68" y="486" fill="#f2c21b" font-size="16" font-weight="700">boubou</text><rect x="177" y="436.0" width="5" height="8" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.00s"/><rect x="187" y="433.0" width="5" height="14" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.14s"/><rect x="197" y="435.5" width="5" height="9" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.27s"/><rect x="207" y="428.0" width="5" height="24" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.41s"/><rect x="217" y="424.0" width="5" height="32" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.55s"/><rect x="227" y="432.5" width="5" height="15" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.69s"/><rect x="237" y="427.0" width="5" height="26" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.82s"/><rect x="247" y="420.0" width="5" height="40" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.96s"/><rect x="257" y="427.5" width="5" height="25" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.10s"/><rect x="267" y="431.0" width="5" height="18" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.23s"/><rect x="277" y="424.5" width="5" height="31" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.37s"/><rect x="287" y="433.0" width="5" height="14" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.51s"/><rect x="297" y="429.0" width="5" height="22" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.64s"/><rect x="307" y="421.5" width="5" height="37" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.78s"/><rect x="317" y="426.0" width="5" height="28" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.92s"/><rect x="327" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.06s"/><rect x="337" y="428.0" width="5" height="24" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.19s"/><rect x="347" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.33s"/><rect x="357" y="423.0" width="5" height="34" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.47s"/><rect x="367" y="426.0" width="5" height="28" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.60s"/><rect x="377" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.74s"/><rect x="387" y="421.0" width="5" height="38" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.88s"/><rect x="397" y="429.5" width="5" height="21" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.01s"/><rect x="407" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.15s"/><rect x="417" y="427.5" width="5" height="25" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.29s"/><rect x="427" y="425.0" width="5" height="30" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.43s"/><rect x="437" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.56s"/><rect x="447" y="429.0" width="5" height="22" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.70s"/><rect x="457" y="435.0" width="5" height="10" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.84s"/><rect x="467" y="431.0" width="5" height="18" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.97s"/><rect x="477" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-4.11s"/><rect x="487" y="436.0" width="5" height="8" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-4.25s"/><rect x="177" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="187" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="197" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="207" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="217" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="227" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="237" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="247" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="257" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="267" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="277" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="287" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="297" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="307" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="317" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="327" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="337" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="347" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="357" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="367" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="377" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="387" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="397" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="407" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="417" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="427" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="437" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="447" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="457" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="467" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="477" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="487" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><text x="972" y="446" fill="#95959f" font-size="14" text-anchor="end">microphone</text><text x="972" y="486" fill="#95959f" font-size="14" text-anchor="end">on this Mac</text><text x="45" y="543" fill="#8e8e98" font-size="14" >esc pause   ↵ resume   ctrl+c exit</text>
+</g>
+<g class="scene phase4">
+<text x="45" y="98" fill="#f4f4f6" font-size="22" font-weight="700">boubou</text><text x="989" y="98" fill="#f2c21b" font-size="14" text-anchor="end">○ On this Mac</text><path d="M44 116H996" stroke="#343438"/>
+<text x="44" y="159" fill="#95959f" font-size="15" >Ready. Speak English. Speech stays on this Mac.</text>
+<text x="44" y="222" fill="#f4f4f6" font-size="16" font-weight="700">you</text>
+<text x="159" y="222" fill="#f4f4f6" font-size="19" >Hey Boubou, tell me about toucans.</text>
+<text x="44" y="272" fill="#f2c21b" font-size="16" font-weight="700">boubou</text>
+<g clip-path="url(#reply-clip)">
+<text x="159" y="272" fill="#f4f4f6" font-size="19" >Toucans use their colorful bills to reach fruit…</text>
+</g>
+<text x="159" y="327" fill="#777782" font-size="15" >Speak whenever you want to jump in.</text>
+<rect x="44" y="408" width="952" height="105" rx="8" fill="none" stroke="#393940"/><text x="68" y="446" fill="#f4f4f6" font-size="16" font-weight="700">you</text><text x="68" y="486" fill="#f2c21b" font-size="16" font-weight="700">boubou</text><rect x="177" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="187" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="197" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="207" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="217" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="227" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="237" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="247" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="257" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="267" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="277" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="287" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="297" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="307" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="317" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="327" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="337" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="347" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="357" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="367" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="377" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="387" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="397" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="407" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="417" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="427" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="437" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="447" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="457" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="467" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="477" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="487" y="439" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="177" y="476.0" width="5" height="8" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.00s"/><rect x="187" y="473.0" width="5" height="14" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.14s"/><rect x="197" y="475.5" width="5" height="9" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.27s"/><rect x="207" y="468.0" width="5" height="24" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.41s"/><rect x="217" y="464.0" width="5" height="32" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.55s"/><rect x="227" y="472.5" width="5" height="15" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.69s"/><rect x="237" y="467.0" width="5" height="26" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.82s"/><rect x="247" y="460.0" width="5" height="40" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-0.96s"/><rect x="257" y="467.5" width="5" height="25" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.10s"/><rect x="267" y="471.0" width="5" height="18" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.23s"/><rect x="277" y="464.5" width="5" height="31" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.37s"/><rect x="287" y="473.0" width="5" height="14" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.51s"/><rect x="297" y="469.0" width="5" height="22" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.64s"/><rect x="307" y="461.5" width="5" height="37" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.78s"/><rect x="317" y="466.0" width="5" height="28" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-1.92s"/><rect x="327" y="472.0" width="5" height="16" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.06s"/><rect x="337" y="468.0" width="5" height="24" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.19s"/><rect x="347" y="474.0" width="5" height="12" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.33s"/><rect x="357" y="463.0" width="5" height="34" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.47s"/><rect x="367" y="466.0" width="5" height="28" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.60s"/><rect x="377" y="472.0" width="5" height="16" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.74s"/><rect x="387" y="461.0" width="5" height="38" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-2.88s"/><rect x="397" y="469.5" width="5" height="21" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.01s"/><rect x="407" y="474.0" width="5" height="12" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.15s"/><rect x="417" y="467.5" width="5" height="25" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.29s"/><rect x="427" y="465.0" width="5" height="30" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.43s"/><rect x="437" y="472.0" width="5" height="16" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.56s"/><rect x="447" y="469.0" width="5" height="22" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.70s"/><rect x="457" y="475.0" width="5" height="10" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.84s"/><rect x="467" y="471.0" width="5" height="18" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-3.97s"/><rect x="477" y="474.0" width="5" height="12" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-4.11s"/><rect x="487" y="476.0" width="5" height="8" rx="1.5" fill="#f2c21b" class="wave" style="animation-delay:-4.25s"/><text x="972" y="446" fill="#95959f" font-size="14" text-anchor="end">microphone</text><text x="972" y="486" fill="#95959f" font-size="14" text-anchor="end">on this Mac</text><text x="45" y="543" fill="#8e8e98" font-size="14" >esc pause   ↵ resume   ctrl+c exit</text>
+</g>
+<g class="scene phase5">
+<text x="45" y="98" fill="#f4f4f6" font-size="22" font-weight="700">boubou</text><text x="989" y="98" fill="#f2c21b" font-size="14" text-anchor="end">○ On this Mac</text><path d="M44 116H996" stroke="#343438"/>
+<text x="44" y="159" fill="#95959f" font-size="15" >Ready. Speak English. Speech stays on this Mac.</text>
+<text x="44" y="222" fill="#f4f4f6" font-size="16" font-weight="700">you</text>
+<text x="159" y="222" fill="#a1a1ac" font-size="18" >Hey Boubou, tell me about toucans.</text>
+<text x="44" y="270" fill="#f2c21b" font-size="16" font-weight="700">boubou</text>
+<text x="159" y="270" fill="#a1a1ac" font-size="18" >Toucans use their colorful bills to reach fruit…</text>
+<text x="159" y="303" fill="#868691" font-size="15" >[Interrupted]</text>
+<text x="44" y="358" fill="#f4f4f6" font-size="16" font-weight="700">you</text>
+<text x="159" y="358" fill="#f4f4f6" font-size="19" >Wait — one fun fact.</text>
+<rect x="44" y="408" width="952" height="105" rx="8" fill="none" stroke="#393940"/><text x="68" y="446" fill="#f4f4f6" font-size="16" font-weight="700">you</text><text x="68" y="486" fill="#f2c21b" font-size="16" font-weight="700">boubou</text><rect x="177" y="436.0" width="5" height="8" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.00s"/><rect x="187" y="433.0" width="5" height="14" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.14s"/><rect x="197" y="435.5" width="5" height="9" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.27s"/><rect x="207" y="428.0" width="5" height="24" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.41s"/><rect x="217" y="424.0" width="5" height="32" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.55s"/><rect x="227" y="432.5" width="5" height="15" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.69s"/><rect x="237" y="427.0" width="5" height="26" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.82s"/><rect x="247" y="420.0" width="5" height="40" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-0.96s"/><rect x="257" y="427.5" width="5" height="25" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.10s"/><rect x="267" y="431.0" width="5" height="18" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.23s"/><rect x="277" y="424.5" width="5" height="31" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.37s"/><rect x="287" y="433.0" width="5" height="14" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.51s"/><rect x="297" y="429.0" width="5" height="22" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.64s"/><rect x="307" y="421.5" width="5" height="37" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.78s"/><rect x="317" y="426.0" width="5" height="28" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-1.92s"/><rect x="327" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.06s"/><rect x="337" y="428.0" width="5" height="24" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.19s"/><rect x="347" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.33s"/><rect x="357" y="423.0" width="5" height="34" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.47s"/><rect x="367" y="426.0" width="5" height="28" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.60s"/><rect x="377" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.74s"/><rect x="387" y="421.0" width="5" height="38" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-2.88s"/><rect x="397" y="429.5" width="5" height="21" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.01s"/><rect x="407" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.15s"/><rect x="417" y="427.5" width="5" height="25" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.29s"/><rect x="427" y="425.0" width="5" height="30" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.43s"/><rect x="437" y="432.0" width="5" height="16" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.56s"/><rect x="447" y="429.0" width="5" height="22" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.70s"/><rect x="457" y="435.0" width="5" height="10" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.84s"/><rect x="467" y="431.0" width="5" height="18" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-3.97s"/><rect x="477" y="434.0" width="5" height="12" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-4.11s"/><rect x="487" y="436.0" width="5" height="8" rx="1.5" fill="#f4f4f6" class="wave" style="animation-delay:-4.25s"/><rect x="177" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="187" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="197" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="207" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="217" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="227" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="237" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="247" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="257" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="267" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="277" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="287" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="297" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="307" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="317" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="327" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="337" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="347" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="357" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="367" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="377" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="387" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="397" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="407" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="417" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="427" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="437" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="447" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="457" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="467" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="477" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><rect x="487" y="479" width="5" height="2" rx="1.5" fill="#55555e" /><text x="972" y="446" fill="#95959f" font-size="14" text-anchor="end">microphone</text><text x="972" y="486" fill="#95959f" font-size="14" text-anchor="end">on this Mac</text><text x="45" y="543" fill="#8e8e98" font-size="14" >esc pause   ↵ resume   ctrl+c exit</text>
+</g>
+<rect x="0" y="572" width="1040" height="3" rx="0" fill="#343438" />
+<rect x="0" y="572" width="1040" height="3" rx="0" fill="#f2c21b" class="progress"/>
+</g>
+<circle cx="50" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase0"><circle cx="50" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="50" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">1</text>
+<text x="71" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Launch</text>
+<circle cx="220" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase1"><circle cx="220" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="220" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">2</text>
+<text x="241" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Choose</text>
+<circle cx="390" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase2"><circle cx="390" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="390" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">3</text>
+<text x="411" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Get ready</text>
+<circle cx="560" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase3"><circle cx="560" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="560" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">4</text>
+<text x="581" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Speak</text>
+<circle cx="730" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase4"><circle cx="730" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="730" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">5</text>
+<text x="751" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Listen</text>
+<circle cx="900" cy="612" r="12" fill="#efefeb"/>
+<g class="scene phase5"><circle cx="900" cy="612" r="12" fill="#f2c21b"/></g>
+<text x="900" y="616" fill="#25261f" font-size="11" text-anchor="middle" class="sans" font-weight="600">6</text>
+<text x="921" y="617" fill="#5f655a" font-size="14" class="sans" font-weight="600">Interrupt</text>
+</svg>
