@@ -40,7 +40,7 @@ impl Remote {
         held: impl Send + 'static,
     ) -> (Self, Receiver<CaptureFrame>) {
         let (outgoing, queued) = mpsc::channel();
-        let (frames, captured) = mpsc::sync_channel(64);
+        let (frames, captured) = mpsc::sync_channel(super::CAPTURE_QUEUE);
         let playback = Arc::new(Mutex::new(Playback::default()));
         let gone = Arc::new(AtomicBool::new(false));
         let (progress, ended) = (Arc::clone(&playback), Arc::clone(&gone));
@@ -151,7 +151,7 @@ fn exchange<S: Read + Write>(
                     Ok(()) => {}
                     Err(TrySendError::Disconnected(_)) => return Ok(()),
                     Err(TrySendError::Full(_)) => {
-                        bail!("Boubou fell more than a second behind the browser's microphone")
+                        bail!("Boubou fell more than five seconds behind the browser's microphone")
                     }
                 }
             }
@@ -239,6 +239,30 @@ mod tests {
         assert_eq!(frames[1].samples, vec![0; 320]);
         assert!(!frames[1].near_end_speech);
         assert!(frames[1].captured_at.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn frames_wait_through_a_pause_in_the_conversation() {
+        let (remote, captured, mut browser) = connect();
+        // Two seconds of microphone arrive while the conversation takes none of it.
+        for index in 0..100_i16 {
+            let frame: Vec<u8> = [index; 320]
+                .into_iter()
+                .flat_map(i16::to_le_bytes)
+                .collect();
+            browser.send(Message::Binary(frame.into())).unwrap();
+        }
+        thread::sleep(Duration::from_millis(300));
+        let mut firsts = Vec::new();
+        until("the waiting frames", || {
+            firsts.extend(captured.try_iter().map(|frame| match frame {
+                CaptureFrame::Samples(frame) => frame.samples[0],
+                CaptureFrame::Error(error) => panic!("{error}"),
+            }));
+            firsts.len() == 100
+        });
+        assert_eq!(firsts, (0..100).collect::<Vec<i16>>());
+        remote.check_error().unwrap();
     }
 
     #[test]

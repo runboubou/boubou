@@ -66,7 +66,7 @@ impl Audio {
         };
         // Both callbacks share the canceller: the speaker's output is its reference signal.
         let echo = Arc::new(Mutex::new(Echo::new()));
-        let (sender, receiver) = mpsc::sync_channel(64);
+        let (sender, receiver) = mpsc::sync_channel(super::CAPTURE_QUEUE);
         let mut frames = Frames::default();
         let mut speech = Speech::default();
         let (cancelling, failure) = (Arc::clone(&echo), Arc::clone(&error));
@@ -92,7 +92,7 @@ impl Audio {
                         {
                             fail(
                                 &failure,
-                                "Microphone processing fell behind by more than one second; restart Boubou.".into(),
+                                "Microphone processing fell behind by more than five seconds; restart Boubou.".into(),
                             );
                         }
                     });

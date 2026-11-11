@@ -472,10 +472,6 @@ fn converse(
                     "The audio device disconnected. Restart after checking the selected devices."
                 ),
             };
-            ensure!(
-                frame.captured_at.elapsed() < Duration::from_millis(500),
-                "Microphone processing fell behind. Restart Boubou after closing other busy applications."
-            );
             if listening {
                 panel.mic(&frame.samples);
             }

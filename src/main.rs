@@ -762,10 +762,6 @@ fn converse(
                 continue;
             }
             panel.mic(&frame.samples);
-            ensure!(
-                frame.captured_at.elapsed() < Duration::from_millis(500),
-                "Microphone processing fell behind. Restart Boubou after closing other busy applications."
-            );
             let segment = if manual {
                 let Some(since) = recording_since else {
                     continue;
