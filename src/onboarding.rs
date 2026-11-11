@@ -257,15 +257,12 @@ impl Row {
 const DEVELOPER: &str = "Use a model you already chose…";
 
 fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
-    let mut choices: Vec<_> = setups
+    setups
         .iter()
         .filter(|setup| {
             device.memory >= setup.recommended_memory_gib * GIB && device.check(setup).is_ok()
         })
-        .collect();
-    // Prefer the accepted 4B conversation when it fits; Liquid serves smaller Macs.
-    choices.sort_by_key(|setup| matches!(setup.model, Model::Liquid(_)));
-    choices
+        .collect()
 }
 
 fn liquid_requirements(model: &Profile, cache: &Path) -> Result<modular::Requirements> {
@@ -957,7 +954,7 @@ mod tests {
     }
 
     #[test]
-    fn offers_only_accepted_english_voices_with_the_4b_default_when_it_fits() {
+    fn offers_only_the_liquid_voices_that_fit() {
         let setups = catalog_setups();
         for total in [8, 16, 24, 32, 64, 128] {
             let device = Device {
@@ -979,17 +976,7 @@ mod tests {
             let expected = if total == 8 {
                 vec![DEFAULT.id]
             } else {
-                let mut ids = vec!["qwen3-tts:0.6b-customvoice"];
-                if total >= 32 {
-                    ids.push("qwen3-tts:1.7b-customvoice");
-                }
-                ids.extend([
-                    "pocket-tts:english_2026-10",
-                    "phonon:31m-en",
-                    DEFAULT.id,
-                    profiles::OMNI.id,
-                ]);
-                ids
+                vec![DEFAULT.id, profiles::OMNI.id]
             };
             assert_eq!(actual, expected, "{total} GiB");
         }
@@ -1003,16 +990,9 @@ mod tests {
             apple_silicon: true,
             macos: (15, 0, 0),
             memory: 128 * GIB,
-            available: 15 * GIB,
+            available: 7 * GIB,
             disk: 100 * GIB,
         };
-        assert_eq!(
-            available_setups(&device, &setups)[0].model.id(),
-            "qwen3-tts:0.6b-customvoice"
-        );
-        device.available = 11 * GIB;
-        assert_eq!(available_setups(&device, &setups)[0].model.id(), DEFAULT.id);
-        device.available = 7 * GIB;
         let choices = available_setups(&device, &setups);
         assert_eq!(
             choices
@@ -1045,11 +1025,8 @@ mod tests {
         device.apple_silicon = true;
         device.disk = 0;
         assert!(available_setups(&device, &setups).is_empty());
-        device.disk = GIB;
-        assert_eq!(
-            available_setups(&device, &setups)[0].model.id(),
-            "qwen3-tts:0.6b-customvoice"
-        );
+        device.disk = 3 * GIB;
+        assert_eq!(available_setups(&device, &setups)[0].model.id(), DEFAULT.id);
     }
 
     #[test]
