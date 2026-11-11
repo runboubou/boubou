@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://runboubou.com/"><img src="https://img.shields.io/badge/Website-runboubou.com-141414?style=flat-square" alt="Website" /></a>
+  <a href="https://discord.gg/SPz5v4Qf86"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&amp;logo=discord&amp;logoColor=white" alt="Discord" /></a>
+  <a href="https://x.com/RunBoubou"><img src="https://img.shields.io/badge/X-Follow-181717?style=flat-square&amp;logo=x&amp;logoColor=white" alt="X" /></a>
+</p>
+
+<p align="center">
   Apple Silicon · Linux · <a href="LICENSE">MIT licensed code</a>
 </p>
 
