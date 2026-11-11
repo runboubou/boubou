@@ -43,6 +43,7 @@ text { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mo
 }
 </style>
 <defs><clipPath id="type-clip"><rect class="type" x="68" y="87" width="126" height="40"/></clipPath><clipPath id="reply-clip"><rect class="reply" x="159" y="248" width="770" height="36"/></clipPath><clipPath id="terminal-clip"><rect width="1040" height="575" rx="14"/></clipPath></defs>
+<rect width="1040" height="650" rx="14" fill="#fff"/>
 <g clip-path="url(#terminal-clip)">
 <rect x="0" y="0" width="1040" height="575" rx="0" fill="#171719" />
 <rect x="0" y="0" width="1040" height="48" rx="0" fill="#202023" />

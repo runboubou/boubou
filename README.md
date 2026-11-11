@@ -104,4 +104,4 @@ Built in the open. Thanks to everyone helping Boubou find its voice.
 
 ---
 
-[MIT](LICENSE). Models and runtimes keep their own licenses; some optional voices are non-commercial.
+[MIT](LICENSE).
