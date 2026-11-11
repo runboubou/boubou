@@ -40,6 +40,10 @@ pub enum CaptureFrame {
     Error(String),
 }
 
+/// Frames that wait while the conversation is busy: five seconds. A slow moment, such as a first
+/// start on a busy computer, is heard late; only a computer that stays behind fills the queue.
+pub const CAPTURE_QUEUE: usize = 250;
+
 /// What a conversation needs from the device that hears and speaks for it.
 pub trait Device {
     /// Schedules PCM16 mono audio at 24 kHz.
@@ -207,7 +211,7 @@ impl Audio {
         let input = child.stdin.take().expect("piped stdin");
         let playback = Arc::new(Mutex::new(Playback::default()));
         let error = Arc::new(Mutex::new(None));
-        let (sender, receiver) = mpsc::sync_channel(64);
+        let (sender, receiver) = mpsc::sync_channel(CAPTURE_QUEUE);
         let (ready_sender, ready) = mpsc::sync_channel(1);
         let progress = Arc::clone(&playback);
         let failure = Arc::clone(&error);
@@ -240,7 +244,7 @@ impl Audio {
                                 Ok(()) => {}
                                 Err(TrySendError::Disconnected(_)) => return Ok(()),
                                 Err(TrySendError::Full(_)) => bail!(
-                                    "Microphone processing fell behind by more than one second; restart Boubou."
+                                    "Microphone processing fell behind by more than five seconds; restart Boubou."
                                 ),
                             }
                         }
