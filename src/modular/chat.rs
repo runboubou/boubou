@@ -1,5 +1,5 @@
-//! Qwen voice chat. The pinned upstream pipeline serves the Realtime API on loopback and owns
-//! turn-taking; Boubou owns the microphone, the speakers and echo cancellation.
+//! Conversations with the modular Python runtime. The upstream pipeline serves the Realtime API
+//! on loopback and owns turn-taking. Boubou owns the microphone, speakers and echo cancellation.
 
 use crate::voice::{Segment, Voice};
 use anyhow::{Context, Result, bail, ensure};
@@ -45,7 +45,7 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .context("Cannot start the Qwen voice runner")?;
+            .context("Cannot start the modular voice runner")?;
         let output = Arc::new(Mutex::new(VecDeque::new()));
         let pipes: [Option<Box<dyn Read + Send>>; 2] = [
             child.stdout.take().map(|pipe| Box::new(pipe) as _),
@@ -84,7 +84,7 @@ impl Server {
             }
             ensure!(
                 Instant::now() < deadline,
-                "Qwen did not become ready within {} seconds.{}",
+                "The modular voice runner did not become ready within {} seconds.{}",
                 STARTUP_TIMEOUT.as_secs(),
                 server.output()
             );
@@ -119,7 +119,10 @@ impl Server {
             {
                 thread::sleep(Duration::from_millis(10));
             }
-            bail!("The Qwen voice runner stopped ({status}).{}", self.output());
+            bail!(
+                "The modular voice runner stopped ({status}).{}",
+                self.output()
+            );
         }
         Ok(())
     }
@@ -180,12 +183,13 @@ impl Session {
             crate::check_cancel(stopped)?;
             ensure!(
                 Instant::now() < deadline,
-                "Qwen WebSocket handshake timed out"
+                "Modular runtime WebSocket handshake timed out"
             );
             match handshake {
                 Ok(connected) => break connected,
                 Err(tungstenite::HandshakeError::Failure(error)) => {
-                    return Err(error).context("The Qwen runner rejected the voice session");
+                    return Err(error)
+                        .context("The modular voice runner rejected the voice session");
                 }
                 Err(tungstenite::HandshakeError::Interrupted(pending)) => {
                     thread::sleep(Duration::from_millis(10));
@@ -216,7 +220,7 @@ impl Session {
         let updated = session.wait_for("session.updated", stopped)?;
         ensure!(
             updated["session"]["audio"]["output"]["format"]["rate"] == 24000,
-            "The Qwen runner did not accept 24 kHz speech output"
+            "The modular voice runner did not accept 24 kHz speech output"
         );
         Ok(session)
     }
@@ -264,7 +268,7 @@ impl Session {
             .or_else(|| event["response"]["id"].as_str());
         let muted = id.is_some() && id == self.muted.as_deref();
         Ok(match event["type"].as_str().unwrap_or_default() {
-            "error" => bail!("Qwen: {}", event["error"]["message"]),
+            "error" => bail!("Modular runtime: {}", event["error"]["message"]),
             "input_audio_buffer.speech_started" => {
                 if self.response.is_some() {
                     self.muted = self.response.clone();
@@ -288,7 +292,7 @@ impl Session {
                     STANDARD.decode(event["delta"].as_str().context("Invalid audio delta")?)?;
                 ensure!(
                     bytes.len() % 2 == 0,
-                    "Qwen returned an incomplete PCM16 sample"
+                    "The modular runtime returned an incomplete PCM16 sample"
                 );
                 let pcm = bytes.as_chunks::<2>().0.iter().copied();
                 Some(Event::Audio(pcm.map(i16::from_le_bytes).collect()))
@@ -297,7 +301,7 @@ impl Session {
                 let status = event["response"]["status"].as_str().unwrap_or_default();
                 ensure!(
                     matches!(status, "completed" | "cancelled" | "incomplete"),
-                    "Qwen could not answer (status: {status})"
+                    "The modular runtime could not answer (status: {status})"
                 );
                 if self.response.as_deref() == id {
                     self.response = None;
@@ -320,7 +324,7 @@ impl Session {
             ensure!(Instant::now() < deadline, "Timed out waiting for {kind}");
             if let Some(event) = self.read()? {
                 if event["type"] == "error" {
-                    bail!("Qwen: {}", event["error"]["message"]);
+                    bail!("Modular runtime: {}", event["error"]["message"]);
                 }
                 if event["type"] == kind {
                     return Ok(event);
@@ -336,21 +340,21 @@ impl Session {
                 self.socket.flush()?;
                 Ok(None)
             }
-            Ok(Message::Close(_)) => bail!("The Qwen voice runner closed the conversation"),
+            Ok(Message::Close(_)) => bail!("The modular voice runner closed the conversation"),
             Ok(_) => Ok(None),
             Err(tungstenite::Error::Io(e))
                 if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
             {
                 Ok(None)
             }
-            Err(e) => Err(e).context("Lost connection to the Qwen voice runner"),
+            Err(e) => Err(e).context("Lost connection to the modular voice runner"),
         }
     }
 
     fn send_event(&mut self, value: Value) -> Result<()> {
         self.socket
             .send(Message::Text(value.to_string().into()))
-            .context("Cannot send to the Qwen voice runner")
+            .context("Cannot send to the modular voice runner")
     }
 }
 

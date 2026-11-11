@@ -22,15 +22,15 @@ pub(super) fn safe_destination(root: &Path, relative: &Path) -> Result<()> {
             && relative
                 .components()
                 .all(|part| matches!(part, Component::Normal(_))),
-        "Invalid Qwen asset path: {}",
+        "Invalid modular runtime asset path: {}",
         relative.display()
     );
-    // BOUBOU_HOME may itself be on a mounted volume. Check only the Qwen-owned tree.
+    // BOUBOU_HOME may itself be on a mounted volume. Check only the modular runtime's cache.
     let mut destination = root.to_owned();
     for part in relative {
         ensure!(
             metadata(&destination)?.is_none_or(|m| m.is_dir()),
-            "Expected a directory at {}. Remove the conflicting Qwen cache entry.",
+            "Expected a directory at {}. Remove the conflicting modular runtime cache entry.",
             destination.display()
         );
         destination.push(part);
@@ -41,7 +41,7 @@ pub(super) fn safe_destination(root: &Path, relative: &Path) -> Result<()> {
         if let Some(m) = metadata(path)? {
             ensure!(
                 m.is_file(),
-                "Expected a regular file at {}. Remove the conflicting Qwen cache entry.",
+                "Expected a regular file at {}. Remove the conflicting modular runtime cache entry.",
                 path.display()
             );
             #[cfg(unix)]
@@ -79,7 +79,7 @@ fn tree_entries(root: &Path, expected: &HashSet<PathBuf>) -> Result<bool> {
             let path = entry.path();
             if !expected.contains(path.strip_prefix(&root)?) {
                 eprintln!(
-                    "Unexpected entry in the verified Qwen cache: {}",
+                    "Unexpected entry in the verified modular runtime cache: {}",
                     path.display()
                 );
                 return Ok(false);
@@ -138,7 +138,7 @@ pub(super) fn tree_digest(root: &Path) -> Result<Option<String>> {
         .iter()
         .map(|(path, _, size, _)| (path.as_path(), *size))
         .collect();
-    let digests = crate::assets::sha256_files(&sizes, "Verifying the Qwen runtime")?;
+    let digests = crate::assets::sha256_files(&sizes, "Verifying the modular runtime")?;
     for ((_, relative, _, executable), digest) in files.iter().zip(digests) {
         let kind = if *executable { "exec" } else { "file" };
         lines.push(format!("{relative}\t{kind}\t{digest}\n"));
@@ -154,7 +154,7 @@ pub(super) fn tree_digest(root: &Path) -> Result<Option<String>> {
 fn split_snapshot(path: &Path) -> Result<(PathBuf, &Path)> {
     ensure!(
         path.iter().nth(2) == Some(OsStr::new("snapshots")) && path.iter().count() >= 5,
-        "Invalid Qwen snapshot path: {}",
+        "Invalid modular runtime snapshot path: {}",
         path.display()
     );
     let snapshot: PathBuf = path.iter().take(4).collect();
@@ -172,7 +172,7 @@ pub(super) fn model_snapshots(root: &Path, listed: &[&Path], selected: &[&Path])
     }
     ensure!(
         !snapshots.is_empty(),
-        "Packaged Qwen model manifest contains no snapshots"
+        "Packaged modular model manifest contains no snapshots"
     );
     for &path in listed.iter().filter(|p| p.starts_with("hub")) {
         let (snapshot, suffix) = split_snapshot(path)?;
@@ -187,7 +187,7 @@ pub(super) fn model_snapshots(root: &Path, listed: &[&Path], selected: &[&Path])
         let dir = root.join(snapshot);
         ensure!(
             tree_entries(&dir, &expected)?,
-            "Qwen snapshot has missing or unexpected files. Remove {} and pull the model again.",
+            "Modular model snapshot has missing or unexpected files. Remove {} and pull the model again.",
             dir.display()
         );
     }
@@ -205,7 +205,7 @@ mod tests {
     fn fixture(test: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "boubou-qwen-{}-{}",
+            "boubou-modular-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

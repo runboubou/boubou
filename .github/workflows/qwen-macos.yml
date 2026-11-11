@@ -1,6 +1,6 @@
 name: Qwen Mac runtime
 
-# Pull requests that change the Qwen runtime build the package and check two
+# Pull requests that change the modular runtime build the package and check two
 # guided profiles. Quality covers the Rust side of every pull request. The
 # weekly run, manual runs and releases check every profile.
 on:
@@ -9,8 +9,8 @@ on:
       - 'packaging/qwen/**'
       - '!packaging/qwen/**/*.md'
       - 'packaging/build-macos.py'
-      - 'src/qwen.rs'
-      - 'src/qwen/**'
+      - 'src/modular.rs'
+      - 'src/modular/**'
       - '.github/workflows/qwen-macos.yml'
   schedule:
     - cron: '23 4 * * 1'

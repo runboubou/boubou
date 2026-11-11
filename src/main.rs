@@ -10,11 +10,11 @@ mod audio;
 mod backend;
 mod liquid;
 mod media;
+mod modular;
 #[cfg(target_os = "macos")]
 mod onboarding;
 mod profiles;
 mod progress;
-mod qwen;
 mod realtime;
 mod serve;
 mod talk;
@@ -232,8 +232,8 @@ fn run() -> Result<()> {
             Ok(())
         }
         Action::Doctor {
-            model: profiles::Model::Qwen(id),
-        } => qwen::doctor(id, &cache),
+            model: profiles::Model::Modular(id),
+        } => modular::doctor(id, &cache),
         Action::Doctor {
             model: profiles::Model::Liquid(model),
         } => {
@@ -272,8 +272,8 @@ fn run() -> Result<()> {
                 profiles::Model::Liquid(profile) => {
                     assets::prepare(profile, &cache, offline)?;
                 }
-                profiles::Model::Qwen(id) => {
-                    qwen::prepare(id, &cache, offline)?;
+                profiles::Model::Modular(id) => {
+                    modular::prepare(id, &cache, offline)?;
                 }
             }
             let ready = format!("{0} is ready. Run: boubou run {0} --offline", model.id());
@@ -319,16 +319,16 @@ fn run() -> Result<()> {
             );
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
-                profiles::Model::Qwen(id) => {
+                profiles::Model::Modular(id) => {
                     ensure!(
                         !manual && input.is_empty() && output.is_none(),
-                        "Qwen voice chat supports live microphone turns only."
+                        "The modular runtime supports live microphone turns only."
                     );
                     ensure!(
                         io::stdin().is_terminal(),
-                        "Qwen voice chat needs a terminal."
+                        "The modular runtime needs a terminal."
                     );
-                    return qwen::run(id, &cache, offline, None);
+                    return modular::run(id, &cache, offline, None);
                 }
             };
             if input.is_empty() {
@@ -366,7 +366,7 @@ fn run() -> Result<()> {
                         from_browser(&door, &cache, chat, stopped)
                     })
                 }
-                profiles::Model::Qwen(id) => qwen::run(id, &cache, offline, Some(&door)),
+                profiles::Model::Modular(id) => modular::run(id, &cache, offline, Some(&door)),
             }
         }
     })();
@@ -417,12 +417,12 @@ fn checklist(
 ) -> Option<progress::Checklist> {
     let parts = match model {
         profiles::Model::Liquid(profile) => assets::parts(profile, cache),
-        profiles::Model::Qwen(id) => qwen::parts(id, cache),
+        profiles::Model::Modular(id) => modular::parts(id, cache),
     }
     .unwrap_or_default();
     let check = check.unwrap_or_else(|| {
         #[cfg(target_os = "macos")]
-        let os = qwen::macos_version().map_or_else(
+        let os = modular::macos_version().map_or_else(
             |_| "macOS".to_owned(),
             |(major, minor, patch)| format!("macOS {major}.{minor}.{patch}"),
         );
