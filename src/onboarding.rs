@@ -1,8 +1,7 @@
 use crate::tui::{self, BOLD, DIM, Paint, RESET, REVERSE};
 use crate::{
-    Cancelled,
+    Cancelled, modular,
     profiles::{self, Model, Profile},
-    qwen,
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -110,7 +109,7 @@ impl Device {
                 .map(|name| name.trim().to_owned())
                 .filter(|name| !name.is_empty()),
             apple_silicon: cfg!(target_arch = "aarch64"),
-            macos: qwen::macos_version()?,
+            macos: modular::macos_version()?,
             memory,
             available: available.min(memory),
             disk: u64::from(volume.f_bavail).saturating_mul(volume.f_frsize),
@@ -170,7 +169,7 @@ struct Setup {
     model: Model,
     voice: &'static str,
     memory: u64,
-    resources: qwen::Requirements,
+    resources: modular::Requirements,
     recommended_memory_gib: u64,
 }
 
@@ -269,7 +268,7 @@ fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> 
     choices
 }
 
-fn liquid_requirements(model: &Profile, cache: &Path) -> Result<qwen::Requirements> {
+fn liquid_requirements(model: &Profile, cache: &Path) -> Result<modular::Requirements> {
     let runtime = model.runtime()?;
     let folder = cache.join(model.model_directory);
     let mut download = 0;
@@ -292,7 +291,7 @@ fn liquid_requirements(model: &Profile, cache: &Path) -> Result<qwen::Requiremen
     } else {
         4 * runtime.archive.size
     };
-    Ok(qwen::Requirements {
+    Ok(modular::Requirements {
         min_macos: (13, 3, 0),
         download,
         disk: download + staging,
@@ -389,11 +388,11 @@ pub fn start(cache: &Path) -> Result<Selection> {
             Setup::liquid(&profiles::OMNI, cache)?,
         ];
         let mut unavailable = Vec::new();
-        if qwen::packaged() {
+        if modular::packaged() {
             for preset in profiles::presets().iter().filter(|preset| preset.guided) {
-                match qwen::requirements(preset.id, cache) {
+                match modular::requirements(preset.id, cache) {
                     Ok(resources) => setups.push(Setup {
-                        model: Model::Qwen(preset.id),
+                        model: Model::Modular(preset.id),
                         voice: preset.label,
                         memory: preset.memory_gib * GIB,
                         resources,
@@ -943,10 +942,10 @@ mod tests {
                 .iter()
                 .filter(|preset| preset.guided)
                 .map(|preset| Setup {
-                    model: Model::Qwen(preset.id),
+                    model: Model::Modular(preset.id),
                     voice: preset.label,
                     memory: preset.memory_gib * GIB,
-                    resources: qwen::Requirements {
+                    resources: modular::Requirements {
                         min_macos: (15, 0, 0),
                         download: GIB,
                         disk: GIB,
@@ -1157,11 +1156,11 @@ mod tests {
     #[test]
     fn whole_pipeline_budget_filters_small_and_busy_macs() {
         let setup = Setup {
-            model: Model::Qwen("qwen3-tts:0.6b-customvoice"),
+            model: Model::Modular("qwen3-tts:0.6b-customvoice"),
             voice: "Qwen / Aiden",
             recommended_memory_gib: 16,
             memory: 12 * GIB,
-            resources: qwen::Requirements {
+            resources: modular::Requirements {
                 min_macos: (15, 0, 0),
                 download: 1,
                 disk: 1,

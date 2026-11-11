@@ -313,11 +313,11 @@ pub static PROFILES: &[&Profile] = &[&DEFAULT, &OMNI, &LFM25];
 #[derive(Clone, Copy, Debug)]
 pub enum Model {
     Liquid(&'static Profile),
-    Qwen(&'static str),
+    Modular(&'static str),
 }
 
 /// Profiles served by the packaged speech-to-speech runner. Pocket TTS profiles name a stock config.
-pub const QWEN_IDS: &[&str] = &[
+pub const MODULAR_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice",
     "qwen3-tts:0.6b-customvoice",
     "qwen3-tts:1.7b-customvoice-whisper",
@@ -368,32 +368,32 @@ impl Model {
     pub fn id(self) -> &'static str {
         match self {
             Self::Liquid(profile) => profile.id,
-            Self::Qwen(id) => id,
+            Self::Modular(id) => id,
         }
     }
 
     pub fn all() -> impl Iterator<Item = Self> {
-        let packaged = crate::qwen::packaged();
+        let packaged = crate::modular::packaged();
         // The CUDA runner packages Parakeet and Qwen3.5-4B only: no Whisper entries and none of
         // the macOS presets with other model sizes. Qwen3-TTS waits for upstream RTX 50 support,
         // and ChatTTS, which takes about 9 s for its first sentence, stays on the Mac.
         let linux = cfg!(target_os = "linux");
-        let qwen = QWEN_IDS.iter().copied().filter(move |&id| {
+        let modular = MODULAR_IDS.iter().copied().filter(move |&id| {
             packaged
                 && !(linux
-                    && (crate::qwen::whisper(id)
+                    && (crate::modular::whisper(id)
                         || id.starts_with("qwen3-tts:")
                         || id.starts_with("chattts:")))
         });
         let presets = presets()
             .iter()
-            .filter(move |preset| packaged && !linux && !QWEN_IDS.contains(&preset.id))
+            .filter(move |preset| packaged && !linux && !MODULAR_IDS.contains(&preset.id))
             .map(|preset| preset.id);
         PROFILES
             .iter()
             .copied()
             .map(Self::Liquid)
-            .chain(qwen.chain(presets).map(Self::Qwen))
+            .chain(modular.chain(presets).map(Self::Modular))
     }
 
     pub fn find(id: &str) -> Option<Self> {

@@ -1,3 +1,5 @@
+//! Installs and launches the packaged modular speech-to-speech runtime.
+
 mod chat;
 mod integrity;
 
@@ -74,10 +76,10 @@ pub fn packaged() -> bool {
 
 fn runner(dir: &Path) -> Result<Runner> {
     let bytes = fs::read(dir.join("runtime.json")).context(
-        "This build does not include a Qwen runner manifest. Use a Qwen-enabled Boubou package.",
+        "This build does not include a modular runtime manifest. Use a Boubou package with the modular runtime.",
     )?;
     let runner: Runner =
-        serde_json::from_slice(&bytes).context("Invalid packaged Qwen runner manifest")?;
+        serde_json::from_slice(&bytes).context("Invalid packaged modular runtime manifest")?;
     let digest = |text: &str| text.len() == 64 && text.bytes().all(|c| c.is_ascii_hexdigit());
     ensure!(
         runner
@@ -87,7 +89,7 @@ fn runner(dir: &Path) -> Result<Runner> {
             && digest(&runner.sha256)
             && digest(&runner.tree_sha256)
             && runner.size > 0,
-        "Invalid packaged Qwen runner manifest"
+        "Invalid packaged modular runtime manifest"
     );
     Ok(runner)
 }
@@ -135,11 +137,11 @@ fn check_host(runner: &Runner) -> Result<()> {
         Host::Mac { min_macos } => {
             ensure!(
                 cfg!(all(target_os = "macos", target_arch = "aarch64")),
-                "Qwen requires an Apple Silicon Mac."
+                "The modular runtime requires an Apple Silicon Mac."
             );
             ensure!(
                 macos_version()? >= version(min_macos)?,
-                "This Qwen runner requires macOS {min_macos} or later."
+                "This modular runtime requires macOS {min_macos} or later."
             );
         }
         Host::Cuda {
@@ -148,18 +150,18 @@ fn check_host(runner: &Runner) -> Result<()> {
         } => {
             ensure!(
                 cfg!(all(target_os = "linux", target_arch = "x86_64")),
-                "This Qwen runner requires x86-64 Linux with an NVIDIA GPU."
+                "This modular runtime requires x86-64 Linux with an NVIDIA GPU."
             );
             ensure!(
                 glibc_version()? >= version(min_glibc)?,
-                "This Qwen runner requires glibc {min_glibc} or later, for example Ubuntu 24.04."
+                "This modular runtime requires glibc {min_glibc} or later, for example Ubuntu 24.04."
             );
             let text = fs::read_to_string("/proc/driver/nvidia/version")
-                .context("Qwen on Linux requires an NVIDIA GPU, and no NVIDIA driver is loaded.")?;
+                .context("The modular runtime on Linux requires an NVIDIA GPU, and no NVIDIA driver is loaded.")?;
             let driver = nvidia_driver(&text).context("Cannot read the NVIDIA driver version")?;
             ensure!(
                 version(driver)? >= version(min_nvidia_driver)?,
-                "Qwen requires NVIDIA driver {min_nvidia_driver} or later, but {driver} is loaded. Update the driver and retry."
+                "The modular runtime requires NVIDIA driver {min_nvidia_driver} or later, but {driver} is loaded. Update the driver and retry."
             );
         }
     }
@@ -180,7 +182,7 @@ fn archive(runner: &Runner, dir: &Path, engine: &Path, offline: bool) -> Result<
     let archive = dir.join("runner.tar.gz");
     ensure!(
         assets::verified(&archive, &runner.archive())?,
-        "The bundled Qwen interpreter failed verification. Reinstall the package."
+        "The bundled Python interpreter failed verification. Reinstall the package."
     );
     Ok(archive)
 }
@@ -313,7 +315,7 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     let engine = runtime_dir(&root, &runner)?;
     let ready = tree_matches(&engine.join("installed"), &runner.tree_sha256)?;
     println!(
-        "Qwen runner: {}",
+        "Modular runtime: {}",
         if ready {
             "verified"
         } else {
@@ -363,7 +365,7 @@ fn model_files(id: &str, dir: &Path) -> Result<Vec<ModelFile>> {
         files.iter().any(|f| {
             f.profile.as_deref() == Some(id) || f.profiles.iter().any(|profile| profile == id)
         }),
-        "Missing Qwen model profile {id}"
+        "Missing modular model profile {id}"
     );
     Ok(files)
 }
@@ -382,7 +384,7 @@ pub fn requirements(id: &str, cache: &Path) -> Result<Requirements> {
 fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
     let runner = runner(dir)?;
     let Host::Mac { min_macos } = &runner.host else {
-        bail!("Guided startup requires the macOS Qwen runner.");
+        bail!("Guided startup requires the macOS modular runtime.");
     };
     let files = model_files(id, dir)?;
     let root = cache.join("qwen");
@@ -544,7 +546,7 @@ mod tests {
 
     #[test]
     fn resource_estimates_select_only_the_requested_pipeline_without_downloading() -> Result<()> {
-        let root = env::temp_dir().join(format!("boubou-qwen-estimate-{}", std::process::id()));
+        let root = env::temp_dir().join(format!("boubou-modular-estimate-{}", std::process::id()));
         fs::create_dir(&root)?;
         let result = (|| -> Result<()> {
             let cache = root.join("cache");

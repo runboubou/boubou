@@ -469,7 +469,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     // The fixture runner exits instead of serving; Boubou reports its arguments and output.
     let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
     for line in [
-        "The Qwen voice runner stopped",
+        "The modular voice runner stopped",
         "selected: qwen3-tts:1.7b-customvoice",
         "selected: --port",
     ] {
@@ -575,7 +575,10 @@ fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
             "missing.wav",
         ]);
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Qwen voice chat"));
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("The modular runtime supports live microphone turns only.")
+        );
         assert!(!cache.exists());
     }
 }
