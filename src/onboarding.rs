@@ -2,6 +2,7 @@ use crate::tui::{self, BOLD, DIM, Paint, RESET, REVERSE};
 use crate::{
     Cancelled, modular,
     profiles::{self, Model, Profile},
+    update,
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -219,7 +220,7 @@ impl Setup {
             } else {
                 tui::gb(self.resources.download)
             },
-            command: Some(format!("boubou run {}", self.model.id())),
+            command: Some(format!("{} run {}", update::program(), self.model.id())),
             about: vec![
                 format!(
                     "Needs about {:.0} GiB memory (estimate) · {} GiB Mac or larger · {} free disk",
@@ -478,12 +479,13 @@ pub fn explain_failure(error: anyhow::Error) -> anyhow::Error {
     if error.is::<Cancelled>() {
         return error;
     }
-    error.context(
+    error.context(format!(
         "Voice chat could not start or continue. Close other apps if memory is low. \
          Check the connection for download failures, or microphone access in System Settings \
-         > Privacy & Security > Microphone. Then run `boubou` again to recheck this Mac \
+         > Privacy & Security > Microphone. Then run `{}` again to recheck this Mac \
          and resume verified downloads. Details below",
-    )
+        update::program()
+    ))
 }
 
 extern "C" fn interrupt(_: libc::c_int) {

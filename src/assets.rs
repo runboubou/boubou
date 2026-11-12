@@ -40,8 +40,10 @@ pub fn prepare(profile: &'static Profile, cache_dir: &Path, offline: bool) -> Re
 
     let context = || {
         format!(
-            "Cannot prepare {}. Run `boubou pull {}` while online.",
-            profile.id, profile.id
+            "Cannot prepare {}. Run `{} pull {}` while online.",
+            profile.id,
+            crate::update::program(),
+            profile.id
         )
     };
     let model_dir = cache_dir.join(profile.model_directory);
@@ -188,7 +190,8 @@ pub fn status(profile: &Profile, cache_dir: &Path) -> Result<()> {
     );
     ensure!(
         ready && runtime_ready,
-        "Liquid assets are missing or invalid. Run `boubou pull {}` while online.",
+        "Liquid assets are missing or invalid. Run `{} pull {}` while online.",
+        crate::update::program(),
         profile.id
     );
     Ok(())

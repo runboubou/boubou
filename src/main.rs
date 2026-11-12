@@ -19,10 +19,11 @@ mod realtime;
 mod serve;
 mod talk;
 mod tui;
+mod update;
 mod voice;
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     terminal,
@@ -117,14 +118,24 @@ enum Action {
 }
 
 fn main() {
-    if let Err(error) = run() {
-        if error.is::<Cancelled>() {
-            std::process::exit(130);
+    let code = match run() {
+        Ok(()) => 0,
+        Err(error) if error.is::<Cancelled>() => 130,
+        Err(error) => {
+            // The terminal may already be gone; printing must not panic on the way out.
+            let _ = writeln!(io::stderr(), "\nboubou: {error:#}");
+            1
         }
-        // The terminal may already be gone; printing must not panic on the way out.
-        let _ = writeln!(io::stderr(), "\nboubou: {error:#}");
-        std::process::exit(1);
+    };
+    update::notice();
+    if code != 0 {
+        std::process::exit(code);
     }
+}
+
+/// The command line, whose help and usage name what the user types to start Boubou.
+fn command_line() -> clap::Command {
+    Cli::command().bin_name(update::program())
 }
 
 #[derive(Debug)]
@@ -195,7 +206,7 @@ fn trace(event: &'static str, details: std::fmt::Arguments<'_>) {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::from_arg_matches(&command_line().get_matches()).unwrap_or_else(|e| e.exit());
     #[cfg(target_os = "macos")]
     let guided = cli.command.is_none();
     let mut check = None;
@@ -210,7 +221,7 @@ fn run() -> Result<()> {
                 || !io::stdout().is_terminal()
                 || std::env::var("TERM").as_deref() == Ok("dumb")
             {
-                Cli::command().print_help()?;
+                command_line().print_help()?;
                 println!();
                 return Ok(());
             }
@@ -249,6 +260,15 @@ fn run() -> Result<()> {
             "Pipeline options apply to the modular runtime only."
         );
     }
+    // The commands that may download anyway also look for a newer Boubou.
+    if let Action::Run { offline: false, .. }
+    | Action::Serve { offline: false, .. }
+    | Action::Pull { offline: false, .. }
+    | Action::Ask { offline: false, .. } = command
+    {
+        update::check(&cache);
+    }
+    let program = update::program();
     let result = (|| match command {
         Action::List => {
             for model in profiles::Model::all() {
@@ -287,7 +307,7 @@ fn run() -> Result<()> {
         }
         Action::Pull { model, offline } => {
             let _checklist = checklist(
-                format!("boubou pull {}", model.id()),
+                format!("{program} pull {}", model.id()),
                 check.take(),
                 model,
                 &cache,
@@ -301,7 +321,7 @@ fn run() -> Result<()> {
                     modular::prepare(id, &cache, offline)?;
                 }
             }
-            let ready = format!("{0} is ready. Run: boubou run {0} --offline", model.id());
+            let ready = format!("{0} is ready. Run: {program} run {0} --offline", model.id());
             if !progress::finish(&ready) {
                 eprintln!("{ready}");
             }
@@ -334,7 +354,7 @@ fn run() -> Result<()> {
         } => {
             let _checklist = checklist(
                 format!(
-                    "boubou run {}{}",
+                    "{program} run {}{}",
                     model.id(),
                     if offline { " --offline" } else { "" }
                 ),
@@ -382,7 +402,7 @@ fn run() -> Result<()> {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let door = if offline { door.offline() } else { door };
             let _checklist = checklist(
-                format!("boubou serve {}", model.id()),
+                format!("{program} serve {}", model.id()),
                 check.take(),
                 model,
                 &cache,
