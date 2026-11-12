@@ -214,6 +214,8 @@ fn redraw(change: impl FnOnce(&mut State)) {
     for line in &lines {
         let _ = write!(out, "\r\x1b[2K{line}{RESET}\n");
     }
+    // A terminal made narrower loses the toucan's rows: clear what the taller frame left below.
+    out.extend(b"\x1b[J");
     shared.drawn = lines.len();
     let mut stderr = io::stderr().lock();
     let _ = stderr.write_all(&out);
@@ -312,21 +314,21 @@ impl State {
         }
     }
 
-    /// One frame. Every frame has the same number of lines so it can be redrawn in place.
+    /// One frame: the header the menu has, with the command where the menu has its title, then
+    /// the steps. At one width every frame has the same number of lines, so it is redrawn in place.
     fn frame(&self, paint: Paint, width: usize) -> Vec<String> {
         let room = width.saturating_sub(7).max(1);
         let spinner = tui::SPINNER[self.tick % tui::SPINNER.len()];
-        let light = if self.ready {
-            format!("{}● {HERE}", paint.fg(tui::ACCENT))
+        let (style, mark) = if self.ready {
+            (paint.fg(tui::ACCENT), '●')
         } else {
-            format!("{DIM}○ {HERE}")
+            (DIM.to_owned(), '○')
         };
-        let command = tui::fit(&self.command, width.saturating_sub(8 + HERE.len()));
-        let gap = width.saturating_sub(4 + 2 + tui::width(&command) + 2 + HERE.len());
-        let mut lines = vec![
-            format!("  {DIM}${RESET} {command}{}{light}", " ".repeat(gap)),
-            String::new(),
-        ];
+        let mut lines = tui::header(paint, width, (&style, &format!("{mark} {HERE}")), |room| {
+            let command = tui::fit(&self.command, room.saturating_sub(2));
+            vec![format!("{DIM}${RESET} {command}")]
+        });
+        lines.push(String::new());
         for (step, title, note) in &self.steps {
             let status = self.status(*step);
             let (icon, title_style) = match status {
@@ -691,6 +693,27 @@ mod tests {
         }
         assert!(visible(&frame.join("\n")).contains("✓  Download"));
         let _ = std::fs::remove_dir_all(state.files[0].path.parent().unwrap());
+    }
+
+    #[test]
+    fn the_toucan_heads_the_checklist_where_there_is_room_for_it() {
+        let mut state = fixture(false);
+        let paint = Paint(Colors::Basic);
+        let wide = state.frame(paint, 80);
+        assert!(wide[1].contains("\x1b[43m "), "No toucan beak");
+        let top = visible(&wide[0]);
+        assert_eq!(tui::width(&top), 78);
+        assert!(top.trim_start().starts_with("boubou "), "{top}");
+        assert!(top.ends_with(&format!("○ {HERE}")), "{top}");
+        assert_eq!(visible(&wide[2]).trim(), "$ boubou run LFM3-Audio-2B");
+        state.ready = true;
+        let top = &state.frame(paint, 80)[0];
+        assert!(top.ends_with(&format!("\x1b[33m● {HERE}")), "{top}");
+        // A narrow terminal keeps its columns for the text.
+        let narrow = state.frame(paint, 59);
+        assert_eq!(narrow.len() + 3, wide.len());
+        assert_eq!(visible(&narrow[2]), "  $ boubou run LFM3-Audio-2B");
+        assert!(!narrow[..3].concat().contains("\x1b[43m"), "A beak");
     }
 
     #[test]

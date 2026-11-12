@@ -515,17 +515,6 @@ fn restore_terminal() {
     let _ = terminal::disable_raw_mode();
 }
 
-/// Boubou's toucan, a terminal cell per character: `#` body, `y` beak. Whole cells stay solid
-/// where a terminal spaces its lines, which stripes block characters.
-const TOUCAN: [&str; 6] = [
-    "  ####",
-    " ######yyyyyyyyy",
-    "###  ##yyyyyyyyyyyy",
-    "#######yyyyyyyyyyyyy",
-    "########     yyyyyy",
-    "##########",
-];
-
 impl Screen {
     fn enter() -> Result<Self> {
         INTERRUPTED.store(false, Ordering::Relaxed);
@@ -585,47 +574,23 @@ impl Screen {
         title: &str,
         details: &[String],
     ) -> Result<()> {
-        let width = size.0 as usize;
-        // Narrow terminals keep their columns for the text.
-        let toucan: &[&str] = if width < 60 { &[] } else { &TOUCAN };
-        // Margins come off the width, and so do the toucan and its gap.
-        let room = width.saturating_sub(4 + if toucan.is_empty() { 0 } else { 22 });
-        let status = "○ On this Mac";
-        let mut lines = vec![
-            format!(
-                "{BOLD}boubou{RESET}{}{DIM}{status}",
-                " ".repeat(room.saturating_sub(6 + tui::width(status)))
-            ),
-            format!("{DIM}{}", "─".repeat(room)),
-            format!("{BOLD}{}", tui::fit(title, room)),
-        ];
-        lines.extend(
-            details
-                .iter()
-                .map(|detail| format!("{DIM}{}", tui::fit(detail, room))),
-        );
-        lines.resize(lines.len().max(toucan.len()), String::new());
-        // The body takes the terminal's own text colour; without colour the beak is its dim twin.
-        let beak = if self.paint.colored() {
-            self.paint.bg(tui::ACCENT)
-        } else {
-            format!("{DIM}{REVERSE}")
-        };
-        self.put(out, size.1, y, "")?;
-        for (row, line) in toucan.iter().chain(std::iter::repeat(&"")).zip(lines) {
-            let art: String = if toucan.is_empty() {
-                String::new()
-            } else {
-                format!("{row:22}")
-                    .chars()
-                    .map(|cell| match cell {
-                        '#' => format!("{REVERSE} {RESET}"),
-                        'y' => format!("{beak} {RESET}"),
-                        _ => " ".to_owned(),
-                    })
+        let lines = tui::header(
+            self.paint,
+            size.0 as usize,
+            (DIM, "○ On this Mac"),
+            |room| {
+                std::iter::once(format!("{BOLD}{}", tui::fit(title, room)))
+                    .chain(
+                        details
+                            .iter()
+                            .map(|detail| format!("{DIM}{}", tui::fit(detail, room))),
+                    )
                     .collect()
-            };
-            self.put(out, size.1, y, &format!("  {art}{line}"))?;
+            },
+        );
+        self.put(out, size.1, y, "")?;
+        for line in lines {
+            self.put(out, size.1, y, &line)?;
         }
         self.put(out, size.1, y, "")
     }

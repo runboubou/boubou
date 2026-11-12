@@ -173,6 +173,66 @@ pub fn pad_left(text: &str, columns: usize) -> String {
     format!("{}{text}", " ".repeat(gap))
 }
 
+/// Boubou's toucan, a terminal cell per character: `#` body, `y` beak. Whole cells stay solid
+/// where a terminal spaces its lines, which stripes block characters.
+const TOUCAN: [&str; 6] = [
+    "  ####",
+    " ######yyyyyyyyy",
+    "###  ##yyyyyyyyyyyy",
+    "#######yyyyyyyyyyyyy",
+    "########     yyyyyy",
+    "##########",
+];
+
+/// The top of a screen: beside the toucan, the product name and the local-status `light` (its
+/// style, then its text) over a rule, then what `rest` makes of the columns it is given.
+pub fn header(
+    paint: Paint,
+    columns: usize,
+    (style, light): (&str, &str),
+    rest: impl FnOnce(usize) -> Vec<String>,
+) -> Vec<String> {
+    // Narrow terminals keep their columns for the text.
+    let (toucan, gap): (&[&str], usize) = if columns < 60 {
+        (&[], 0)
+    } else {
+        (&TOUCAN, 22)
+    };
+    // Margins come off the width, and so do the toucan and its gap.
+    let room = columns.saturating_sub(4 + gap);
+    let mut lines = vec![
+        format!(
+            "{BOLD}boubou{RESET}{}{style}{light}",
+            " ".repeat(room.saturating_sub(6 + width(light)))
+        ),
+        format!("{DIM}{}", "─".repeat(room)),
+    ];
+    lines.extend(rest(room));
+    lines.resize(lines.len().max(toucan.len()), String::new());
+    // The body takes the terminal's own text colour; without colour the beak is its dim twin.
+    let beak = if paint.colored() {
+        paint.bg(ACCENT)
+    } else {
+        format!("{DIM}{REVERSE}")
+    };
+    toucan
+        .iter()
+        .chain(std::iter::repeat(&""))
+        .zip(lines)
+        .map(|(row, line)| {
+            let art: String = format!("{row:gap$}")
+                .chars()
+                .map(|cell| match cell {
+                    '#' => format!("{REVERSE} {RESET}"),
+                    'y' => format!("{beak} {RESET}"),
+                    _ => " ".to_owned(),
+                })
+                .collect();
+            format!("  {art}{line}")
+        })
+        .collect()
+}
+
 /// Decimal gigabytes, as the model library lists sizes.
 pub fn gb(bytes: u64) -> String {
     format!("{:.2} GB", bytes as f64 / 1e9)
