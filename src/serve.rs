@@ -43,6 +43,8 @@ use tungstenite::{
 mod names;
 
 const PAGE: &str = include_str!("serve.html");
+/// The pictured steps for connecting a robot or an app.
+const GUIDE: &str = "https://runboubou.com/connect/robots/";
 /// Far above a 20 ms frame or a playback report.
 const MAX_MESSAGE: usize = 1 << 16;
 /// Requests answered at once; a flood beyond this is turned away.
@@ -182,7 +184,112 @@ struct Links {
     /// cannot check Boubou's own certificate.
     realtime: Option<String>,
     /// Where robots and programs that take only an address and a port connect, in the clear.
-    bare: Option<String>,
+    bare: Option<(Ipv4Addr, u16)>,
+}
+
+impl Links {
+    /// What is printed under the checklist: a section for each way to connect. What a person
+    /// scans or types stands out and the long links stay dim. `code` is the QR code of the
+    /// network link, where the terminal can show one.
+    fn guide(&self, ink: &Ink, columns: usize, code: Option<&str>) -> Vec<String> {
+        let Ink {
+            bold,
+            dim,
+            reset,
+            accent,
+        } = ink;
+        let rule = "─".repeat(columns.saturating_sub(4).min(56));
+        let mut lines = Vec::new();
+        let mut section = |title: &str, body: Vec<String>| {
+            lines.extend([
+                String::new(),
+                format!("  {dim}{rule}{reset}"),
+                format!("  {bold}{title}{reset}"),
+            ]);
+            lines.extend(body.into_iter().map(|line| match line.is_empty() {
+                true => line,
+                false => format!("  {line}{reset}"),
+            }));
+        };
+        if let Some(link) = &self.network {
+            let mut body = match code {
+                Some(code) => {
+                    let scan = "Scan the code with the phone's camera, on the same Wi-Fi.";
+                    let mut body = vec![scan.into()];
+                    // Black on white whatever the terminal's colors, as cameras expect. The
+                    // code's own margin sets it apart from the lines around it.
+                    body.extend(code.lines().map(|line| format!("\x1b[30;107m{line}")));
+                    body.push(format!("{dim}Or open {link}"));
+                    body
+                }
+                None => vec![
+                    "Open this link on the phone, on the same Wi-Fi:".into(),
+                    link.clone(),
+                ],
+            };
+            body.push(match &self.fallback {
+                Some(address) => format!(
+                    "{dim}If the page does not open, use {address} and continue past the browser's warning."
+                ),
+                None => format!(
+                    "{dim}A phone's browser warns once that it does not know Boubou's certificate. Continue to the page."
+                ),
+            });
+            section("Phone", body);
+        }
+        if let (Some(link), Some((address, port))) = (&self.realtime, &self.bare) {
+            section(
+                "Robot or app",
+                vec![
+                    format!("{bold}1{reset}  In its settings, type these two:"),
+                    String::new(),
+                    format!("   Address   {bold}{accent}{address}"),
+                    format!("   Port      {bold}{accent}{port}"),
+                    String::new(),
+                    format!("{bold}2{reset}  Boubou then asks here before it lets it in. Press y."),
+                    String::new(),
+                    format!("{dim}Guide with pictures: {GUIDE}"),
+                    format!(
+                        "{dim}Takes one full address instead? This one carries the key, so Boubou does not ask:"
+                    ),
+                    format!("{dim}{link}"),
+                ],
+            );
+        }
+        section(progress::HERE, vec![self.here.clone()]);
+        lines.push(String::new());
+        lines
+    }
+}
+
+/// Styles for what `serve` prints under the checklist. All empty where stderr takes no escape
+/// codes, so the same lines read well in a log.
+#[derive(Default)]
+struct Ink {
+    bold: &'static str,
+    dim: &'static str,
+    reset: &'static str,
+    accent: String,
+}
+
+impl Ink {
+    fn detect() -> Self {
+        if !tui::interactive(&io::stderr()) {
+            return Self::default();
+        }
+        Self {
+            bold: tui::BOLD,
+            dim: tui::DIM,
+            reset: tui::RESET,
+            accent: tui::Paint::detect().fg(tui::ACCENT),
+        }
+    }
+
+    /// One event in the checklist's shape: a mark, then what happened.
+    fn event(&self, mark: char, text: &str) -> String {
+        let Self { accent, reset, .. } = self;
+        format!("  {accent}{mark}{reset}  {text}")
+    }
 }
 
 /// A browser that has taken the seat. Its audio starts when the conversation is ready for it.
@@ -218,41 +325,24 @@ impl Door {
         let network = network_address().filter(|_| !options.local);
         let service = (!options.self_signed).then_some(names::SERVICE);
         let (door, links) = Self::bind(options.port, cache, network, api, service)?;
-        let note = "Ready. Open the page in a browser.";
+        let note = "Ready. Choose how to connect below.";
         if !progress::finish(note) {
             eprintln!("{note}");
         }
-        eprintln!("\n  {:<16}  {}", progress::HERE, links.here);
-        if let Some(link) = &links.realtime {
-            eprintln!("  {:<16}  {link}", "Robots and apps");
-        }
-        if let Some(bare) = &links.bare {
-            eprintln!(
-                "  {:<16}  Or {bare}, without the key: Boubou asks here first.",
-                ""
-            );
-        }
-        if let Some(link) = &links.network {
-            eprintln!("  {:<16}  {link}", "On your network");
-            if tui::interactive(&io::stderr()) && tui::Paint::detect().colored() {
-                let code = qrcode::QrCode::new(link)?
+        let ink = Ink::detect();
+        // A terminal that shows colors can show the code.
+        let code = match &links.network {
+            Some(link) if !ink.accent.is_empty() => Some(
+                qrcode::QrCode::new(link)?
                     .render::<qrcode::render::unicode::Dense1x2>()
-                    .build();
-                // Black on white whatever the terminal's colors, as cameras expect.
-                for line in code.lines() {
-                    eprintln!("  \x1b[30;107m{line}\x1b[0m");
-                }
-            }
-            match &links.fallback {
-                Some(address) => eprintln!(
-                    "  If the page does not open, use {address} and continue past the browser's warning."
-                ),
-                None => eprintln!(
-                    "  A phone's browser warns once that it does not know Boubou's certificate. Continue to the page."
-                ),
-            }
+                    .build(),
+            ),
+            _ => None,
+        };
+        let columns = crossterm::terminal::size().map_or(80, |(columns, _)| columns as usize);
+        for line in links.guide(&ink, columns, code.as_deref()) {
+            eprintln!("{line}");
         }
-        eprintln!();
         Ok(door)
     }
 
@@ -305,7 +395,7 @@ impl Door {
                 Some(name) => format!("wss://{name}:{port}/v1/realtime?key={key}"),
                 None => format!("ws://{reachable}:{port}/v1/realtime?key={key}"),
             }),
-            bare: api.map(|_| format!("address {reachable}, port {port}")),
+            bare: api.map(|_| (reachable, port)),
         };
         let allowed = Arc::new(Allowed::load(cache)?);
         let (asks, asked) = mpsc::channel();
@@ -356,7 +446,8 @@ impl Door {
         mut idle: impl FnMut() -> Result<()>,
     ) -> Result<Option<Guest>> {
         if self.returning.replace(true) {
-            eprintln!("The browser disconnected. Open the link again to continue.");
+            let gone = "The browser disconnected. Open the link again to continue.";
+            eprintln!("{}", Ink::detect().event('○', gone));
         }
         while !stopped.load(Ordering::SeqCst) {
             let later = self.later.borrow_mut().pop_front();
@@ -400,7 +491,14 @@ impl Door {
         } else if self.refused.borrow().contains(&peer) {
             false
         } else {
-            eprint!("A robot or program at {peer} asks to talk without the key. Let it in? [y/N] ");
+            let ink = Ink::detect();
+            let asks = format!("A robot or program at {peer} asks to talk without the key.");
+            eprint!(
+                "{}\r\n     {}Let it in? [y/N]{} ",
+                ink.event('?', &asks),
+                ink.bold,
+                ink.reset
+            );
             let answer = loop {
                 while let Ok(ask) = self.asks.try_recv() {
                     match ask.peer == peer {
@@ -418,18 +516,21 @@ impl Door {
                 }
             };
             // Lines start over by hand while keys are read raw.
-            let said = match answer {
+            let (mark, said) = match answer {
                 Some(true) => {
                     self.allowed.add(peer)?;
-                    "can talk without the key from now on"
+                    ('✓', "can talk without the key from now on")
                 }
                 Some(false) => {
                     self.refused.borrow_mut().insert(peer);
-                    "was turned away until Boubou starts again"
+                    ('✗', "was turned away until Boubou starts again")
                 }
-                None => "stopped asking. It is asked about again when it returns",
+                None => (
+                    '○',
+                    "stopped asking. It is asked about again when it returns",
+                ),
             };
-            eprint!("\r\n{peer} {said}.\r\n");
+            eprint!("\r\n{}\r\n", ink.event(mark, &format!("{peer} {said}.")));
             answer == Some(true)
         };
         for ask in waiting {
@@ -742,7 +843,8 @@ fn relay(
         side.set_write_timeout(Some(Duration::from_secs(5)))?;
     }
     if !once {
-        eprintln!("A robot or program connected.");
+        let connected = "A robot or program connected.";
+        eprintln!("{}", Ink::detect().event('●', connected));
     }
     let mut buffer = [0; 16 * 1024];
     let mut carry = || -> io::Result<()> {
@@ -753,7 +855,8 @@ fn relay(
     };
     let ended = carry();
     if !once {
-        eprintln!("The robot or program disconnected.");
+        let gone = "The robot or program disconnected.";
+        eprintln!("{}", Ink::detect().event('○', gone));
     }
     Ok(ended?)
 }
@@ -1270,6 +1373,42 @@ mod tests {
     }
 
     #[test]
+    fn the_guide_sets_the_phone_apart_from_what_a_robot_types() {
+        let links = Links {
+            here: "http://127.0.0.1:2682/#key".into(),
+            network: Some("https://name:2682/#key".into()),
+            fallback: Some("https://192.168.1.20:2682/#key".into()),
+            realtime: Some("wss://name:2682/v1/realtime?key=key".into()),
+            bare: Some((Ipv4Addr::new(192, 168, 1, 20), 2682)),
+        };
+        // In a log: the same sections, without escape codes or a code to scan.
+        let plain = links.guide(&Ink::default(), 80, None).join("\n");
+        assert!(!plain.contains('\x1b'));
+        let at = |title: &str| plain.find(&format!("\n  {title}\n")).expect(title);
+        assert!(at("Phone") < at("Robot or app") && at("Robot or app") < at(progress::HERE));
+        assert!(plain.contains("\n     Address   192.168.1.20\n     Port      2682\n"));
+
+        // On a terminal the code sits under Phone, and the two values to type stand out.
+        let ink = Ink {
+            bold: "<b>",
+            accent: "<accent>".into(),
+            ..Ink::default()
+        };
+        let styled = links.guide(&ink, 80, Some("██")).join("\n");
+        assert!(at("Phone") < styled.find("\x1b[30;107m██").unwrap());
+        assert!(styled.contains("Address   <b><accent>192.168.1.20\n"));
+        assert!(styled.contains("Port      <b><accent>2682\n"));
+
+        // A model without an API for robots offers them nothing.
+        let page = Links {
+            realtime: None,
+            bare: None,
+            ..links
+        };
+        assert!(!page.guide(&ink, 80, None).concat().contains("Robot"));
+    }
+
+    #[test]
     fn a_robot_without_the_key_talks_once_the_person_lets_it_in() {
         let cache = cache();
         let api = model_server();
@@ -1278,7 +1417,7 @@ mod tests {
         let port = address(&link).split(':').nth(1).unwrap();
         assert_eq!(
             links.bare.unwrap(),
-            format!("address 127.0.0.1, port {port}")
+            (Ipv4Addr::LOCALHOST, port.parse().unwrap())
         );
         // Settings that take only an address and a port, with an API key of the robot's own.
         let robot = || realtime(&link, "", Some("DUMMY"));
