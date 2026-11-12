@@ -23,6 +23,9 @@ TARGETS = {
         "lock": "requirements-macos.lock",
         "entries": ["voice.py", "mac.py"],
         "files": ["runtimes.json"],
+        # A release reuses the published runner, and its check of every profile, while this digest holds,
+        # so the digest also covers how the runner is built and checked.
+        "tools": ["build_runner.py", "smoke.py"],
         "imports": "kittenml.kittentts_legacy.onnx_model, mlx.core, omnivoice, pocket_tts, sounddevice, speech_to_speech.cli",
         "device": "mlx.core.default_device()",
         "host": {"min_macos": "15.0"},
@@ -59,7 +62,7 @@ def download(url, sha256, path):
 
 def sources_digest(target):
     """Hash what goes into this host's runner, so a published runner older than its sources is caught."""
-    names = [*target["entries"], *target["files"], target["lock"], "bundle_data.py",
+    names = [*target["entries"], *target["files"], target["lock"], "bundle_data.py", *target.get("tools", ()),
              *sorted(path.relative_to(HERE).as_posix() for path in (HERE / "voices").rglob("*") if path.is_file())]
     pins = [target["python"], target["python_sha256"], *target.get("llama", ())]
     content = hashlib.sha256("\n".join(pins).encode())
@@ -92,6 +95,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
     parser.add_argument("--url", help="immutable public HTTPS URL for a thin package; otherwise bundle the archive")
+    parser.add_argument("--reuse", type=Path, metavar="RUNTIME_JSON",
+                        help="a published runner's manifest; download that runner instead of building while its sources are unchanged")
     args = parser.parse_args()
     target = TARGETS.get((platform.system(), platform.machine()))
     if target is None:
@@ -104,6 +109,13 @@ def main():
     archive = output / "runner.tar.gz"
     if archive.exists() or (output / "runtime.json").exists():
         parser.error("use a fresh output directory")
+    published = json.loads(args.reuse.read_text()) if args.reuse else {}
+    if published.get("sources_sha256") == sources_digest(target):
+        # The same archive a release already verified, so people who installed it keep it.
+        download(published["url"], published["sha256"], archive)
+        shutil.copyfile(args.reuse, output / "runtime.json")
+        print(f"Reused {published['url']}")
+        return
     with tempfile.TemporaryDirectory(dir=output) as tmp:
         stage = Path(tmp)
         cpython = stage / "cpython.tar.gz"

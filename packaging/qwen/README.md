@@ -19,7 +19,17 @@ at that URL and the npm package carries only its size and SHA-256. The first
 profile's verified weights. Profiles reuse the same runner. `runtime.json` also
 records a digest of the unpacked runner, so each start hashes the installed
 files on several threads instead of re-reading the archive, which is removed
-once installed. The [runtime catalog](runtimes.json) is
+once installed.
+
+A release builds a runner only when its sources changed. `runtime.json` records
+`sources_sha256`, a digest of the files the runner is built from,
+`build_runner.py` and `smoke.py`. While it matches the newest published
+package's, the release ships that package's `runtime.json` unchanged, so people
+who upgrade keep the runner they installed. If `models.json` is unchanged too,
+the release checks the two pull request profiles instead of every profile: the
+release that published the runner checked them all on the same files.
+
+The [runtime catalog](runtimes.json) is
 shared by the client, asset locking and runner arguments. Its `guided` entries
 are Qwen 0.6B CustomVoice with fixed Aiden, Pocket TTS English
 (`english_2026-10`, Alba) and Phonon 31M English. All use Parakeet and
