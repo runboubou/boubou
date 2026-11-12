@@ -55,6 +55,9 @@ pub const ROW_TEXT: Tone = Tone(0xf4, 0xf4, 0xf6, 97);
 pub const ACCENT: Tone = Tone(0xf2, 0xc2, 0x1b, 33);
 pub const TRACK: Tone = Tone(0x4a, 0x4a, 0x52, 100);
 pub const WARN: Tone = Tone(0xe8, 0xa3, 0x3d, 33);
+/// A QR code's dark and light modules: the same on every theme, as cameras expect.
+pub const CODE_DARK: Tone = Tone(0x11, 0x11, 0x13, 30);
+pub const CODE_LIGHT: Tone = Tone(0xff, 0xff, 0xff, 97);
 
 #[derive(Clone, Copy)]
 pub struct Paint(pub Colors);
@@ -171,6 +174,81 @@ pub fn pad_left(text: &str, columns: usize) -> String {
     let text = fit(text, columns);
     let gap = columns.saturating_sub(width(&text));
     format!("{}{text}", " ".repeat(gap))
+}
+
+/// Break `text` at its spaces into lines of at most `columns`, cutting a word that is longer.
+pub fn wrap(text: &str, columns: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(line) if width(line) + 1 + width(word) <= columns => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(fit(word, columns)),
+        }
+    }
+    lines
+}
+
+/// Boubou's toucan, a terminal cell per character: `#` body, `y` beak. Whole cells stay solid
+/// where a terminal spaces its lines, which stripes block characters.
+const TOUCAN: [&str; 6] = [
+    "  ####",
+    " ######yyyyyyyyy",
+    "###  ##yyyyyyyyyyyy",
+    "#######yyyyyyyyyyyyy",
+    "########     yyyyyy",
+    "##########",
+];
+
+/// The top of a screen: beside the toucan, the product name and the local-status `light` (its
+/// style, then its text) over a rule, then what `rest` makes of the columns it is given.
+pub fn header(
+    paint: Paint,
+    columns: usize,
+    (style, light): (&str, &str),
+    rest: impl FnOnce(usize) -> Vec<String>,
+) -> Vec<String> {
+    // Narrow terminals keep their columns for the text.
+    let (toucan, gap): (&[&str], usize) = if columns < 60 {
+        (&[], 0)
+    } else {
+        (&TOUCAN, 22)
+    };
+    // Margins come off the width, and so do the toucan and its gap.
+    let room = columns.saturating_sub(4 + gap);
+    let mut lines = vec![
+        format!(
+            "{BOLD}boubou{RESET}{}{style}{light}",
+            " ".repeat(room.saturating_sub(6 + width(light)))
+        ),
+        format!("{DIM}{}", "─".repeat(room)),
+    ];
+    lines.extend(rest(room));
+    lines.resize(lines.len().max(toucan.len()), String::new());
+    // The body takes the terminal's own text colour; without colour the beak is its dim twin.
+    let beak = if paint.colored() {
+        paint.bg(ACCENT)
+    } else {
+        format!("{DIM}{REVERSE}")
+    };
+    toucan
+        .iter()
+        .chain(std::iter::repeat(&""))
+        .zip(lines)
+        .map(|(row, line)| {
+            let art: String = format!("{row:gap$}")
+                .chars()
+                .map(|cell| match cell {
+                    '#' => format!("{REVERSE} {RESET}"),
+                    'y' => format!("{beak} {RESET}"),
+                    _ => " ".to_owned(),
+                })
+                .collect();
+            format!("  {art}{line}")
+        })
+        .collect()
 }
 
 /// Decimal gigabytes, as the model library lists sizes.
@@ -292,6 +370,18 @@ mod tests {
         assert_eq!(pad_left("ab", 4), "  ab");
         assert_eq!(pad_left("abcdef", 4), "abc…");
         assert_eq!(gb(1_620_000_000), "1.62 GB");
+        assert_eq!(
+            wrap("boubou serve qwen3-tts:0.6b-customvoice --voice Vivian", 32),
+            [
+                "boubou serve",
+                "qwen3-tts:0.6b-customvoice",
+                "--voice Vivian"
+            ]
+        );
+        assert_eq!(
+            wrap("boubou run a-long-name", 8),
+            ["boubou", "run", "a-long-…"]
+        );
     }
 
     #[test]
