@@ -86,6 +86,20 @@ Use `boubou --help` or `boubou <command> --help` for options. Models and runtime
 
 </details>
 
+<details>
+<summary>Swap a component of a modular model</summary>
+
+A modular model is a pinned [speech-to-speech](https://github.com/huggingface/speech-to-speech/tree/v1.1.0) pipeline. Its options, placed after the model, replace the model's own. Change the language model or the speech recognition:
+
+```sh
+npx boubou@beta run qwen3-tts:0.6b-customvoice --model_name mlx-community/Llama-3.2-3B-Instruct-4bit
+npx boubou@beta run qwen3-tts:0.6b-customvoice --stt mlx-audio-whisper
+```
+
+They work with `run` and `serve`; put Boubou's own options, such as `--offline`, before them. These options let the pipeline download from the Hugging Face Hub: Boubou does not verify the models they name and keeps them in your own Hugging Face cache. With `--offline`, or on Linux, name local paths instead.
+
+</details>
+
 ## How it works
 
 Rust connects your microphone and speakers to a local model server, with echo cancellation and speech detection.

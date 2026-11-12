@@ -14,6 +14,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 #[derive(Deserialize)]
@@ -45,7 +46,7 @@ impl Host {
     /// The script beside the runner's interpreter that serves the conversation.
     fn entry(&self) -> &'static str {
         match self {
-            Self::Mac { .. } => "voice.py",
+            Self::Mac { .. } => "mac.py",
             Self::Cuda { .. } => "cuda.py",
         }
     }
@@ -460,6 +461,7 @@ pub fn run(
     cache: &Path,
     offline: bool,
     door: Option<&crate::serve::Options>,
+    pipeline: &[String],
 ) -> Result<()> {
     use std::sync::{
         Arc,
@@ -468,6 +470,8 @@ pub fn run(
 
     let installed = prepare(id, cache, offline)?;
     let entry = runner(&release_dir()?)?.host.entry();
+    // Pipeline options may name any model, so only they let the runner reach the Hub.
+    let hub = !(offline || pipeline.is_empty());
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
@@ -477,10 +481,18 @@ pub fn run(
         .arg(installed.join(entry))
         .arg(id)
         .arg(cache.join("qwen"))
-        .arg(release_dir()?.join("models.json"));
+        .arg(release_dir()?.join("models.json"))
+        // Later options replace earlier ones, so these replace the model's own.
+        .args(pipeline)
+        .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
         let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
-        chat::Server::start(command, &stopped)?
+        // A model that the Hub client fetches first can take long to arrive.
+        chat::Server::start(
+            command,
+            Duration::from_secs(if hub { 3600 } else { 300 }),
+            &stopped,
+        )?
     };
     let result = match door {
         Some(door) => {
@@ -507,7 +519,7 @@ mod tests {
             ))
         };
         let mac = manifest(r#","min_macos":"15.0""#).unwrap();
-        assert_eq!(mac.host.entry(), "voice.py");
+        assert_eq!(mac.host.entry(), "mac.py");
         let cuda =
             manifest(r#","sources_sha256":"c","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#)
                 .unwrap();
