@@ -3,7 +3,8 @@ name: Release
 # Pushing a v<version> tag (maintainers only) releases that version. It checks
 # every Qwen profile and the real Liquid models, publishes the tested Qwen runner
 # as a GitHub release asset, publishes the exact tested tarball to npm through
-# trusted publishing, then waits until npm serves it.
+# trusted publishing, then waits until npm serves it. Until a stable version
+# exists, the newest prerelease is also npm's `latest`, so plain `npx boubou` runs it.
 on:
   push:
     tags: ['v*']
@@ -127,22 +128,37 @@ jobs:
             url=$(curl -fs "https://registry.npmjs.org/boubou/$VERSION" | jq -er .dist.tarball) || return 1
             curl -fsL "$url" | cmp -s - "$TARBALL"
           }
+          tagged() {
+            curl -fs https://registry.npmjs.org/-/package/boubou/dist-tags | jq -r --arg tag "$1" '.[$tag]'
+          }
+          # npm can take minutes to show a new version or tag. The release is done once
+          # `npx boubou@<tag>` gets it.
+          wait_for() {
+            for _ in $(seq 60); do
+              if [ "$(tagged "$1")" = "$VERSION" ] && served; then
+                echo "npx boubou@$1 now runs $VERSION"
+                return 0
+              fi
+              sleep 30
+            done
+            echo "::error::npm does not serve boubou@$VERSION as $1 after 30 minutes. Re-run this job."
+            return 1
+          }
+          # npm 11.21+ also manages dist-tags through trusted publishing.
+          npm install --global npm@11
           # Re-running this job after npm accepted the tarball must not publish it again.
           if served; then
             echo "npm already serves boubou@$VERSION"
           else
-            npm install --global npm@11
             npm publish "$TARBALL" --tag "$channel" --access public
           fi
-          # npm can take minutes to show a new version. The release is done once
-          # `npx boubou@<channel>` gets it.
-          for _ in $(seq 60); do
-            tagged=$(curl -fs https://registry.npmjs.org/-/package/boubou/dist-tags | jq -r --arg channel "$channel" '.[$channel]') || tagged=
-            if [ "$tagged" = "$VERSION" ] && served; then
-              echo "npx boubou@$channel now runs $VERSION"
-              exit 0
+          wait_for "$channel"
+          # Until a stable version exists, plain `npx boubou` runs the newest prerelease.
+          latest=$(tagged latest)
+          if [ "$channel" != latest ] && [[ "$latest" == *-* ]]; then
+            if [ "$latest" != "$VERSION" ] && ! npm dist-tag add "boubou@$VERSION" latest; then
+              echo "::error::npm refused to move latest. Turn on \"Allow npm dist-tag\" for this package's trusted publisher on npmjs.com, then re-run this job."
+              exit 1
             fi
-            sleep 30
-          done
-          echo "::error::npm does not serve boubou@$VERSION as $channel after 30 minutes. Re-run this job."
-          exit 1
+            wait_for latest
+          fi
