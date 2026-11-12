@@ -1,8 +1,8 @@
 name: Release
 
-# Pushing a v<version> tag (maintainers only) releases that version. It checks
-# the Qwen profiles and the real Liquid models, publishes the exact tested
-# tarball to npm through trusted publishing, then waits until npm serves it.
+# Pushing a v<version> tag (maintainers only) releases that version. It reuses
+# successful model checks only for unchanged inputs, builds and checks the new
+# package, publishes that exact tarball, then waits until npm serves it.
 # A Qwen runner whose sources changed is built, checked on every profile and
 # published as a GitHub release asset. Otherwise the package keeps the runner
 # an earlier release published, so people who upgrade do not download it again.
@@ -14,12 +14,15 @@ on:
 
 permissions:
   contents: read
+  actions: read # Check existing successful model runs before repeating them.
 
 jobs:
   # A tag that cannot be released fails here in seconds, not after an hour of model checks.
   tag:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      liquid_needed: ${{ steps.liquid.outputs.needed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +44,17 @@ jobs:
             exit 1
           }
 
+      - name: Reuse completed Liquid checks when inference inputs are unchanged
+        id: liquid
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if python3 -B .github/scripts/reuse_model_checks.py liquid; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
     needs: tag
     uses: ./.github/workflows/qwen-macos.yml
@@ -50,10 +64,12 @@ jobs:
 
   verify-liquid:
     needs: tag
+    if: needs.tag.outputs.liquid_needed == 'true'
     uses: ./.github/workflows/liquid-macos.yml
 
   publish:
-    needs: [verify, verify-liquid]
+    needs: [tag, verify, verify-liquid]
+    if: always() && needs.tag.result == 'success' && needs.verify.result == 'success' && (needs.verify-liquid.result == 'success' || needs.verify-liquid.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:

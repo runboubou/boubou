@@ -1,6 +1,6 @@
 //! npx keeps Boubou where no `boubou` command reaches it, and npm goes on running an old copy.
 //! So a copy that npx started writes the commands it suggests as npx commands, and a copy from
-//! npm says in one line, when a command ends, that npm has a newer version.
+//! npm shows when a newer version is available during startup.
 
 use crate::tui;
 use reqwest::blocking::Client;
@@ -26,11 +26,11 @@ fn npm() -> Option<String> {
         .filter(|npm| npm == "npx" || npm == "global")
 }
 
-/// The command that brings the version under `tag` to a copy npm put here in the `npm` way.
-fn update(npm: &str, tag: &str) -> String {
+/// The command that fetches an exact version or launch channel for this installation.
+fn update(npm: &str, target: &str) -> String {
     match npm {
-        "npx" => format!("npx boubou@{tag}"),
-        _ => format!("npm install --global boubou@{tag}"),
+        "npx" => format!("npx boubou@{target}"),
+        _ => format!("npm install --global boubou@{target}"),
     }
 }
 
@@ -83,15 +83,15 @@ fn order(version: &str) -> Option<([u64; 3], bool, Vec<Part<'_>>)> {
 /// The line to print when `tags`, a registry's answer, holds a version newer than `running`.
 fn newer(tags: &str, running: &str, npm: &str) -> Option<String> {
     let tags: HashMap<String, String> = serde_json::from_str(tags).ok()?;
-    // Between equal versions the later tag wins: this copy's own channel, as its hints name it.
-    let (tag, version) = ["latest", channel(running)]
+    // Keep normal launch hints on their channel, but pin upgrades to the version actually found.
+    let (_, version) = ["latest", channel(running)]
         .into_iter()
         .filter_map(|tag| Some((tag, tags.get(tag)?)))
         .max_by_key(|(_, version)| order(version))?;
     (order(version) > order(running)).then(|| {
         format!(
             "Boubou {version} is out (this is {running}). Run: {}",
-            update(npm, tag)
+            update(npm, version)
         )
     })
 }
@@ -114,12 +114,20 @@ fn ask(client: &Client, registry: &str, file: &Path) -> Option<String> {
 }
 
 fn remember(tags: &str, npm: &str) {
-    if let Some(line) = newer(tags, VERSION, npm) {
-        *NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(line);
-    }
+    *NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = newer(tags, VERSION, npm);
 }
 
-/// Looks for a newer version without holding anything up; [`notice`] prints what was found.
+/// The latest available upgrade notice, for startup screens that redraw while checking.
+pub fn message() -> Option<String> {
+    NOTICE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Hands a late result to the active screen once, without writing from the network thread.
+pub fn take_notice() -> Option<String> {
+    NOTICE.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Looks for a newer version without holding anything up; startup screens read [`message`].
 ///
 /// Only a copy from npm looks, as only its update command is known. In the background and at
 /// most once a day it asks the registry npm uses, npm's own unless npm names another, and keeps
@@ -159,7 +167,7 @@ pub fn check(cache: &Path) {
 
 /// Prints the line about a newer version, once the command is over and the screen is free.
 pub fn notice() {
-    if let Some(line) = NOTICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(line) = take_notice() {
         // The terminal may already be gone; printing must not panic on the way out.
         let _ = writeln!(io::stderr(), "\n{line}");
     }
@@ -212,15 +220,15 @@ mod tests {
 
     #[test]
     fn a_newer_version_is_announced_with_the_command_that_fetches_it() {
-        // Until a stable version exists, a beta is both tags: the line names the copy's own.
+        // Until a stable version exists, a beta is both tags: pin the offered version.
         let tags = r#"{"latest":"0.1.0-beta.10","beta":"0.1.0-beta.10"}"#;
         assert_eq!(
             newer(tags, "0.1.0-beta.9", "npx").unwrap(),
-            "Boubou 0.1.0-beta.10 is out (this is 0.1.0-beta.9). Run: npx boubou@beta"
+            "Boubou 0.1.0-beta.10 is out (this is 0.1.0-beta.9). Run: npx boubou@0.1.0-beta.10"
         );
         assert_eq!(
             newer(tags, "0.1.0-beta.3", "global").unwrap(),
-            "Boubou 0.1.0-beta.10 is out (this is 0.1.0-beta.3). Run: npm install --global boubou@beta"
+            "Boubou 0.1.0-beta.10 is out (this is 0.1.0-beta.3). Run: npm install --global boubou@0.1.0-beta.10"
         );
         // The first stable version reaches people on the last beta.
         assert_eq!(
@@ -230,14 +238,14 @@ mod tests {
                 "npx"
             )
             .unwrap(),
-            "Boubou 0.1.0 is out (this is 0.1.0-beta.12). Run: npx boubou@latest"
+            "Boubou 0.1.0 is out (this is 0.1.0-beta.12). Run: npx boubou@0.1.0"
         );
         // A later beta reaches people on a beta, not people on the stable version.
         let tags = r#"{"latest":"0.1.0","beta":"0.2.0-beta.2"}"#;
         assert!(
             newer(tags, "0.2.0-beta.1", "npx")
                 .unwrap()
-                .ends_with("npx boubou@beta")
+                .ends_with("npx boubou@0.2.0-beta.2")
         );
         assert_eq!(newer(tags, "0.1.0", "npx"), None);
     }

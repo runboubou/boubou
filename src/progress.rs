@@ -66,6 +66,8 @@ struct State {
     verify_total: u64,
     verify_done: u64,
     tick: usize,
+    phase_started: Instant,
+    download_status: String,
 }
 
 struct Shared {
@@ -260,6 +262,8 @@ impl State {
             download_done: 0,
             verify_done: 0,
             tick: 0,
+            phase_started: Instant::now(),
+            download_status: String::new(),
         }
     }
 
@@ -292,6 +296,15 @@ impl State {
     fn reach(&mut self, step: Step) {
         if step > self.active && self.steps.iter().any(|(s, ..)| *s == step) {
             self.active = step;
+            self.phase_started = Instant::now();
+        }
+    }
+
+    fn describe(&mut self, label: &str) {
+        if self.active == Step::Download {
+            self.download_status = label.into();
+        } else if let Some((_, _, note)) = self.steps.iter_mut().find(|(s, ..)| *s == self.active) {
+            *note = label.into();
         }
     }
 
@@ -346,9 +359,17 @@ impl State {
                 Status::Pending => ("○".to_owned(), DIM),
             };
             let dim_icon = if status == Status::Pending { DIM } else { "" };
+            let title = if status == Status::Active {
+                format!(
+                    "{title} · {}s elapsed",
+                    self.phase_started.elapsed().as_secs()
+                )
+            } else {
+                (*title).to_owned()
+            };
             lines.push(format!(
                 "  {dim_icon}{icon}{RESET}  {title_style}{}",
-                tui::fit(title, room)
+                tui::fit(&title, room)
             ));
             let note = match step {
                 Step::Download => {
@@ -369,6 +390,18 @@ impl State {
                 _ => note.clone(),
             };
             lines.push(format!("     {DIM}{}", tui::fit(&note, room)));
+            if *step == Step::Download {
+                lines.push(format!(
+                    "     {DIM}{}",
+                    tui::fit(&self.download_status, room)
+                ));
+            }
+        }
+        if let Some(notice) = crate::update::message() {
+            lines.push(String::new());
+            for line in tui::wrap(&notice, width.saturating_sub(4).max(1)) {
+                lines.push(format!("  {line}"));
+            }
         }
         lines
     }
@@ -462,6 +495,7 @@ enum Counted {
 /// One visible blocking phase. Byte totals are measured; unknown totals animate without a percentage.
 pub struct Progress {
     bytes: Arc<AtomicU64>,
+    label: Arc<Mutex<String>>,
     stop: Option<mpsc::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     /// Set when the checklist shows this progress.
@@ -471,22 +505,20 @@ pub struct Progress {
 impl Progress {
     pub fn new(label: &str, total: Option<u64>) -> Self {
         let bytes = Arc::new(AtomicU64::new(0));
+        let label_text = Arc::new(Mutex::new(label.to_owned()));
         let mut shown = false;
         let mut verifying = false;
         update(|state| {
             shown = true;
             let active = state.active;
             verifying = active == Step::Verify && total.is_some();
-            if let Some(entry) = state.steps.iter_mut().find(|(s, ..)| *s == active)
-                && (matches!(active, Step::Start | Step::Check) || total.is_none())
-            {
-                entry.2 = label.into();
-            }
+            state.describe(label);
         });
         if shown {
             // Hashing several files at once still counts toward the checklist's Verify step.
             return Self {
                 bytes,
+                label: label_text,
                 stop: None,
                 worker: None,
                 checklist: verifying.then_some(Counted::Verify),
@@ -502,12 +534,14 @@ impl Progress {
         if !interactive {
             return Self {
                 bytes,
+                label: label_text,
                 stop: None,
                 worker: None,
                 checklist: None,
             };
         }
         let position = bytes.clone();
+        let status = label_text.clone();
         let (stop, stopped) = mpsc::channel();
         let worker = thread::Builder::new()
             .name("startup-progress".into())
@@ -516,12 +550,22 @@ impl Progress {
                 let mut tick = 0;
                 loop {
                     let mut out = io::stderr().lock();
+                    let width = crossterm::terminal::size().map_or(80, |(w, _)| w as usize);
+                    let label = status.lock().unwrap_or_else(|e| e.into_inner());
                     let _ = write!(
                         out,
-                        "\r\x1b[2K  {}  {DIM}{}s{RESET}",
-                        bar(paint, position.load(Ordering::Relaxed), total, tick),
-                        began.elapsed().as_secs()
+                        "\r\x1b[2K{}\n\r\x1b[2K  {}\x1b[1A",
+                        progress_line(
+                            paint,
+                            position.load(Ordering::Relaxed),
+                            total,
+                            tick,
+                            began.elapsed(),
+                            width
+                        ),
+                        tui::fit(&label, width.saturating_sub(3))
                     );
+                    drop(label);
                     let _ = out.flush();
                     drop(out);
                     if stopped.recv_timeout(FRAME) != Err(mpsc::RecvTimeoutError::Timeout) {
@@ -530,12 +574,13 @@ impl Progress {
                     tick += 1;
                 }
                 // Preserve the phase heading, leaving the next message on a clean line.
-                let _ = write!(io::stderr(), "\r\x1b[2K");
+                let _ = write!(io::stderr(), "\r\x1b[2K\n\r\x1b[2K\x1b[1A");
                 let _ = io::stderr().flush();
             })
             .ok();
         Self {
             bytes,
+            label: label_text,
             stop: Some(stop),
             worker,
             checklist: None,
@@ -546,9 +591,13 @@ impl Progress {
     pub fn file(label: &str, path: &Path, size: u64, phase: Phase) -> Self {
         let mut index = None;
         update(|state| index = state.file_started(path, phase));
+        if index.is_some() {
+            update(|state| state.describe(label));
+        }
         match index {
             Some(file) => Self {
                 bytes: Arc::new(AtomicU64::new(0)),
+                label: Arc::new(Mutex::new(label.into())),
                 stop: None,
                 worker: None,
                 checklist: Some(match phase {
@@ -567,9 +616,51 @@ impl Progress {
             self.bytes.fetch_add(bytes, Ordering::Relaxed);
         }
     }
+
+    /// Replaces the current operation without hiding byte progress or printing repeated lines.
+    pub fn status(&self, message: &str) {
+        // The checklist is the only owner while it is active. A second deduplication value
+        // could get ahead of its displayed state when range workers and the writer interleave.
+        let mut shown = false;
+        update(|state| {
+            shown = true;
+            state.describe(message);
+        });
+        if shown {
+            return;
+        }
+        let mut label = self.label.lock().unwrap_or_else(|e| e.into_inner());
+        if *label == message {
+            return;
+        }
+        *label = message.into();
+        drop(label);
+        if !tui::interactive(&io::stderr()) {
+            let _ = writeln!(io::stderr(), "{message}");
+        }
+    }
 }
 
-fn bar(paint: Paint, bytes: u64, total: Option<u64>, tick: usize) -> String {
+fn progress_line(
+    paint: Paint,
+    bytes: u64,
+    total: Option<u64>,
+    tick: usize,
+    elapsed: Duration,
+    width: usize,
+) -> String {
+    let elapsed = format!("{}s elapsed", elapsed.as_secs());
+    let room = width.saturating_sub(tui::width(&elapsed) + 5);
+    if room < 10 {
+        return tui::fit(&elapsed, width.saturating_sub(1));
+    }
+    format!(
+        "  {}  {DIM}{elapsed}{RESET}",
+        bar(paint, bytes, total, tick, room)
+    )
+}
+
+fn bar(paint: Paint, bytes: u64, total: Option<u64>, tick: usize, room: usize) -> String {
     let Some(total) = total else {
         return format!(
             "{} {DIM}working{RESET}",
@@ -581,11 +672,18 @@ fn bar(paint: Paint, bytes: u64, total: Option<u64>, tick: usize) -> String {
     } else {
         u128::from(bytes.min(total)) * 100 / u128::from(total)
     };
-    format!(
-        "{}  {percent:3}%  {DIM}{} / {}{RESET}",
-        smooth_bar(paint, bytes, total, 24),
+    let amount = format!(
+        "{percent:3}%  {} / {}",
         gb_amount(bytes.min(total)),
         tui::gb(total)
+    );
+    let cells = room.saturating_sub(tui::width(&amount) + 2).min(24);
+    if cells == 0 {
+        return tui::fit(&amount, room);
+    }
+    format!(
+        "{}  {DIM}{amount}{RESET}",
+        smooth_bar(paint, bytes, total, cells)
     )
 }
 
@@ -613,13 +711,107 @@ mod tests {
     use crate::tui::Colors;
 
     #[test]
+    fn receiving_replaces_retry_even_when_the_standalone_label_is_unchanged() {
+        // Isolate the process-global terminal owner from other parallel progress/download tests.
+        const CHILD: &str = "BOUBOU_PROGRESS_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "progress::tests::receiving_replaces_retry_even_when_the_standalone_label_is_unchanged"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        let mut state = fixture(false);
+        state.reach(Step::Download);
+        *CHECKLIST.lock().unwrap() = Some(Shared {
+            state,
+            paint: Paint(Colors::None),
+            drawn: 0,
+        });
+        let progress = Progress::new("Receiving model.bin", Some(100));
+        // Reproduce the old interleaving: the label said Receiving but the last UI write was Retry.
+        update(|state| state.describe("Retry 1/2: connection interrupted"));
+        progress.status("Receiving model.bin");
+        assert_eq!(
+            CHECKLIST
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .state
+                .download_status,
+            "Receiving model.bin"
+        );
+        CHECKLIST.lock().unwrap().take();
+    }
+
+    #[test]
     fn only_known_totals_show_a_bounded_percentage() {
         let paint = Paint(Colors::None);
-        assert!(bar(paint, 25, Some(100), 0).contains(" 25%"));
-        assert!(bar(paint, 200, Some(100), 0).contains("100%"));
-        assert!(bar(paint, 0, Some(0), 0).contains("100%"));
-        assert!(!bar(paint, 200, None, 0).contains('%'));
-        assert_ne!(bar(paint, 0, None, 0), bar(paint, 0, None, 1));
+        assert!(bar(paint, 25, Some(100), 0, 70).contains(" 25%"));
+        assert!(bar(paint, 200, Some(100), 0, 70).contains("100%"));
+        assert!(bar(paint, 0, Some(0), 0, 70).contains("100%"));
+        assert!(!bar(paint, 200, None, 0, 70).contains('%'));
+        assert_ne!(bar(paint, 0, None, 0, 70), bar(paint, 0, None, 1, 70));
+    }
+
+    #[test]
+    fn standalone_progress_does_not_wrap_in_narrow_terminals() {
+        for width in [20, 40, 60, 80] {
+            for total in [None, Some(8_010_000_000)] {
+                let row = progress_line(
+                    Paint(Colors::Basic),
+                    1_000_000_000,
+                    total,
+                    0,
+                    Duration::from_secs(120),
+                    width,
+                );
+                let text = visible(&row);
+                assert!(tui::width(&text) < width, "{width}: {text}");
+                assert!(text.contains("120s elapsed"));
+            }
+        }
+    }
+
+    #[test]
+    fn loading_and_retry_frames_show_real_elapsed_time_and_current_work() {
+        let mut state = fixture(false);
+        state.reach(Step::Download);
+        state.phase_started = Instant::now() - Duration::from_secs(12);
+        state.describe("Retry 1/2: connection failed; model.bin");
+        let frame = visible(&state.frame(Paint(Colors::None), 80).join("\n"));
+        assert!(
+            frame.contains("Download pinned model files · 12s elapsed"),
+            "{frame}"
+        );
+        assert!(
+            frame.contains("Retry 1/2: connection failed; model.bin"),
+            "{frame}"
+        );
+        state.describe("Receiving model.bin");
+        let frame = visible(&state.frame(Paint(Colors::None), 80).join("\n"));
+        assert!(!frame.contains("Retry 1/2"), "{frame}");
+        assert!(frame.contains("Receiving model.bin"), "{frame}");
+        state.reach(Step::Start);
+        state.phase_started = Instant::now() - Duration::from_secs(45);
+        state.describe("Loading voice models locally (up to 300s)");
+        let frame = visible(&state.frame(Paint(Colors::None), 80).join("\n"));
+        assert!(frame.contains("Start on this Mac · 45s elapsed"), "{frame}");
+        assert!(
+            frame.contains("Loading voice models locally (up to 300s)"),
+            "{frame}"
+        );
+        assert!(
+            !frame.contains('%'),
+            "Unknown loading totals must not invent a percentage: {frame}"
+        );
     }
 
     fn visible(line: &str) -> String {

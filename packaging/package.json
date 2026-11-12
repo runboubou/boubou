@@ -1,6 +1,6 @@
 {
   "name": "boubou",
-  "version": "0.1.0-beta.9",
+  "version": "0.1.0-beta.10",
   "description": "Run voice AI locally with open-source models. Bring it to any device with one command.",
   "keywords": ["voice", "voice-assistant", "speech-to-speech", "local-ai", "offline", "llama.cpp"],
   "homepage": "https://github.com/runboubou/boubou#readme",

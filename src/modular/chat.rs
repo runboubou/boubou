@@ -39,6 +39,7 @@ impl Server {
         patience: Duration,
         stopped: &AtomicBool,
     ) -> Result<(Self, Session)> {
+        let progress = crate::progress::Progress::new("Starting the local voice engine", None);
         let address = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?;
         let mut child = command
             .args(["--host", "127.0.0.1", "--port", &address.port().to_string()])
@@ -77,11 +78,21 @@ impl Server {
             readers,
         };
         let deadline = Instant::now() + patience;
+        progress.status(&format!(
+            "Loading voice models{} (up to {}s)",
+            if patience > Duration::from_secs(300) {
+                "; custom models may download"
+            } else {
+                " locally"
+            },
+            patience.as_secs()
+        ));
         loop {
             crate::check_cancel(stopped)?;
             server.check()?;
             // The port opens once the models are loaded.
             if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_millis(200)) {
+                progress.status("Models loaded; connecting the voice session");
                 let session = Session::connect(stream, address, stopped)?;
                 return Ok((server, session));
             }

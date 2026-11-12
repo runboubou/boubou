@@ -495,6 +495,7 @@ extern "C" fn interrupt(_: libc::c_int) {
 struct Screen {
     signals: Vec<(libc::c_int, libc::sigaction)>,
     paint: Paint,
+    update_notice: Option<String>,
 }
 
 /// Where the last frame put clickable things.
@@ -523,6 +524,7 @@ impl Screen {
         let mut screen = Self {
             signals: Vec::new(),
             paint: Paint::detect(),
+            update_notice: None,
         };
         // Only the prompt temporarily owns these handlers; run retains its existing Ctrl+C path.
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
@@ -569,13 +571,14 @@ impl Screen {
     /// The top of a screen: beside the toucan, the product name and the dim local-status light
     /// over a rule, then the screen's title and details.
     fn header(
-        &self,
+        &mut self,
         out: &mut impl Write,
         size: (u16, u16),
         y: &mut u16,
         title: &str,
         details: &[String],
     ) -> Result<()> {
+        self.update_notice = update::message();
         let lines = tui::header(
             self.paint,
             size.0 as usize,
@@ -594,10 +597,26 @@ impl Screen {
         for line in lines {
             self.put(out, size.1, y, &line)?;
         }
-        self.put(out, size.1, y, "")
+        self.put(out, size.1, y, "")?;
+        if let Some(notice) = self.update_notice.as_deref() {
+            let (version, command) = notice.split_once(". Run: ").unwrap_or((notice, ""));
+            for line in [version.to_owned(), format!("Run: {command}")] {
+                self.put(
+                    out,
+                    size.1,
+                    y,
+                    &format!(
+                        "  {}{}",
+                        self.paint.fg(tui::ACCENT),
+                        tui::fit(&line, usize::from(size.0).saturating_sub(4))
+                    ),
+                )?;
+            }
+        }
+        Ok(())
     }
 
-    fn event(&self) -> Result<Event> {
+    fn event(&self) -> Result<Option<Event>> {
         loop {
             if INTERRUPTED.load(Ordering::Relaxed) {
                 return Err(Cancelled.into());
@@ -613,7 +632,10 @@ impl Screen {
                         return Err(Cancelled.into());
                     }
                 }
-                return Ok(event);
+                return Ok(Some(event));
+            }
+            if update::message() != self.update_notice {
+                return Ok(None);
             }
         }
     }
@@ -684,7 +706,7 @@ impl Screen {
     }
 
     fn draw(
-        &self,
+        &mut self,
         title: &str,
         details: &[String],
         rows: &[Row],
@@ -781,7 +803,7 @@ impl Screen {
                     .is_some_and(|(top, bottom)| (top..=bottom).contains(&y))
             };
             match self.event()? {
-                Event::Key(key) => match key.code {
+                Some(Event::Key(key)) => match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         selected = (selected + rows.len() - 1) % rows.len()
                     }
@@ -794,7 +816,7 @@ impl Screen {
                     KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
                     _ => {}
                 },
-                Event::Mouse(mouse) => {
+                Some(Event::Mouse(mouse)) => {
                     hover = hit_row(mouse.row);
                     confirm_hover = on_confirm(mouse.row);
                     match mouse.kind {
@@ -810,7 +832,7 @@ impl Screen {
                         _ => {}
                     }
                 }
-                Event::Resize(..) => execute!(io::stdout(), Clear(ClearType::All))?,
+                Some(Event::Resize(..)) => execute!(io::stdout(), Clear(ClearType::All))?,
                 _ => {}
             }
         }
@@ -888,7 +910,7 @@ impl Screen {
             stdout.flush()?;
             drop(stdout);
             match self.event()? {
-                Event::Key(key) => match key.code {
+                Some(Event::Key(key)) => match key.code {
                     KeyCode::Enter => return Ok(true),
                     KeyCode::Esc => return Ok(false),
                     KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -906,10 +928,10 @@ impl Screen {
                     }
                     _ => {}
                 },
-                Event::Paste(paste) if text.len() + paste.len() <= 1024 => {
+                Some(Event::Paste(paste)) if text.len() + paste.len() <= 1024 => {
                     text.extend(paste.chars().filter(|c| !c.is_control()));
                 }
-                Event::Resize(..) => execute!(io::stdout(), Clear(ClearType::All))?,
+                Some(Event::Resize(..)) => execute!(io::stdout(), Clear(ClearType::All))?,
                 _ => {}
             }
         }

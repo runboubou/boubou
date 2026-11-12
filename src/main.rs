@@ -207,7 +207,6 @@ fn trace(event: &'static str, details: std::fmt::Arguments<'_>) {
 
 fn run() -> Result<()> {
     let cli = Cli::from_arg_matches(&command_line().get_matches()).unwrap_or_else(|e| e.exit());
-    #[cfg(target_os = "macos")]
     let guided = cli.command.is_none();
     let mut check = None;
     let cache = cli
@@ -227,6 +226,7 @@ fn run() -> Result<()> {
             }
             #[cfg(target_os = "macos")]
             {
+                update::check(&cache);
                 let selected = onboarding::start(&cache)?;
                 check = selected.check;
                 Action::Run {
@@ -261,10 +261,14 @@ fn run() -> Result<()> {
         );
     }
     // The commands that may download anyway also look for a newer Boubou.
-    if let Action::Run { offline: false, .. }
-    | Action::Serve { offline: false, .. }
-    | Action::Pull { offline: false, .. }
-    | Action::Ask { offline: false, .. } = command
+    if !guided
+        && matches!(
+            command,
+            Action::Run { offline: false, .. }
+                | Action::Serve { offline: false, .. }
+                | Action::Pull { offline: false, .. }
+                | Action::Ask { offline: false, .. }
+        )
     {
         update::check(&cache);
     }
