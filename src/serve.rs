@@ -365,7 +365,11 @@ impl Door {
                 let mut raw = false;
                 let settled = self.settle(ask, || {
                     if !raw {
-                        crossterm::terminal::enable_raw_mode()?;
+                        // Without a terminal to ask in, the robot is turned away; Boubou goes on.
+                        if let Err(error) = crossterm::terminal::enable_raw_mode() {
+                            eprint!("\r\nCannot ask in this terminal: {error}.");
+                            return Ok(Some(false));
+                        }
                         raw = true;
                     }
                     pressed(stopped, &mut idle)
@@ -437,18 +441,21 @@ impl Door {
 }
 
 /// The person's answer when they press a key within a moment: `y` lets the robot in, and any
-/// other key, or Ctrl+C, which also stops Boubou, turns it away. Keeps the model's session
-/// alive.
+/// other key turns it away, as does stopping Boubou: by Ctrl+C here, or by a signal from
+/// elsewhere, without waiting for a key. Keeps the model's session alive.
 fn pressed(stopped: &AtomicBool, idle: &mut impl FnMut() -> Result<()>) -> Result<Option<bool>> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    if stopped.load(Ordering::SeqCst) {
+        return Ok(Some(false));
+    }
     if event::poll(Duration::from_millis(20))?
         && let Event::Key(key) = event::read()?
     {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             stopped.store(true, Ordering::SeqCst);
+            return Ok(Some(false));
         }
-        let yes = matches!(key.code, KeyCode::Char('y' | 'Y'));
-        return Ok(Some(yes && !stopped.load(Ordering::SeqCst)));
+        return Ok(Some(matches!(key.code, KeyCode::Char('y' | 'Y'))));
     }
     idle()?;
     Ok(None)
@@ -1316,6 +1323,15 @@ mod tests {
         assert_eq!(socket.read().unwrap().to_text().unwrap(), "created");
         assert_eq!(status(plain(&later.here, "")), 404);
         fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
+    fn stopping_boubou_answers_an_open_question_without_a_key() {
+        let mut idle = || panic!("Kept waiting after Boubou stopped");
+        assert_eq!(
+            pressed(&AtomicBool::new(true), &mut idle).unwrap(),
+            Some(false)
+        );
     }
 
     #[test]
