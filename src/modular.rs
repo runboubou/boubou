@@ -1,6 +1,7 @@
 //! Installs and launches the packaged modular speech-to-speech runtime.
 
 mod chat;
+mod incremental;
 mod integrity;
 
 use crate::{
@@ -24,6 +25,8 @@ struct Runner {
     sha256: String,
     /// Digest of the installed tree, so each start checks it without re-reading the archive.
     tree_sha256: String,
+    #[serde(default)]
+    entries: Vec<incremental::Entry>,
     #[serde(flatten)]
     host: Host,
 }
@@ -92,6 +95,7 @@ fn runner(dir: &Path) -> Result<Runner> {
             && runner.size > 0,
         "Invalid packaged modular runtime manifest"
     );
+    incremental::validate(&runner.entries, runner.size)?;
     Ok(runner)
 }
 
@@ -202,9 +206,12 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     let engine = runtime_dir(&root, &runner)?;
     let installed = engine.join("installed");
     // The tree digest covers every installed file, so the archive is needed only to install.
-    let current = tree_matches(&installed, &runner.tree_sha256)?;
+    let mut current = tree_matches(&installed, &runner.tree_sha256)?;
     // Download everything first, then verify everything, so startup reads as two clear steps.
     progress::step(Step::Download);
+    if !current {
+        current = incremental::install(&runner, &root, &installed, offline)?;
+    }
     if !current && runner.url.is_some() {
         assets::prefetch(&runner.archive(), &engine, offline)?;
     }

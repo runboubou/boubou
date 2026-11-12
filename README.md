@@ -41,6 +41,10 @@ npx boubou@beta run LFM3-Audio-2B
 
 Allow microphone access. The first run downloads about **1.4 GB**. Then speak English.
 
+The npm launcher checks for updates before each command and runs the newest version on your release channel (beta can graduate to stable). Updates live in your user cache and need no administrator access. Automatic updates use your user/global npm settings and environment, not the current project's `.npmrc`. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor`, and `BOUBOU_NO_UPDATE_CHECK=1` skip the check; use the native binary directly when you need to pin an installed version.
+
+Models stay in the cache across package updates. The small npm package downloads normally; modular runtime updates reuse verified files from older installations and download changed files only when the release and server support incremental downloads. A first installation or an older runtime without an index uses the full runtime archive.
+
 <kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
 
 On macOS, run `npx boubou@beta` to choose from the menu: the Liquid models and, on Macs with 16 GB of memory and macOS 15 or later, three modular voices (Qwen3-TTS 0.6B, Pocket TTS and Phonon). Its last row opens the [model library](https://runboubou.com/models/) for more voices: copy a command there and paste it into the menu.
@@ -109,7 +113,7 @@ Rust connects your microphone and speakers to a local model server, with echo ca
 
 **Inference runs on your machine.** No account, cloud model API key or telemetry. With `run`, audio stays on this computer. After downloading the models, use `--offline` to run without a network. With npx, pass `--offline` before the package name too, so npm also stays offline.
 
-A copy installed through npm checks for updates in the background at startup and shows an upgrade command when one is available. The request names only the package, and a successful answer is cached for a day. An explicit `--offline` command or `BOUBOU_NO_UPDATE_CHECK=1` disables this check.
+Automatic update requests go through npm to your configured registry, using npm's normal headers and authentication. They do not include audio, transcripts or model files.
 
 ## Contributors
 

@@ -14,12 +14,22 @@ python3 -B packaging/build-macos.py --qwen "$candidate"
 
 The runner archive holds the interpreter, native wheels, Silero, NLTK and
 phonemizer data. It is too large for npm, so the Release workflow publishes it
-at that URL and the npm package carries only its size and SHA-256. The first
+at that URL and the npm package carries its manifest. The first
 `pull` downloads and verifies the runner, then fetches only the selected
 profile's verified weights. Profiles reuse the same runner. `runtime.json` also
 records a digest of the unpacked runner, so each start hashes the installed
 files on several threads instead of re-reading the archive, which is removed
 once installed.
+
+New runner builds store each tar entry in its own gzip member and record file
+hashes and compressed byte ranges in `runtime.json`. When a runner changes,
+Boubou copies matching files from an installed runner and downloads only changed
+files with HTTP Range requests. It verifies the complete assembled tree before
+activation, leaving older runners and model caches intact. A cold install, a
+legacy manifest without this index, or a server without Range support uses the
+full archive. The currently pinned Linux runner is a legacy archive; its next
+rebuild enables incremental updates. Savings depend on which files change,
+not a fixed byte or percentage guarantee.
 
 A release builds a runner only when its sources changed. `runtime.json` records
 `sources_sha256`, a digest of the files the runner is built from,
@@ -49,6 +59,7 @@ Before the release exists, place the built runner where `pull` would download it
 
 ```sh
 export BOUBOU_HOME="$(mktemp -d)"
+export BOUBOU_NO_UPDATE_CHECK=1 # Keep acceptance on this exact candidate.
 sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$candidate/runtime.json")
 mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
 cp "$candidate/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"

@@ -2,6 +2,8 @@
 
 import argparse
 import hashlib
+import gzip
+import io
 import json
 import os
 import platform
@@ -91,6 +93,44 @@ def tree_digest(root):
     return hashlib.sha256("".join(sorted(lines)).encode()).hexdigest()
 
 
+def indexed_archive(root, archive):
+    """One gzip member per tar entry: ordinary full extraction plus verified file-range updates."""
+    root = root.resolve()
+    entries = []
+    with archive.open("wb") as stream, tarfile.open(fileobj=io.BytesIO(), mode="w") as metadata:
+        # Only gettarinfo is used; the archive bytes are written by the gzip streams below.
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink() and (os.readlink(path).startswith("/") or not path.resolve(strict=True).is_relative_to(root)):
+                raise ValueError(f"Non-relocatable link: {relative}")
+            metadata.inodes.clear()
+            info = metadata.gettarinfo(str(path), arcname=relative)
+            info.uid = info.gid = info.mtime = 0
+            info.uname = info.gname = ""
+            entry = {"path": relative}
+            if info.isdir():
+                entry["kind"] = "dir"
+            elif info.issym():
+                entry.update(kind="link", target=info.linkname)
+            elif info.isfile():
+                entry.update(kind="file", size=info.size, sha256=digest(path), executable=bool(info.mode & 0o111))
+            else:
+                raise ValueError(f"Unsupported runner entry: {relative}")
+            offset = stream.tell()
+            with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0, compresslevel=3) as member:
+                member.write(info.tobuf(format=tarfile.PAX_FORMAT))
+                if info.isfile():
+                    with path.open("rb") as source:
+                        shutil.copyfileobj(source, member)
+                    member.write(b"\0" * (-info.size % 512))
+            if info.isfile():
+                entry.update(offset=offset, compressed_size=stream.tell() - offset)
+            entries.append(entry)
+        with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as member:
+            member.write(b"\0" * 1024)
+    return entries
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
@@ -177,16 +217,11 @@ print({target["device"]})
         subprocess.run([moved / "bin/python3", "-I", "-B", "-c", check, *(moved / name for name in target["entries"])],
                        cwd=stage, check=True)
         bundle = stage / "runner.tar.gz"
-        with tarfile.open(bundle, "w:gz", compresslevel=3) as tar:
-            for path in sorted(moved.rglob("*")):
-                if path.is_symlink() and (os.readlink(path).startswith("/") or not path.resolve(strict=True).is_relative_to(moved)):
-                    raise ValueError(f"Non-relocatable link: {path.relative_to(moved)}")
-                # The Rust verifier supports ordinary files and relative symlinks.
-                tar.inodes.clear()
-                tar.add(path, arcname=path.relative_to(moved), recursive=False)
+        entries = indexed_archive(moved, bundle)
         # Boubou checks the installed tree against this digest on every start, instead of re-reading the archive.
         result = {"url": args.url, "size": bundle.stat().st_size, "sha256": digest(bundle),
-                  "tree_sha256": tree_digest(moved), "sources_sha256": sources_digest(target), **target["host"]}
+                  "tree_sha256": tree_digest(moved), "sources_sha256": sources_digest(target),
+                  "entries": entries, **target["host"]}
         bundle.rename(archive)
         (output / "runtime.json").write_text(json.dumps(result, indent=2) + "\n")
         print(f"Built {archive} ({result['size']} bytes, sha256 {result['sha256']})")
