@@ -72,7 +72,7 @@ text { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mo
 <text x="94" y="293" fill="#b8b8c0" font-size="17" >Liquid Omni 2.17B</text>
 <text x="394" y="293" fill="#83838e" font-size="16" >Voice, images and video</text>
 <text x="974" y="293" fill="#95959f" font-size="16" text-anchor="end">1.6 GB</text>
-<text x="63" y="342" fill="#95959f" font-size="16" >Use a model you already chose…</text>
+<text x="63" y="342" fill="#95959f" font-size="16" >More voices at runboubou.com/models</text>
 <text x="44" y="389" fill="#8f8f9a" font-size="15" >English · one model hears, thinks and speaks</text>
 <rect x="44" y="425" width="952" height="54" rx="7" fill="none" stroke="#595961"/>
 <text x="65" y="458" fill="#f4f4f6" font-size="17" >$ boubou run LFM3-Audio-2B</text>

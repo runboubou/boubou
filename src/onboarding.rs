@@ -254,7 +254,19 @@ impl Row {
     }
 }
 
-const DEVELOPER: &str = "Use a model you already chose…";
+/// Every voice and its run command.
+const LIBRARY: &str = "runboubou.com/models";
+
+/// A menu's last row: the model library opens, and a command copied there pastes into Boubou.
+fn more_voices() -> Row {
+    Row {
+        about: vec![
+            "Opens the model library in your browser.".into(),
+            "Copy a command there, then paste it here.".into(),
+        ],
+        ..Row::action(&format!("More voices at {LIBRARY}"))
+    }
+}
 
 fn available_setups<'a>(device: &Device, setups: &'a [Setup]) -> Vec<&'a Setup> {
     setups
@@ -347,6 +359,10 @@ fn parse_selection(text: &str) -> Result<Selection> {
 }
 
 fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
+    // Without a browser, as over SSH, the paste screen still names the address.
+    let _ = std::process::Command::new("open")
+        .arg(format!("https://{LIBRARY}/"))
+        .output();
     let mut text = String::new();
     let mut notice = String::new();
     while screen.input(&mut text, &notice)? {
@@ -367,7 +383,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 match screen.choose(
                     "Device check unavailable",
                     &[error.to_string()],
-                    &[Row::action("Check again"), Row::action(DEVELOPER)],
+                    &[Row::action("Check again"), more_voices()],
                 )? {
                     Some(0) => continue,
                     Some(_) => {
@@ -416,7 +432,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
         if choices.is_empty() {
             rows.push(Row::action("Check again"));
         }
-        rows.push(Row::action(DEVELOPER));
+        rows.push(more_voices());
         let Some(selected) = screen.choose(title, &details, &rows)? else {
             return Err(Cancelled.into());
         };
@@ -813,12 +829,7 @@ impl Screen {
             let mut y = 0;
             self.header(&mut out, size, &mut y)?;
             let room = width.saturating_sub(4);
-            self.put(
-                &mut out,
-                height,
-                &mut y,
-                &format!("  {BOLD}Use a model you already chose"),
-            )?;
+            self.put(&mut out, height, &mut y, &format!("  {BOLD}More voices"))?;
             self.put(
                 &mut out,
                 height,
@@ -826,7 +837,7 @@ impl Screen {
                 &format!(
                     "  {DIM}{}",
                     tui::fit(
-                        "Paste a model name or a run command from the model library.",
+                        &format!("Paste a run command from {LIBRARY}, or type a model name."),
                         room
                     )
                 ),
