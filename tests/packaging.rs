@@ -126,6 +126,15 @@ impl Prompt {
                 0
             );
         }
+        // The menu's library row runs `open`; this stand-in records the address instead.
+        let bin = package.0.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(
+            bin.join("open"),
+            "#!/bin/sh\nprintf %s \"$1\" > \"$0.address\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(bin.join("open"), fs::Permissions::from_mode(0o755)).unwrap();
         command
             .args([
                 "--cache-dir",
@@ -133,6 +142,10 @@ impl Prompt {
             ])
             .args(args)
             .env("TERM", "xterm-256color")
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            )
             .env_remove("NO_COLOR")
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
@@ -245,12 +258,20 @@ fn guided_start_opens_english_voices_and_restores_the_terminal() {
     prompt.expect(&["ctrl+c exit"]);
     assert!(!prompt.output.contains("Chinese"));
     assert!(!prompt.output.contains("Choose your conversation language"));
-    assert!(prompt.output.contains("Use a model you already chose"));
+    assert!(
+        prompt
+            .output
+            .contains("More voices at runboubou.com/models")
+    );
     assert!(prompt.output.contains("Run locally") || prompt.output.contains("Continue"));
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
-    // The developer entry is last regardless of the number of eligible voices.
+    // The library entry is last regardless of the number of eligible voices.
     prompt.send(b"\x1b[A\r");
-    prompt.expect(&["Paste a model name"]);
+    prompt.expect(&["Paste a run command"]);
+    assert_eq!(
+        fs::read_to_string(package.0.join("bin/open.address")).unwrap(),
+        "https://runboubou.com/models/"
+    );
     prompt.send(b"\x1b");
     prompt.expect(MENU);
     prompt.send(b"\x03");
@@ -265,7 +286,7 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     prompt.expect(MENU);
     assert!(!prompt.output.contains("\x1b[38;"), "NO_COLOR was ignored");
     prompt.send(b"\x1b[A\r");
-    prompt.expect(&["Paste a model name"]);
+    prompt.expect(&["Paste a run command"]);
     prompt.send(b"unknown\r");
     prompt.expect(&["Model not supported"]);
     assert!(!package.0.join("menu-cache").exists());
