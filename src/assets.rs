@@ -3,7 +3,7 @@ use crate::{
     progress::{self, Phase, Progress, Step},
 };
 use anyhow::{Context, Result, bail, ensure};
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use fs2::FileExt;
 use reqwest::{StatusCode, blocking::Client, header};
 use sha2::{Digest, Sha256};
@@ -141,7 +141,7 @@ pub(crate) fn install_runtime(
                     .extract(&staging)
                     .context("Cannot unpack the speech engine")?;
             } else {
-                tar::Archive::new(GzDecoder::new(File::open(archive)?))
+                tar::Archive::new(MultiGzDecoder::new(File::open(archive)?))
                     .unpack(&staging)
                     .context("Cannot unpack the speech engine")?;
             }
@@ -383,7 +383,7 @@ pub(crate) fn fetch_all(files: &[(PathBuf, Download<'_>)], offline: bool) -> Res
 }
 
 /// Share the connection pool across sequential files as well as ranges within a file.
-fn download_client() -> Result<&'static Client> {
+pub(crate) fn download_client() -> Result<&'static Client> {
     static CLIENT: OnceLock<Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client);
@@ -728,7 +728,7 @@ pub(crate) fn runtime_valid(archive: &Path, installed: &Path, server: &str) -> R
         }
         return executable_valid(&installed.join(server));
     }
-    let mut tar = tar::Archive::new(GzDecoder::new(File::open(archive)?));
+    let mut tar = tar::Archive::new(MultiGzDecoder::new(File::open(archive)?));
     for entry in tar.entries()? {
         let mut entry = entry?;
         let path = installed.join(entry.path()?);
@@ -1240,7 +1240,7 @@ mod tests {
 
         let installed = dir.0.join("installed");
         assert!(!runtime_valid(&archive, &installed, server).unwrap());
-        tar::Archive::new(GzDecoder::new(File::open(&archive).unwrap()))
+        tar::Archive::new(MultiGzDecoder::new(File::open(&archive).unwrap()))
             .unpack(&installed)
             .unwrap();
         assert!(runtime_valid(&archive, &installed, server).unwrap());

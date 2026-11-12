@@ -35,6 +35,10 @@ permissions:
   contents: read
   actions: read # Reuse only a completed release's model checks.
 
+# Acceptance must execute this exact candidate, even if npm publishes another version meanwhile.
+env:
+  BOUBOU_NO_UPDATE_CHECK: '1'
+
 concurrency:
   group: qwen-mac-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
