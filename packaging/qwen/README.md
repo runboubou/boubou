@@ -101,8 +101,9 @@ not switch this package's STT engine.
 
 The upstream framework supports `mlx-lm`, `transformers`, `responses-api` and
 `chat-completions` LLM backends. Boubou's packaged profiles use `mlx-lm` on a Mac,
-`transformers` on Linux, and the pinned checkpoints selected by each complete runtime. Other component combinations
-and inference backends require a separately configured developer runtime.
+`transformers` on Linux, and the pinned checkpoints selected by each complete runtime. Speech-to-speech
+options after the model replace a profile's own, as the main README shows. `mac.py`
+lets them reach the Hugging Face Hub; the Linux runner stays offline, so there they must name local paths.
 
 ## x86-64 Linux with an NVIDIA GPU
 

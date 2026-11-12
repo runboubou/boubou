@@ -46,7 +46,7 @@ impl Host {
     /// The script beside the runner's interpreter that serves the conversation.
     fn entry(&self) -> &'static str {
         match self {
-            Self::Mac { .. } => "voice.py",
+            Self::Mac { .. } => "mac.py",
             Self::Cuda { .. } => "cuda.py",
         }
     }
@@ -519,7 +519,7 @@ mod tests {
             ))
         };
         let mac = manifest(r#","min_macos":"15.0""#).unwrap();
-        assert_eq!(mac.host.entry(), "voice.py");
+        assert_eq!(mac.host.entry(), "mac.py");
         let cuda =
             manifest(r#","sources_sha256":"c","min_nvidia_driver":"580.65.06","min_glibc":"2.39""#)
                 .unwrap();

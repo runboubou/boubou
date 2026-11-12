@@ -119,11 +119,13 @@ def arguments(model_id, cache, manifest, work):
             (work / "asset").symlink_to(cache.joinpath(*parts[:5]), target_is_directory=True)
             owned.append(str(work))
     (tts,) = owned
-    os.environ.update({"HF_HUB_DISABLE_TELEMETRY": "1", "NLTK_DATA": str(bundle / "nltk_data")})
-    # A pinned pipeline reads the verified cache and never connects. Boubou opens the Hub only for
-    # pipeline options, which may name any model: the Hub client keeps those in the person's own cache.
-    if os.environ.setdefault("HF_HUB_OFFLINE", "1") == "1":
-        os.environ.update({"HF_HOME": str(cache / "hf"), "HF_HUB_CACHE": str(cache / "hub")})
+    os.environ.update({
+        "HF_HOME": str(cache / "hf"),
+        "HF_HUB_CACHE": str(cache / "hub"),
+        "HF_HUB_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "NLTK_DATA": str(bundle / "nltk_data"),
+    })
     if tiny:
         stt = ["--stt", "whisper", "--stt_model_name", snapshots[recognizer],
                "--stt_device", "mps", "--stt_torch_dtype", "float16",
@@ -277,10 +279,6 @@ def run(command, model, cache, manifest, *extra):
         silero = "snakers4_silero-vad_master"
         (hub / silero).symlink_to(Path(__file__).resolve().parent / "silero", target_is_directory=True)
         (hub / "trusted_list").write_text("snakers4_silero-vad\n")
-        # Models named by pipeline options stay in Hugging Face's default home, which follows
-        # the XDG_CACHE_HOME that moves into temporary storage below.
-        os.environ.setdefault("HF_HOME", os.path.join(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache",
-                                                      "huggingface"))
         os.environ.update(
             TORCH_HOME=str(hub.parent), XDG_CACHE_HOME=str(work / "cache"),
             NUMBA_CACHE_DIR=str(work / "numba"), PYTHONDONTWRITEBYTECODE="1",

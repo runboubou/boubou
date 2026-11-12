@@ -21,7 +21,7 @@ TARGETS = {
         "python": RELEASE + "cpython-3.11.18%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
         "python_sha256": "f3e1cd83a7f1d70e58b0d69102c18bd6867d2f973068dc5cbfd5822e445c66df",
         "lock": "requirements-macos.lock",
-        "entries": ["voice.py"],
+        "entries": ["voice.py", "mac.py"],
         "files": ["runtimes.json"],
         "imports": "kittenml.kittentts_legacy.onnx_model, mlx.core, omnivoice, pocket_tts, sounddevice, speech_to_speech.cli",
         "device": "mlx.core.default_device()",

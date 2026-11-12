@@ -1025,16 +1025,19 @@ with TemporaryDirectory() as folder:
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
         assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("1", str(root / "cache/hub"))
-    # Pipeline options open the Hub, whose client then keeps to the person's own cache.
-    os.environ.update(HF_HUB_OFFLINE="0", HF_HUB_CACHE="theirs")
+    # Pipeline options open the Hub, whose client keeps their models in the person's own cache.
+    for name in ("HF_HOME", "HF_HUB_CACHE"):
+        os.environ.pop(name, None)
+    os.environ.update(HF_HUB_OFFLINE="0", XDG_CACHE_HOME=str(root / "theirs"))
     (root / "open").mkdir()
-    arguments("phonon:31m-en", root / "cache", manifest, root / "open")
-    assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("0", "theirs")
+    runpy.run_path(sys.argv[1])["arguments"]("phonon:31m-en", root / "cache", manifest, root / "open")
+    assert [os.environ[name] for name in ("HF_HUB_OFFLINE", "HF_HOME", "HF_HUB_CACHE")] == [
+        "0", str(root / "theirs/huggingface"), str(root / "theirs/huggingface/hub")]
 "#,
         )
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/packaging/qwen/voice.py"
+            "/packaging/qwen/mac.py"
         ))
         .output()
         .unwrap();
