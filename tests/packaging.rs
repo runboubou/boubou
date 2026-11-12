@@ -431,7 +431,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     let cache = package.0.join("menu-cache/qwen");
     fs::create_dir(&release).unwrap();
     let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
-    let script = b"#!/bin/sh\nprintf 'selected: %s\\n' \"$@\"\n";
+    let script = b"#!/bin/sh\nprintf 'selected: %s\\n' \"$@\" \"hub offline $HF_HUB_OFFLINE\"\n";
     let mut header = tar::Header::new_gnu();
     header.set_size(script.len() as u64);
     header.set_mode(0o755);
@@ -472,12 +472,24 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         "The modular voice runner stopped",
         "selected: qwen3-tts:1.7b-customvoice",
         "selected: --port",
+        "selected: hub offline 1",
     ] {
         prompt.expect(&[line]);
     }
     assert!(!prompt.finish().success());
     assert_eq!(fs::read(snapshot.join("tts.bin")).unwrap(), asset);
     assert!(!snapshot.join("tts.bin.part").exists());
+    // Pipeline options follow the model's own to the runner, and only they open the Hub.
+    let mut prompt = Prompt::new(&package, true, &["run", id, "--stt", "whisper"]);
+    for line in [
+        "selected: --stt",
+        "selected: whisper",
+        "selected: --port",
+        "selected: hub offline 0",
+    ] {
+        prompt.expect(&[line]);
+    }
+    assert!(!prompt.finish().success());
 }
 
 #[test]
@@ -656,6 +668,18 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
             }),
             "{error}"
         );
+    }
+    for command in ["run", "serve"] {
+        let result = package.run(&[
+            "--cache-dir",
+            cache_arg,
+            command,
+            "LFM3-Omni-2B",
+            "--stt",
+            "whisper",
+        ]);
+        assert_eq!(result.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&result.stderr).contains("modular runtime only"));
     }
     assert!(!cache.join("models").exists());
     assert!(!cache.join("native").exists());
@@ -1000,6 +1024,12 @@ with TemporaryDirectory() as folder:
             assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
+        assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("1", str(root / "cache/hub"))
+    # Pipeline options open the Hub, whose client then keeps to the person's own cache.
+    os.environ.update(HF_HUB_OFFLINE="0", HF_HUB_CACHE="theirs")
+    (root / "open").mkdir()
+    arguments("phonon:31m-en", root / "cache", manifest, root / "open")
+    assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("0", "theirs")
 "#,
         )
         .arg(concat!(

@@ -74,6 +74,10 @@ enum Action {
         /// Save spoken replies to a PCM16 mono 24 kHz WAV (requires --input).
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
+        /// Speech-to-speech options that replace a modular model's own, such as
+        /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        pipeline: Vec<String>,
     },
     /// Talk with a model through a browser page, on this computer or a phone on the same Wi-Fi.
     Serve {
@@ -84,6 +88,10 @@ enum Action {
         offline: bool,
         #[command(flatten)]
         door: serve::Options,
+        /// Speech-to-speech options that replace a modular model's own, such as
+        /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        pipeline: Vec<String>,
     },
     /// Download and verify the selected model and its inference backend.
     Pull {
@@ -216,6 +224,7 @@ fn run() -> Result<()> {
                     manual: false,
                     input: Vec::new(),
                     output: None,
+                    pipeline: Vec::new(),
                 }
             }
             #[cfg(not(target_os = "macos"))]
@@ -224,6 +233,22 @@ fn run() -> Result<()> {
             );
         }
     };
+    if let Action::Run {
+        model: profiles::Model::Liquid(_),
+        pipeline,
+        ..
+    }
+    | Action::Serve {
+        model: profiles::Model::Liquid(_),
+        pipeline,
+        ..
+    } = &command
+    {
+        ensure!(
+            pipeline.is_empty(),
+            "Pipeline options apply to the modular runtime only."
+        );
+    }
     let result = (|| match command {
         Action::List => {
             for model in profiles::Model::all() {
@@ -305,6 +330,7 @@ fn run() -> Result<()> {
             manual,
             input,
             output,
+            pipeline,
         } => {
             let _checklist = checklist(
                 format!(
@@ -328,7 +354,7 @@ fn run() -> Result<()> {
                         io::stdin().is_terminal(),
                         "The modular runtime needs a terminal."
                     );
-                    return modular::run(id, &cache, offline, None);
+                    return modular::run(id, &cache, offline, None, &pipeline);
                 }
             };
             if input.is_empty() {
@@ -351,6 +377,7 @@ fn run() -> Result<()> {
             model,
             offline,
             door,
+            pipeline,
         } => {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let door = if offline { door.offline() } else { door };
@@ -367,7 +394,9 @@ fn run() -> Result<()> {
                         from_browser(&door, &cache, chat, stopped)
                     })
                 }
-                profiles::Model::Modular(id) => modular::run(id, &cache, offline, Some(&door)),
+                profiles::Model::Modular(id) => {
+                    modular::run(id, &cache, offline, Some(&door), &pipeline)
+                }
             }
         }
     })();
@@ -1118,6 +1147,42 @@ mod tests {
         );
         assert!(Cli::try_parse_from(["boubou", "run", profiles::DEFAULT.id, "--offline"]).is_ok());
         assert!(Cli::try_parse_from(["boubou", "run", "other"]).is_err());
+    }
+
+    #[test]
+    fn pipeline_options_follow_the_model_and_boubou_options() {
+        let parse = |line: &str| {
+            let cli = Cli::try_parse_from(line.split(' ')).unwrap();
+            match cli.command.unwrap() {
+                Action::Run {
+                    offline, pipeline, ..
+                }
+                | Action::Serve {
+                    offline, pipeline, ..
+                } => (offline, pipeline.join(" ")),
+                _ => unreachable!(),
+            }
+        };
+        let id = profiles::DEFAULT.id;
+        for command in ["run", "serve"] {
+            assert_eq!(
+                parse(&format!("boubou {command} {id} --offline")),
+                (true, String::new())
+            );
+            assert_eq!(
+                parse(&format!(
+                    "boubou {command} {id} --offline --stt whisper --language auto"
+                )),
+                (true, "--stt whisper --language auto".into())
+            );
+        }
+        // The first pipeline option ends Boubou's own: a later --port goes to the pipeline.
+        assert_eq!(
+            parse(&format!(
+                "boubou serve {id} --port 3000 --tts kokoro --port 1"
+            )),
+            (false, "--tts kokoro --port 1".into())
+        );
     }
 
     #[test]

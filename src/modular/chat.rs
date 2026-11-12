@@ -23,7 +23,6 @@ const FRAME: usize = 320;
 const APPEND_SAMPLES: usize = 1_600;
 /// Replies arrive faster than real time. Feed the 30-second native queue a few seconds ahead.
 const PLAYBACK_AHEAD: usize = 24_000 * 5;
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
 const OUTPUT_LINES: usize = 40;
 
 /// The runner logs conversation text, so its output is kept only in memory for failures.
@@ -35,7 +34,11 @@ pub(super) struct Server {
 }
 
 impl Server {
-    pub(super) fn start(mut command: Command, stopped: &AtomicBool) -> Result<(Self, Session)> {
+    pub(super) fn start(
+        mut command: Command,
+        patience: Duration,
+        stopped: &AtomicBool,
+    ) -> Result<(Self, Session)> {
         let address = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?;
         let mut child = command
             .args(["--host", "127.0.0.1", "--port", &address.port().to_string()])
@@ -73,7 +76,7 @@ impl Server {
             output,
             readers,
         };
-        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let deadline = Instant::now() + patience;
         loop {
             crate::check_cancel(stopped)?;
             server.check()?;
@@ -85,7 +88,7 @@ impl Server {
             ensure!(
                 Instant::now() < deadline,
                 "The modular voice runner did not become ready within {} seconds.{}",
-                STARTUP_TIMEOUT.as_secs(),
+                patience.as_secs(),
                 server.output()
             );
             thread::sleep(Duration::from_millis(200));
@@ -810,7 +813,7 @@ mod tests {
     fn startup_reports_a_runner_that_exits_before_it_is_ready() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "echo loading; echo 'missing weights' >&2; exit 3"]);
-        let error = Server::start(command, &AtomicBool::new(false))
+        let error = Server::start(command, Duration::from_secs(30), &AtomicBool::new(false))
             .err()
             .expect("startup must fail");
         let message = format!("{error:#}");
@@ -833,7 +836,9 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "exec sleep 30"]);
         let began = Instant::now();
-        let error = Server::start(command, &stopped).err().unwrap();
+        let error = Server::start(command, Duration::from_secs(30), &stopped)
+            .err()
+            .unwrap();
         cancel.join().unwrap();
         assert!(error.is::<crate::Cancelled>(), "{error:#}");
         assert!(began.elapsed() < Duration::from_secs(5));

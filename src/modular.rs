@@ -14,6 +14,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 #[derive(Deserialize)]
@@ -460,6 +461,7 @@ pub fn run(
     cache: &Path,
     offline: bool,
     door: Option<&crate::serve::Options>,
+    pipeline: &[String],
 ) -> Result<()> {
     use std::sync::{
         Arc,
@@ -468,6 +470,8 @@ pub fn run(
 
     let installed = prepare(id, cache, offline)?;
     let entry = runner(&release_dir()?)?.host.entry();
+    // Pipeline options may name any model, so only they let the runner reach the Hub.
+    let hub = !(offline || pipeline.is_empty());
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
@@ -477,10 +481,18 @@ pub fn run(
         .arg(installed.join(entry))
         .arg(id)
         .arg(cache.join("qwen"))
-        .arg(release_dir()?.join("models.json"));
+        .arg(release_dir()?.join("models.json"))
+        // Later options replace earlier ones, so these replace the model's own.
+        .args(pipeline)
+        .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
         let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
-        chat::Server::start(command, &stopped)?
+        // A model that the Hub client fetches first can take long to arrive.
+        chat::Server::start(
+            command,
+            Duration::from_secs(if hub { 3600 } else { 300 }),
+            &stopped,
+        )?
     };
     let result = match door {
         Some(door) => {
