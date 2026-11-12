@@ -1,8 +1,9 @@
 name: Release
 
-# Pushing a v* tag (maintainers only) checks every Qwen profile and the real
-# Liquid models, publishes the tested Qwen runner as a GitHub release asset, then
-# publishes the exact tested tarball to npm through trusted publishing.
+# Pushing a v<version> tag (maintainers only) releases that version. It checks
+# every Qwen profile and the real Liquid models, publishes the tested Qwen runner
+# as a GitHub release asset, publishes the exact tested tarball to npm through
+# trusted publishing, then waits until npm serves it.
 on:
   push:
     tags: ['v*']
@@ -11,18 +12,45 @@ permissions:
   contents: read
 
 jobs:
+  # A tag that cannot be released fails here in seconds, not after an hour of model checks.
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that the tag names the version on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version packaging/package.json)
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in packaging/package.json. Bump the version on main, then tag that commit."
+            exit 1
+          }
+          # main is "identical" to or "ahead" of a commit it contains.
+          main=$(gh api "repos/$GITHUB_REPOSITORY/compare/$(git rev-parse HEAD)...main" --jq .status)
+          test "$main" = identical || test "$main" = ahead || {
+            echo "::error::$GITHUB_REF_NAME is not on main. Tag a commit that main contains."
+            exit 1
+          }
+
   verify:
+    needs: tag
     uses: ./.github/workflows/qwen-macos.yml
     with:
       all_profiles: true
 
   verify-liquid:
+    needs: tag
     uses: ./.github/workflows/liquid-macos.yml
 
   publish:
     needs: [verify, verify-liquid]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: write # GitHub release
       id-token: write # npm trusted publishing and provenance
@@ -84,7 +112,7 @@ jobs:
             echo "The release already holds a different runner. Release a new version instead."
             exit 1
           }
-      - name: Publish to npm
+      - name: Publish to npm and wait until it serves the version
         run: |
           set -euo pipefail
           # Prereleases go to their channel (0.1.0-beta.4 -> beta); README installs boubou@beta.
@@ -93,5 +121,28 @@ jobs:
             channel=${VERSION#*-}
             channel=${channel%%.*}
           fi
-          npm install --global npm@11
-          npm publish "$TARBALL" --tag "$channel" --access public
+          # True once the registry hands out this exact tarball as the version.
+          served() {
+            local url
+            url=$(curl -fs "https://registry.npmjs.org/boubou/$VERSION" | jq -er .dist.tarball) || return 1
+            curl -fsL "$url" | cmp -s - "$TARBALL"
+          }
+          # Re-running this job after npm accepted the tarball must not publish it again.
+          if served; then
+            echo "npm already serves boubou@$VERSION"
+          else
+            npm install --global npm@11
+            npm publish "$TARBALL" --tag "$channel" --access public
+          fi
+          # npm can take minutes to show a new version. The release is done once
+          # `npx boubou@<channel>` gets it.
+          for _ in $(seq 60); do
+            tagged=$(curl -fs https://registry.npmjs.org/-/package/boubou/dist-tags | jq -r --arg channel "$channel" '.[$channel]') || tagged=
+            if [ "$tagged" = "$VERSION" ] && served; then
+              echo "npx boubou@$channel now runs $VERSION"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::npm does not serve boubou@$VERSION as $channel after 30 minutes. Re-run this job."
+          exit 1
