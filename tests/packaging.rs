@@ -672,6 +672,14 @@ fn npm_exposes_the_product_name() {
     assert_eq!(manifest["bin"], serde_json::json!({"boubou":"cli.cjs"}));
 }
 
+// A release tag must name both; the Release workflow reads the npm one.
+#[test]
+fn npm_and_cargo_agree_on_the_version() {
+    let manifest: serde_json::Value =
+        serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+}
+
 #[test]
 fn npm_package_leaves_the_qwen_runner_to_the_release() {
     let manifest: serde_json::Value =

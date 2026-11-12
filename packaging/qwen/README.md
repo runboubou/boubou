@@ -42,14 +42,15 @@ export BOUBOU_HOME="$(mktemp -d)"
 sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$candidate/runtime.json")
 mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
 cp "$candidate/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run qwen3-tts:1.7b-customvoice
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run qwen3-tts:0.6b-customvoice
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run kokoro:82m
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run kitten-tts:mini-0.8
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run phonon:31m-en
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run supertonic:3
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run chattts:en
-npx --yes --package /absolute/path/to/boubou-0.1.0-beta.6.tgz -- boubou run pocket-tts:french_24l
+tarball=/absolute/path/to/boubou.tgz # the "Development candidate" that build-macos.py printed
+npx --yes --package "$tarball" -- boubou run qwen3-tts:1.7b-customvoice
+npx --yes --package "$tarball" -- boubou run qwen3-tts:0.6b-customvoice
+npx --yes --package "$tarball" -- boubou run kokoro:82m
+npx --yes --package "$tarball" -- boubou run kitten-tts:mini-0.8
+npx --yes --package "$tarball" -- boubou run phonon:31m-en
+npx --yes --package "$tarball" -- boubou run supertonic:3
+npx --yes --package "$tarball" -- boubou run chattts:en
+npx --yes --package "$tarball" -- boubou run pocket-tts:french_24l
 ```
 
 ## Other English TTS families
