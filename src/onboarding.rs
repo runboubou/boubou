@@ -515,6 +515,17 @@ fn restore_terminal() {
     let _ = terminal::disable_raw_mode();
 }
 
+/// Boubou's toucan, a terminal cell per character: `#` body, `y` beak. Whole cells stay solid
+/// where a terminal spaces its lines, which stripes block characters.
+const TOUCAN: [&str; 6] = [
+    "  ####",
+    " ######yyyyyyyyy",
+    "###  ##yyyyyyyyyyyy",
+    "#######yyyyyyyyyyyyy",
+    "########     yyyyyy",
+    "##########",
+];
+
 impl Screen {
     fn enter() -> Result<Self> {
         INTERRUPTED.store(false, Ordering::Relaxed);
@@ -564,24 +575,58 @@ impl Screen {
         Ok(())
     }
 
-    /// The window bar: product name, a rule and the dim local-status light.
-    fn header(&self, out: &mut impl Write, size: (u16, u16), y: &mut u16) -> Result<()> {
+    /// The top of a screen: beside the toucan, the product name and the dim local-status light
+    /// over a rule, then the screen's title and details.
+    fn header(
+        &self,
+        out: &mut impl Write,
+        size: (u16, u16),
+        y: &mut u16,
+        title: &str,
+        details: &[String],
+    ) -> Result<()> {
         let width = size.0 as usize;
+        // Narrow terminals keep their columns for the text.
+        let toucan: &[&str] = if width < 60 { &[] } else { &TOUCAN };
+        // Margins come off the width, and so do the toucan and its gap.
+        let room = width.saturating_sub(4 + if toucan.is_empty() { 0 } else { 22 });
         let status = "○ On this Mac";
-        let gap = width.saturating_sub(4 + 6 + tui::width(status));
+        let mut lines = vec![
+            format!(
+                "{BOLD}boubou{RESET}{}{DIM}{status}",
+                " ".repeat(room.saturating_sub(6 + tui::width(status)))
+            ),
+            format!("{DIM}{}", "─".repeat(room)),
+            format!("{BOLD}{}", tui::fit(title, room)),
+        ];
+        lines.extend(
+            details
+                .iter()
+                .map(|detail| format!("{DIM}{}", tui::fit(detail, room))),
+        );
+        lines.resize(lines.len().max(toucan.len()), String::new());
+        // The body takes the terminal's own text colour; without colour the beak is its dim twin.
+        let beak = if self.paint.colored() {
+            self.paint.bg(tui::ACCENT)
+        } else {
+            format!("{DIM}{REVERSE}")
+        };
         self.put(out, size.1, y, "")?;
-        self.put(
-            out,
-            size.1,
-            y,
-            &format!("  {BOLD}boubou{RESET}{}{DIM}{status}", " ".repeat(gap)),
-        )?;
-        self.put(
-            out,
-            size.1,
-            y,
-            &format!("  {DIM}{}", "─".repeat(width.saturating_sub(4))),
-        )?;
+        for (row, line) in toucan.iter().chain(std::iter::repeat(&"")).zip(lines) {
+            let art: String = if toucan.is_empty() {
+                String::new()
+            } else {
+                format!("{row:22}")
+                    .chars()
+                    .map(|cell| match cell {
+                        '#' => format!("{REVERSE} {RESET}"),
+                        'y' => format!("{beak} {RESET}"),
+                        _ => " ".to_owned(),
+                    })
+                    .collect()
+            };
+            self.put(out, size.1, y, &format!("  {art}{line}"))?;
+        }
         self.put(out, size.1, y, "")
     }
 
@@ -687,23 +732,8 @@ impl Screen {
         queue!(out, BeginSynchronizedUpdate)?;
         let mut y = 0;
         let mut hits = Hits::default();
-        self.header(&mut out, size, &mut y)?;
+        self.header(&mut out, size, &mut y, title, details)?;
         let text = width.saturating_sub(4);
-        self.put(
-            &mut out,
-            height,
-            &mut y,
-            &format!("  {BOLD}{}", tui::fit(title, text)),
-        )?;
-        for detail in details {
-            self.put(
-                &mut out,
-                height,
-                &mut y,
-                &format!("  {DIM}{}", tui::fit(detail, text)),
-            )?;
-        }
-        self.put(&mut out, height, &mut y, "")?;
         let about = &rows[selected].about;
         // Header, title, blanks, the action gap, the about block, the run box and the footer.
         let fixed = y + 2 + about.len() as u16 + 1 + 3 + 2;
@@ -827,22 +857,17 @@ impl Screen {
             let mut out = Vec::new();
             queue!(out, BeginSynchronizedUpdate)?;
             let mut y = 0;
-            self.header(&mut out, size, &mut y)?;
-            let room = width.saturating_sub(4);
-            self.put(&mut out, height, &mut y, &format!("  {BOLD}More voices"))?;
-            self.put(
+            self.header(
                 &mut out,
-                height,
+                size,
                 &mut y,
-                &format!(
-                    "  {DIM}{}",
-                    tui::fit(
-                        &format!("Paste a run command from {LIBRARY}, or type a model name."),
-                        room
-                    )
-                ),
+                "More voices",
+                &[
+                    format!("Paste a run command from {LIBRARY}."),
+                    "A model name works too.".into(),
+                ],
             )?;
-            self.put(&mut out, height, &mut y, "")?;
+            let room = width.saturating_sub(4);
             let inner = width.saturating_sub(8);
             // Keep the end of long input in view, marking the hidden start.
             let field = inner.saturating_sub(3);
