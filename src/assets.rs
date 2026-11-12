@@ -355,13 +355,39 @@ pub(crate) fn fetch(spec: &Download<'_>, dir: &Path, offline: bool) -> Result<Pa
     Ok(destination)
 }
 
-/// Download or resume `spec` into its `.part` file.
-fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
-    let partial = dir.join(format!("{}.part", spec.name));
-    fs::create_dir_all(dir)?;
-    let offset = fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
-    // A full-sized partial with an incorrect checksum cannot be resumed.
-    let offset = if offset < spec.size { offset } else { 0 };
+/// Verify cached files and completed downloads in parallel, then publish only valid partials.
+/// Damaged or incomplete downloads keep the same repair/resume path as a single-file fetch.
+pub(crate) fn fetch_all(files: &[(PathBuf, Download<'_>)], offline: bool) -> Result<()> {
+    let valid = verified_all(files)?;
+    let missing: Vec<_> = files
+        .iter()
+        .zip(valid)
+        .filter(|(_, valid)| !valid)
+        .map(|((path, spec), _)| (path.with_file_name(format!("{}.part", spec.name)), *spec))
+        .collect();
+    let valid = verified_all(&missing)?;
+    for ((partial, spec), valid) in missing.iter().zip(valid) {
+        let destination = partial.with_file_name(spec.name);
+        if valid {
+            fs::rename(partial, &destination)?;
+            sync_parent(&destination)?;
+        } else {
+            fetch(
+                spec,
+                destination.parent().context("Missing asset directory")?,
+                offline,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Share the connection pool across sequential files as well as ranges within a file.
+fn download_client() -> Result<&'static Client> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(30 * 60))
@@ -369,7 +395,18 @@ fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
     // Unit tests use local HTTP fixtures, independent of the developer's proxy.
     #[cfg(test)]
     let client = client.no_proxy();
-    let client = client.build()?;
+    let _ = CLIENT.set(client.build()?);
+    Ok(CLIENT.get().expect("download client initialized"))
+}
+
+/// Download or resume `spec` into its `.part` file.
+fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
+    let partial = dir.join(format!("{}.part", spec.name));
+    fs::create_dir_all(dir)?;
+    let offset = fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    // A full-sized partial with an incorrect checksum cannot be resumed.
+    let offset = if offset < spec.size { offset } else { 0 };
+    let client = download_client()?;
     let progress = Progress::file(
         &format!(
             "{} {}",
@@ -386,7 +423,7 @@ fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
     );
     if spec.size - offset > 2 * CHUNK {
         download_ranges(
-            &client,
+            client,
             spec,
             &partial,
             offset,
@@ -395,7 +432,7 @@ fn download(spec: &Download<'_>, dir: &Path) -> Result<()> {
             CONNECTIONS,
         )
     } else {
-        download_stream(&client, spec, &partial, offset, &progress)
+        download_stream(client, spec, &partial, offset, &progress)
     }
 }
 
@@ -965,6 +1002,102 @@ mod tests {
             (dir.0.join("missing"), spec("", &digests[1])),
         ];
         assert_eq!(verified_all(&files).unwrap(), [false, true, false]);
+    }
+
+    #[test]
+    fn batch_fetch_verifies_finals_and_recovers_partials_offline() {
+        let dir = TestDir::new();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
+        let mut files = Vec::new();
+        for name in ["cached", "completed", "damaged"] {
+            files.push((
+                dir.0.join(name),
+                Download {
+                    name,
+                    ..spec("http://127.0.0.1:1", &hash)
+                },
+            ));
+        }
+        fs::write(dir.0.join("cached"), b"abcdef").unwrap();
+        fs::write(dir.0.join("cached.part"), b"badbad").unwrap();
+        fs::write(dir.0.join("completed.part"), b"abcdef").unwrap();
+        fs::write(dir.0.join("damaged"), b"badbad").unwrap();
+        fs::write(dir.0.join("damaged.part"), b"abcdef").unwrap();
+        fetch_all(&files, true).unwrap();
+        assert_eq!(verified_all(&files).unwrap(), [true; 3]);
+        assert_eq!(fs::read(dir.0.join("cached.part")).unwrap(), b"badbad");
+        assert!(!dir.0.join("completed.part").exists());
+        assert!(!dir.0.join("damaged.part").exists());
+    }
+
+    #[test]
+    fn batch_fetch_rejects_bad_partials_offline_and_repairs_online() {
+        let dir = TestDir::new();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
+        for body in [b"badbad".as_slice(), b"abc".as_slice()] {
+            fs::write(dir.0.join("weights.part"), body).unwrap();
+            let files = [(dir.0.join("weights"), spec("http://127.0.0.1:1", &hash))];
+            assert!(
+                fetch_all(&files, true)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("offline mode")
+            );
+            assert_eq!(fs::read(dir.0.join("weights.part")).unwrap(), body);
+            assert!(!dir.0.join("weights").exists());
+        }
+        let (url, worker) = serve(
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
+        );
+        fetch_all(&[(dir.0.join("weights"), spec(&url, &hash))], false).unwrap();
+        assert_eq!(fs::read(dir.0.join("weights")).unwrap(), b"abcdef");
+        assert!(
+            worker
+                .join()
+                .unwrap()
+                .to_lowercase()
+                .contains("range: bytes=3-")
+        );
+    }
+
+    #[test]
+    fn sequential_files_reuse_one_http_connection() {
+        let dir = TestDir::new();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/weights", listener.local_addr().unwrap());
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            for _ in 0..2 {
+                let mut reader = std::io::BufReader::new(&mut socket);
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(
+                        reader.read_line(&mut line).unwrap(),
+                        0,
+                        "connection must stay open"
+                    );
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef")
+                    .unwrap();
+            }
+        });
+        for name in ["first", "second"] {
+            let spec = Download {
+                name,
+                ..spec(&url, &hash)
+            };
+            prefetch(&spec, &dir.0, false).unwrap();
+            assert!(verified(&dir.0.join(format!("{name}.part")), &spec).unwrap());
+        }
+        worker.join().unwrap();
     }
 
     #[test]

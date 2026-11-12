@@ -437,21 +437,14 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
         selected.push(f.path.as_path());
         specs.push((root.join(&f.path), f.download()?));
     }
-    // Check the cache on several threads first; only missing or damaged files are fetched.
-    let verified = assets::verified_all(&specs)?;
-    for ((path, spec), valid) in specs.iter().zip(verified) {
-        if valid {
-            continue;
-        }
-        if let Some(offline) = prepare {
-            assets::fetch(
-                spec,
-                path.parent().context("Missing asset directory")?,
-                offline,
-            )?;
-        } else {
-            println!("Missing or invalid: {}", path.strip_prefix(root)?.display());
-            ready = false;
+    if let Some(offline) = prepare {
+        assets::fetch_all(&specs, offline)?;
+    } else {
+        for ((path, _), valid) in specs.iter().zip(assets::verified_all(&specs)?) {
+            if !valid {
+                println!("Missing or invalid: {}", path.strip_prefix(root)?.display());
+                ready = false;
+            }
         }
     }
     ensure!(
