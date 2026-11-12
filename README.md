@@ -80,7 +80,7 @@ npx boubou@beta serve LFM3-Omni-2B
 
 Browser audio travels between the device and this computer over HTTPS; model inference stays on the host. By default, `serve` requests a trusted certificate from `lan.runboubou.com`; the name includes the host's local IP address. Its private key stays on the host. `--local`, `--self-signed` or `--offline` avoids that service. The self-signed fallback requires trusting its certificate in the browser.
 
-Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted.
+Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted. A robot or app whose settings take only an address and a port can connect without the key: `serve` asks in its terminal before letting that address in, and remembers the answer in the cache's `serve/allowed` file.
 
 Use `boubou --help` or `boubou <command> --help` for options. Models and runtimes are cached in `~/Library/Caches/boubou` on macOS or `~/.cache/boubou` on Linux; set `BOUBOU_HOME` to choose another folder.
 

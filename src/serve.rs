@@ -4,7 +4,8 @@
 //! [`names`], or by address with a certificate Boubou issues to itself. Robots and programs
 //! that speak the OpenAI Realtime API, or send text to read aloud as they would to OpenAI,
 //! connect to the same door and are carried to the model server's own implementation. One
-//! visitor at a time has the model, and only one that holds the key from a printed link can.
+//! visitor at a time has the model: one that holds the key from a printed link, or a robot or
+//! program that cannot send the key and that the person let in from the terminal.
 
 use crate::{
     audio::{CaptureFrame, Remote},
@@ -18,16 +19,17 @@ use rustls::{
     sign::CertifiedKey,
 };
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::{HashSet, VecDeque},
     fs::{self, File},
     io::{self, ErrorKind, Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
+        mpsc::{self, Receiver, Sender},
     },
     thread,
     time::{Duration, Instant, SystemTime},
@@ -49,6 +51,9 @@ const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 /// Apple's browsers reject server certificates valid for more than 398 days. The first of
 /// these days is yesterday, for devices whose clocks run behind.
 const CERTIFICATE_DAYS: u32 = 397;
+/// How long a robot or program without the key waits for the person to let it in. Tests wait
+/// out an unanswered question.
+const ASKING: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 60 });
 
 /// A connection from this computer, or an encrypted one from the network.
 trait Stream: Read + Write + Send {}
@@ -65,6 +70,72 @@ struct Desk {
     identity: Option<Arc<ServerConfig>>,
     /// The model server's own API for robots and programs, where it has one.
     api: Option<SocketAddr>,
+    allowed: Arc<Allowed>,
+    /// Robots and programs without the key, for the person to answer.
+    asks: Sender<Ask>,
+}
+
+impl Desk {
+    /// Whether a robot or program at `peer` that came without the key may talk: one the person
+    /// let in before may, and another once the person agrees.
+    fn lets_in(&self, peer: IpAddr) -> bool {
+        if self.allowed.contains(peer) {
+            return true;
+        }
+        let (answer, answered) = mpsc::channel();
+        let until = Instant::now() + ASKING;
+        self.asks
+            .send(Ask {
+                peer,
+                until,
+                answer,
+            })
+            .is_ok()
+            && answered.recv_timeout(ASKING).unwrap_or(false)
+    }
+}
+
+/// A robot or program without the key, waiting `until` for the person's answer.
+struct Ask {
+    peer: IpAddr,
+    until: Instant,
+    answer: Sender<bool>,
+}
+
+/// Addresses of the robots and programs the person let in without the key. They are kept
+/// between starts, so a robot's settings keep working. Deleting the file forgets them.
+struct Allowed {
+    file: PathBuf,
+    addresses: Mutex<HashSet<IpAddr>>,
+}
+
+impl Allowed {
+    fn load(cache: &Path) -> Result<Self> {
+        let file = cache.join("serve").join("allowed");
+        let addresses = match fs::read_to_string(&file) {
+            Ok(text) => text.lines().filter_map(|line| line.parse().ok()).collect(),
+            Err(error) if error.kind() == ErrorKind::NotFound => HashSet::new(),
+            Err(error) => return Err(error).context(format!("Cannot read {}", file.display())),
+        };
+        let addresses = Mutex::new(addresses);
+        Ok(Self { file, addresses })
+    }
+
+    fn contains(&self, peer: IpAddr) -> bool {
+        self.addresses.lock().unwrap().contains(&peer)
+    }
+
+    fn add(&self, peer: IpAddr) -> Result<()> {
+        let mut addresses = self.addresses.lock().unwrap();
+        addresses.insert(peer);
+        let mut lines: Vec<_> = addresses
+            .iter()
+            .map(|address| format!("{address}\n"))
+            .collect();
+        lines.sort();
+        fs::write(&self.file, lines.concat())
+            .with_context(|| format!("Cannot remember {peer} in {}", self.file.display()))
+    }
 }
 
 /// Held by whoever has the model. Dropping it lets the next visitor in.
@@ -110,6 +181,8 @@ struct Links {
     /// For robots and programs: encrypted by name, or in the clear by address, since they
     /// cannot check Boubou's own certificate.
     realtime: Option<String>,
+    /// Where robots and programs that take only an address and a port connect, in the clear.
+    bare: Option<String>,
 }
 
 /// A browser that has taken the seat. Its audio starts when the conversation is ready for it.
@@ -129,6 +202,12 @@ impl Guest {
 pub struct Door {
     arrivals: Receiver<Guest>,
     returning: Cell<bool>,
+    asks: Receiver<Ask>,
+    allowed: Arc<Allowed>,
+    /// Addresses the person turned away since this start.
+    refused: RefCell<HashSet<IpAddr>>,
+    /// Robots and programs from other addresses that came while the person was asked.
+    later: RefCell<VecDeque<Ask>>,
 }
 
 impl Door {
@@ -146,6 +225,12 @@ impl Door {
         eprintln!("\n  {:<16}  {}", progress::HERE, links.here);
         if let Some(link) = &links.realtime {
             eprintln!("  {:<16}  {link}", "Robots and apps");
+        }
+        if let Some(bare) = &links.bare {
+            eprintln!(
+                "  {:<16}  Or {bare}, without the key: Boubou asks here first.",
+                ""
+            );
         }
         if let Some(link) = &links.network {
             eprintln!("  {:<16}  {link}", "On your network");
@@ -220,12 +305,17 @@ impl Door {
                 Some(name) => format!("wss://{name}:{port}/v1/realtime?key={key}"),
                 None => format!("ws://{reachable}:{port}/v1/realtime?key={key}"),
             }),
+            bare: api.map(|_| format!("address {reachable}, port {port}")),
         };
+        let allowed = Arc::new(Allowed::load(cache)?);
+        let (asks, asked) = mpsc::channel();
         let desk = Arc::new(Desk {
             key,
             seated: AtomicBool::new(false),
             identity,
             api,
+            allowed: allowed.clone(),
+            asks,
         });
         let (admitted, arrivals) = mpsc::channel();
         thread::Builder::new()
@@ -249,12 +339,17 @@ impl Door {
         let door = Self {
             arrivals,
             returning: Cell::new(false),
+            asks: asked,
+            allowed,
+            refused: RefCell::default(),
+            later: RefCell::default(),
         };
         Ok((door, links))
     }
 
     /// Waits for the next browser, calling `idle` meanwhile so the model's session stays alive.
-    /// Returns `None` once `stopped` is set.
+    /// Asks the person about robots and programs that came without the key. Returns `None` once
+    /// `stopped` is set.
     pub fn wait(
         &self,
         stopped: &AtomicBool,
@@ -264,6 +359,23 @@ impl Door {
             eprintln!("The browser disconnected. Open the link again to continue.");
         }
         while !stopped.load(Ordering::SeqCst) {
+            let later = self.later.borrow_mut().pop_front();
+            if let Some(ask) = later.or_else(|| self.asks.try_recv().ok()) {
+                // Keys answer the question one at a time, without echo, from the first one asked.
+                let mut raw = false;
+                let settled = self.settle(ask, || {
+                    if !raw {
+                        crossterm::terminal::enable_raw_mode()?;
+                        raw = true;
+                    }
+                    pressed(stopped, &mut idle)
+                });
+                if raw {
+                    crossterm::terminal::disable_raw_mode()?;
+                }
+                settled?;
+                continue;
+            }
             if let Ok(guest) = self.arrivals.recv_timeout(Duration::from_millis(20)) {
                 return Ok(Some(guest));
             }
@@ -271,6 +383,75 @@ impl Door {
         }
         Ok(None)
     }
+
+    /// Answers a robot or program that came without the key: as the person answered for its
+    /// address before, or once `decide` returns their answer. Robots come back when their
+    /// handshake times out, so every visit from the address waits for the same answer, and the
+    /// question is dropped once none is waiting any more.
+    fn settle(&self, ask: Ask, mut decide: impl FnMut() -> Result<Option<bool>>) -> Result<()> {
+        let peer = ask.peer;
+        let mut waiting = vec![ask];
+        let allowed = if self.allowed.contains(peer) {
+            true
+        } else if self.refused.borrow().contains(&peer) {
+            false
+        } else {
+            eprint!("A robot or program at {peer} asks to talk without the key. Let it in? [y/N] ");
+            let answer = loop {
+                while let Ok(ask) = self.asks.try_recv() {
+                    match ask.peer == peer {
+                        true => waiting.push(ask),
+                        false => self.later.borrow_mut().push_back(ask),
+                    }
+                }
+                // Dropping a visit's answer turns it away.
+                waiting.retain(|ask| Instant::now() < ask.until);
+                if waiting.is_empty() {
+                    break None;
+                }
+                if let Some(answer) = decide()? {
+                    break Some(answer);
+                }
+            };
+            // Lines start over by hand while keys are read raw.
+            let said = match answer {
+                Some(true) => {
+                    self.allowed.add(peer)?;
+                    "can talk without the key from now on"
+                }
+                Some(false) => {
+                    self.refused.borrow_mut().insert(peer);
+                    "was turned away until Boubou starts again"
+                }
+                None => "stopped asking. It is asked about again when it returns",
+            };
+            eprint!("\r\n{peer} {said}.\r\n");
+            answer == Some(true)
+        };
+        for ask in waiting {
+            // The robot or program may have stopped waiting.
+            let _ = ask.answer.send(allowed);
+        }
+        Ok(())
+    }
+}
+
+/// The person's answer when they press a key within a moment: `y` lets the robot in, and any
+/// other key, or Ctrl+C, which also stops Boubou, turns it away. Keeps the model's session
+/// alive.
+fn pressed(stopped: &AtomicBool, idle: &mut impl FnMut() -> Result<()>) -> Result<Option<bool>> {
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    if event::poll(Duration::from_millis(20))?
+        && let Event::Key(key) = event::read()?
+    {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            stopped.store(true, Ordering::SeqCst);
+        }
+        let yes = matches!(key.code, KeyCode::Char('y' | 'Y'));
+        return Ok(Some(yes && !stopped.load(Ordering::SeqCst)));
+    }
+    idle()?;
+    Ok(None)
 }
 
 /// Makes `folder` and holds it until the returned file is dropped, so that two starts at once
@@ -420,24 +601,32 @@ fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<Guest>> {
     ensure!(stream.peek(&mut first)? == 1, "The connection closed");
     // A TLS connection opens with a handshake record, type 22.
     let identity = desk.identity.clone().filter(|_| first[0] == 22);
-    let trusted = trusted(stream.peer_addr()?.ip(), identity.is_some()).context("Not from here")?;
+    let peer = stream.peer_addr()?.ip();
+    let trusted = trusted(peer, identity.is_some()).context("Not from here")?;
     let socket = stream.try_clone()?;
     match identity {
         Some(identity) => {
             let session = ServerConnection::new(identity)?;
-            answer(StreamOwned::new(session, stream), &socket, trusted, desk)
+            answer(
+                StreamOwned::new(session, stream),
+                &socket,
+                trusted,
+                peer,
+                desk,
+            )
         }
-        None => answer(stream, &socket, trusted, desk),
+        None => answer(stream, &socket, trusted, peer, desk),
     }
 }
 
 /// Serves the page, gives the seat to a browser that holds the key, or carries a robot or
-/// program that holds it to the model server's API. `socket` is the connection underneath
-/// `stream`.
+/// program that holds it, or that the person let in, to the model server's API. `socket` is
+/// the connection underneath `stream`, from `peer`.
 fn answer(
     mut stream: impl Stream + 'static,
     socket: &TcpStream,
     trusted: bool,
+    peer: IpAddr,
     desk: &Arc<Desk>,
 ) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -473,6 +662,12 @@ fn answer(
         .filter_map(|pair| pair.strip_prefix("key="))
         .chain(bearer.as_deref())
         .any(|given| same(given, &desk.key));
+    // Robots whose settings take only an address and a port cannot send the key.
+    let robot = matches!(
+        (method.as_str(), path, accept.is_some()),
+        ("GET", "/v1/realtime", true) | ("POST", "/v1/audio/speech", false)
+    );
+    let allowed = keyed || (robot && desk.api.is_some() && desk.lets_in(peer) && !closed(socket));
     let mut respond = |status: &str, body: &str| -> Result<Option<Guest>> {
         write!(
             stream,
@@ -485,9 +680,9 @@ fn answer(
     let (accept, api) = match (method.as_str(), path, accept, desk.api) {
         ("GET", "/", None, _) if trusted => return respond("200 OK", PAGE),
         ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
-        ("GET", "/v1/realtime", Some(accept), Some(api)) if keyed => (accept, Some(api)),
+        ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api)),
         // A text to read aloud, which opens no socket.
-        ("POST", "/v1/audio/speech", None, Some(api)) if keyed => (String::new(), Some(api)),
+        ("POST", "/v1/audio/speech", None, Some(api)) if allowed => (String::new(), Some(api)),
         _ => return respond("404 Not Found", ""),
     };
     if desk.seated.swap(true, Ordering::SeqCst) {
@@ -570,6 +765,14 @@ fn pass(from: &mut impl Read, to: &mut impl Write, buffer: &mut [u8]) -> io::Res
         }
         Err(error) => Err(error),
     }
+}
+
+/// Whether the other side closed `socket`, as a robot does that stopped waiting to be let in.
+fn closed(socket: &TcpStream) -> bool {
+    let _ = socket.set_nonblocking(true);
+    let closed = matches!(socket.peek(&mut [0]), Ok(0));
+    let _ = socket.set_nonblocking(false);
+    closed
 }
 
 /// Compares without stopping at the first difference.
@@ -692,6 +895,23 @@ mod tests {
             assert!(Instant::now() < deadline, "The seat was never freed");
             thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    /// Visits without the key while the person answers as `decide` says, when asked. Returns
+    /// what the visit got and the address the door asked about.
+    fn asking<T: Send>(
+        door: &Door,
+        decide: impl FnMut() -> Result<Option<bool>>,
+        visit: impl FnOnce() -> T + Send,
+    ) -> (T, IpAddr) {
+        thread::scope(|scope| {
+            let visitor = scope.spawn(visit);
+            let ask = door.asks.recv_timeout(Duration::from_secs(5));
+            let ask = ask.expect("Nobody was asked");
+            let peer = ask.peer;
+            door.settle(ask, decide).unwrap();
+            (visitor.join().unwrap(), peer)
+        })
     }
 
     fn wait(door: &Door) -> Remote {
@@ -1005,8 +1225,14 @@ mod tests {
         let link = links.realtime.unwrap();
         let key = key(&links.here);
         assert_eq!(link.split("key=").nth(1), Some(key));
-        assert_eq!(status(realtime(&link, "", None)), 404);
-        assert_eq!(status(realtime(&link, "?key=wrong", Some("wrong"))), 404);
+        // Without the key, or with another, the person is asked first.
+        let wrong = || realtime(&link, "?key=wrong", Some("wrong"));
+        let (refused, asked) = asking(&door, || Ok(Some(false)), wrong);
+        assert_eq!(asked, IpAddr::from(Ipv4Addr::LOCALHOST));
+        assert_eq!(status(refused), 404);
+        let not_again = || panic!("Asked again about a robot that was turned away");
+        let (refused, _) = asking(&door, not_again, || realtime(&link, "", None));
+        assert_eq!(status(refused), 404);
         // A model without a Realtime API has nothing to offer them.
         let (_other, other) = local();
         let other_key = format!("?key={}", self::key(&other));
@@ -1037,6 +1263,62 @@ mod tests {
     }
 
     #[test]
+    fn a_robot_without_the_key_talks_once_the_person_lets_it_in() {
+        let cache = cache();
+        let api = model_server();
+        let (door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let link = links.realtime.unwrap();
+        let port = address(&link).split(':').nth(1).unwrap();
+        assert_eq!(
+            links.bare.unwrap(),
+            format!("address 127.0.0.1, port {port}")
+        );
+        // Settings that take only an address and a port, with an API key of the robot's own.
+        let robot = || realtime(&link, "", Some("DUMMY"));
+
+        // Unanswered, it is asked about again when it returns.
+        let (unanswered, _) = asking(&door, || Ok(None), robot);
+        assert_eq!(status(unanswered), 404);
+
+        // A robot that comes back while the person is asked waits for the same answer, and one
+        // that stopped waiting does not take the seat from it.
+        let (let_in, asked) = thread::scope(|scope| {
+            let mut gave_up = TcpStream::connect(address(&link)).unwrap();
+            let request = "GET /v1/realtime HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+            gave_up.write_all(request.as_bytes()).unwrap();
+            let ask = door.asks.recv_timeout(Duration::from_secs(5)).unwrap();
+            drop(gave_up);
+            let back = scope.spawn(robot);
+            let asked_at = Instant::now();
+            let mut questions = 0;
+            let decide = || {
+                questions += 1;
+                thread::sleep(Duration::from_millis(20));
+                Ok((asked_at.elapsed() > Duration::from_millis(300)).then_some(true))
+            };
+            let peer = ask.peer;
+            door.settle(ask, decide).unwrap();
+            assert!(questions > 1);
+            (back.join().unwrap(), peer)
+        });
+        assert_eq!(asked, IpAddr::from(Ipv4Addr::LOCALHOST));
+        let mut socket = let_in.unwrap();
+        assert_eq!(socket.read().unwrap().to_text().unwrap(), "created");
+        drop(socket);
+        assert_eq!(
+            fs::read_to_string(cache.join("serve/allowed")).unwrap(),
+            "127.0.0.1\n"
+        );
+
+        // A later start lets it in without asking. The page still needs the key.
+        let (_later, later) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let mut socket = realtime(&later.realtime.unwrap(), "", Some("DUMMY")).unwrap();
+        assert_eq!(socket.read().unwrap().to_text().unwrap(), "created");
+        assert_eq!(status(plain(&later.here, "")), 404);
+        fs::remove_dir_all(cache).unwrap();
+    }
+
+    #[test]
     fn a_text_is_read_aloud_by_the_model_server_while_its_program_holds_the_seat() {
         // A stand-in for the model server's voice. Once let, it answers with what it was sent.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1059,7 +1341,7 @@ mod tests {
             }
         });
         let cache = cache();
-        let (_door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         let (link, key) = (links.here.as_str(), key(&links.here));
         // More text than the door reads before it decides.
@@ -1079,7 +1361,8 @@ mod tests {
             program
         };
 
-        assert!(request(link, &post("wrong", "")).starts_with("HTTP/1.1 404 "));
+        let (unanswered, _) = asking(&door, || Ok(None), || request(link, &post("wrong", "")));
+        assert!(unanswered.starts_with("HTTP/1.1 404 "), "{unanswered}");
         let got = format!("GET /v1/audio/speech?key={key} HTTP/1.1\r\n\r\n");
         assert!(request(link, &got).starts_with("HTTP/1.1 404 "));
         // A model without a voice of its own to ask.
