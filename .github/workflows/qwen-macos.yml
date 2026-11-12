@@ -2,7 +2,8 @@ name: Qwen Mac runtime
 
 # Pull requests that change the modular runtime build the package and check two
 # guided profiles. Quality covers the Rust side of every pull request. The
-# weekly run, manual runs and releases check every profile.
+# weekly run and manual runs check every profile. So does a release, unless an
+# earlier release already checked every profile on the same runner and model files.
 on:
   pull_request:
     paths:
@@ -25,6 +26,10 @@ on:
       all_profiles:
         type: boolean
         default: true
+      reuse:
+        description: Reuse the newest published runner while its sources are unchanged
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -77,6 +82,26 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+      - name: Build or reuse the relocatable arm64 runtime and lock the model files
+        env:
+          REUSE: ${{ inputs.reuse == true }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/qwen"
+          mkdir -p "$target"
+          python -B packaging/qwen/lock_models.py "$target/models.json"
+          # npm cannot carry the runner. The Release workflow uploads a new one to this URL.
+          version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
+          if [ "$REUSE" = true ]; then
+            # The newest published package names the runner and model files its release verified.
+            newest=$(npm view boubou time --json | jq -r 'del(.created, .modified) | to_entries | max_by(.value).key')
+            mkdir "$RUNNER_TEMP/published"
+            curl -fsSL --retry 5 --retry-all-errors "$(npm view "boubou@$newest" dist.tarball)" |
+              tar -xzf - -C "$RUNNER_TEMP/published" --strip-components 2 package/qwen
+            set -- --reuse "$RUNNER_TEMP/published/runtime.json"
+          fi
+          python -B packaging/qwen/build_runner.py "$target" --url "$url" "$@"
       - name: Choose profiles
         env:
           ALL: ${{ github.event_name == 'schedule' || inputs.all_profiles == true }}
@@ -87,22 +112,15 @@ jobs:
           all+=" pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french"
           # KittenTTS: the default, the int8 quantization and a 0.1 checkpoint that names voices only by ID.
           all+=" kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1"
-          if [ "$ALL" = true ]; then
+          # A release that changed neither the runner nor the model files repeats only the pull request
+          # subset: the release that published them checked every profile on these exact bytes.
+          published() { cmp -s "$RUNNER_TEMP/published/$1" "$RUNNER_TEMP/qwen/$1"; }
+          if [ "$ALL" = true ] && ! { published runtime.json && published models.json; }; then
             profiles="$all"
           else
             profiles="qwen3-tts:0.6b-customvoice pocket-tts:english_2026-10"
           fi
           echo "PROFILES=$profiles" >> "$GITHUB_ENV"
-      - name: Build the relocatable arm64 runtime and lock the model files
-        run: |
-          set -euo pipefail
-          target="$RUNNER_TEMP/qwen"
-          mkdir -p "$target"
-          python -B packaging/qwen/lock_models.py "$target/models.json"
-          # npm cannot carry the runner. The Release workflow uploads it to this URL.
-          version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
-          python -B packaging/qwen/build_runner.py "$target" --url "$url"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: boubou-linux-x64
@@ -122,7 +140,7 @@ jobs:
           python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen" --linux "$RUNNER_TEMP/linux"
           tarball=$(find "$PWD/target/dist" -name 'boubou-*.tgz')
           tar -tzf "$tarball" | grep -Fx "package/linux-x64/boubou"
-          # The release asset does not exist before the tag; place the exact runner where `pull` would download it.
+          # A new runner is not a release asset before the tag; place the exact runner where `pull` would download it.
           sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
           mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
           cp "$RUNNER_TEMP/qwen/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"

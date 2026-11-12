@@ -46,10 +46,15 @@ open from this repository need only passing checks.
 Maintainers bump the version in `Cargo.toml` and `packaging/package.json`,
 merge, then push a matching `v<version>` tag on `main`. The Release workflow
 does the rest. Within a minute it rejects a tag that does not match the version
-or is not on `main`. Then it checks every model profile, attaches the Qwen
-runner to the GitHub release, publishes the tested tarball to npm and waits up
-to 30 minutes until npm serves it. If a job fails, re-run only that job;
-re-running everything rebuilds a different runner, which the release refuses.
+or is not on `main`. Then it checks the model profiles, publishes the tested
+tarball to npm and waits up to 30 minutes until npm serves it. If a job fails,
+re-run only that job; re-running everything can rebuild a different runner,
+which the release refuses.
+
+A release builds a new Qwen runner and attaches it to the GitHub release only
+when [the runner's sources changed](packaging/qwen/README.md). Otherwise the
+package keeps downloading the runner from the earlier release that published
+it, so never delete a release or its runner.
 
 ## Privacy
 

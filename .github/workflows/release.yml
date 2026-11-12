@@ -1,10 +1,13 @@
 name: Release
 
 # Pushing a v<version> tag (maintainers only) releases that version. It checks
-# every Qwen profile and the real Liquid models, publishes the tested Qwen runner
-# as a GitHub release asset, publishes the exact tested tarball to npm through
-# trusted publishing, then waits until npm serves it. Until a stable version
-# exists, the newest prerelease is also npm's `latest`, so plain `npx boubou` runs it.
+# the Qwen profiles and the real Liquid models, publishes the exact tested
+# tarball to npm through trusted publishing, then waits until npm serves it.
+# A Qwen runner whose sources changed is built, checked on every profile and
+# published as a GitHub release asset. Otherwise the package keeps the runner
+# an earlier release published, so people who upgrade do not download it again.
+# Until a stable version exists, the newest prerelease is also npm's `latest`,
+# so plain `npx boubou` runs it.
 on:
   push:
     tags: ['v*']
@@ -43,6 +46,7 @@ jobs:
     uses: ./.github/workflows/qwen-macos.yml
     with:
       all_profiles: true
+      reuse: true
 
   verify-liquid:
     needs: tag
@@ -82,30 +86,34 @@ jobs:
           curl -fsSL --retry 5 --retry-all-errors -r 0-0 -o /dev/null "$linux_url"
           url=$(jq -r .url "$runtime")
           asset=${url##*/}
-          test "$url" = "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$asset" || { echo "Unexpected runner URL $url"; exit 1; }
+          releases="https://github.com/$GITHUB_REPOSITORY/releases/download"
+          test "${url%/*/*}" = "$releases" || { echo "Unexpected runner URL $url"; exit 1; }
           test "$(stat -c %s "$runner")" = "$(jq -r .size "$runtime")"
           test "$(sha256sum "$runner" | cut -d' ' -f1)" = "$(jq -r .sha256 "$runtime")"
+          # Only a runner built for this version is uploaded. A reused one stays on the release that published it.
           mkdir release
-          cp "$runner" "release/$asset"
+          test "$url" != "$releases/$GITHUB_REF_NAME/$asset" || cp "$runner" "release/$asset"
           {
             echo "TARBALL=$tarball"
             echo "VERSION=$version"
             echo "RUNNER_URL=$url"
             echo "RUNNER_SHA=$(jq -r .sha256 "$runtime")"
           } >> "$GITHUB_ENV"
-      # The package downloads the runner from this release, so it must be public before npm publish.
-      - name: Publish the GitHub release with the runner
+      # The package downloads the runner from a release, so it must be public before npm publish.
+      - name: Publish the GitHub release, with the runner if it is new
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          assets=(release/*)
           flags=()
           [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
           # Never replace an uploaded runner: a published package may already point at it.
           if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes "${flags[@]}"
-          elif ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "${RUNNER_URL##*/}"; then
-            gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY"
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes "${flags[@]}"
+          elif [ ${#assets[@]} -gt 0 ] && ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "${RUNNER_URL##*/}"; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
           fi
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
           curl -fsSL --retry 5 --retry-all-errors "$RUNNER_URL" -o runner-check.tar.gz
