@@ -494,7 +494,6 @@ pub fn run(
         .args(pipeline)
         .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
-        let _progress = crate::progress::Progress::new(&format!("Loading {id} locally"), None);
         // A model that the Hub client fetches first can take long to arrive.
         chat::Server::start(
             command,

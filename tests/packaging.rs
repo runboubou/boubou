@@ -440,6 +440,98 @@ fn a_copy_from_npm_says_when_its_command_ends_that_npm_has_a_newer_version() {
 }
 
 #[test]
+fn guided_start_shows_cached_updates_before_a_voice_is_selected() {
+    let package = Package::new();
+    let cache = package.0.join("menu-cache");
+    fs::create_dir(&cache).unwrap();
+    fs::write(cache.join("npm-tags.json"), r#"{"latest":"99.0.0"}"#).unwrap();
+    for (command, upgrade) in [
+        (package.npx(), "Run: npx boubou@latest"),
+        (
+            package.placed("lib/node_modules/boubou"),
+            "Run: npm install --global boubou@latest",
+        ),
+    ] {
+        let mut prompt = Prompt::start(&package, command, true, &[], true);
+        prompt.expect(MENU);
+        prompt.expect(&["Boubou 99.0.0 is out"]);
+        prompt.expect(&[upgrade]);
+        assert!(prompt.child.try_wait().unwrap().is_none());
+        prompt.send(b"\x03");
+        assert_eq!(prompt.finish().code(), Some(130));
+    }
+    for name in ["BOUBOU_NO_UPDATE_CHECK", "CI"] {
+        let mut command = package.npx();
+        command.env(name, "1");
+        let mut prompt = Prompt::start(&package, command, true, &[], true);
+        prompt.expect(&["ctrl+c exit"]);
+        assert!(!prompt.output.contains("is out"), "{}", prompt.output);
+        prompt.send(b"\x03");
+        assert_eq!(prompt.finish().code(), Some(130));
+    }
+}
+
+#[test]
+fn guided_start_refreshes_a_delayed_update_without_keyboard_input() {
+    let package = Package::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    let (answer, requested) = std::sync::mpsc::channel();
+    let served = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "No update request");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
+            request.push(byte[0]);
+        }
+        requested.recv_timeout(Duration::from_secs(3)).unwrap();
+        let body = r#"{"latest":"99.0.0"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    let mut command = package.npx();
+    command
+        .env("npm_config_registry", address)
+        .env("NO_PROXY", "127.0.0.1")
+        .env("no_proxy", "127.0.0.1");
+    let mut prompt = Prompt::start(&package, command, true, &[], true);
+    prompt.expect(&["ctrl+c exit"]);
+    assert!(!prompt.output.contains("is out"), "{}", prompt.output);
+    // Hold the HTTP answer until the first complete menu frame; no key wakes the next frame.
+    answer.send(()).unwrap();
+    prompt.expect(&["Boubou 99.0.0 is out"]);
+    prompt.expect(&["Run: npx boubou@latest"]);
+    assert!(prompt.child.try_wait().unwrap().is_none());
+    prompt.send(b"\x03");
+    assert_eq!(prompt.finish().code(), Some(130));
+    assert!(
+        served
+            .join()
+            .unwrap()
+            .starts_with("GET /-/package/boubou/dist-tags HTTP/1.1\r\n")
+    );
+}
+
+#[test]
 fn guided_start_restores_the_terminal_when_the_launcher_is_terminated() {
     let package = Package::new();
     let mut prompt = Prompt::new(&package, false, &[]);

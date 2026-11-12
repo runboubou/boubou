@@ -1,6 +1,6 @@
 //! npx keeps Boubou where no `boubou` command reaches it, and npm goes on running an old copy.
 //! So a copy that npx started writes the commands it suggests as npx commands, and a copy from
-//! npm says in one line, when a command ends, that npm has a newer version.
+//! npm shows when a newer version is available during startup.
 
 use crate::tui;
 use reqwest::blocking::Client;
@@ -114,12 +114,20 @@ fn ask(client: &Client, registry: &str, file: &Path) -> Option<String> {
 }
 
 fn remember(tags: &str, npm: &str) {
-    if let Some(line) = newer(tags, VERSION, npm) {
-        *NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(line);
-    }
+    *NOTICE.lock().unwrap_or_else(|e| e.into_inner()) = newer(tags, VERSION, npm);
 }
 
-/// Looks for a newer version without holding anything up; [`notice`] prints what was found.
+/// The latest available upgrade notice, for startup screens that redraw while checking.
+pub fn message() -> Option<String> {
+    NOTICE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Hands a late result to the active screen once, without writing from the network thread.
+pub fn take_notice() -> Option<String> {
+    NOTICE.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Looks for a newer version without holding anything up; startup screens read [`message`].
 ///
 /// Only a copy from npm looks, as only its update command is known. In the background and at
 /// most once a day it asks the registry npm uses, npm's own unless npm names another, and keeps
@@ -159,7 +167,7 @@ pub fn check(cache: &Path) {
 
 /// Prints the line about a newer version, once the command is over and the screen is free.
 pub fn notice() {
-    if let Some(line) = NOTICE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(line) = take_notice() {
         // The terminal may already be gone; printing must not panic on the way out.
         let _ = writeln!(io::stderr(), "\n{line}");
     }

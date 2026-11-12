@@ -69,7 +69,7 @@ On macOS, run `./target/release/boubou` to open the picker shown above. Liquid m
 ```sh
 npx boubou@beta list
 npx boubou@beta pull LFM3-Omni-2B
-npx boubou@beta run LFM3-Omni-2B --offline
+npx --offline boubou@beta run LFM3-Omni-2B --offline
 npx boubou@beta doctor LFM3-Omni-2B
 npx boubou@beta ask LFM3-Omni-2B photo.png "What is in this picture?"
 npx boubou@beta serve LFM3-Audio-2B
@@ -107,9 +107,9 @@ Rust connects your microphone and speakers to a local model server, with echo ca
 - **One audio model:** Liquid models hear, think and speak through llama.cpp.
 - **A modular pipeline:** speech recognition → Qwen → your choice of voice. See [models and runtimes](packaging/qwen/README.md).
 
-**Inference runs on your machine.** No account, cloud model API key or telemetry. With `run`, audio stays on this computer. After downloading the models, use `--offline` to run without a network.
+**Inference runs on your machine.** No account, cloud model API key or telemetry. With `run`, audio stays on this computer. After downloading the models, use `--offline` to run without a network. With npx, pass `--offline` before the package name too, so npm also stays offline.
 
-When a command that may download ends, a copy from npm says in one line that a newer version exists. To know, it asks the npm registry at most once a day; the request names the package and nothing else. `--offline` or `BOUBOU_NO_UPDATE_CHECK=1` turns it off.
+A copy installed through npm checks for updates in the background at startup and shows an upgrade command when one is available. The request names only the package, and a successful answer is cached for a day. An explicit `--offline` command or `BOUBOU_NO_UPDATE_CHECK=1` disables this check.
 
 ## Contributors
 

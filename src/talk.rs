@@ -253,6 +253,11 @@ impl Panel {
             return;
         }
         live.last_frame = Instant::now();
+        if let Some(notice) = crate::update::take_notice() {
+            for line in tui::wrap(&notice, Live::width().saturating_sub(4).max(1)) {
+                live.commit(&line);
+            }
+        }
         let you = if matches!(live.mic, Mic::Paused | Mic::Idle) {
             0.0
         } else {

@@ -407,6 +407,7 @@ fn download_stream(
     offset: u64,
     progress: &Progress,
 ) -> Result<()> {
+    progress.status(&format!("Connecting to download server for {}", spec.name));
     let mut request = client
         .get(spec.url)
         .header(header::ACCEPT_ENCODING, "identity");
@@ -441,6 +442,7 @@ fn download_stream(
             spec.name
         );
     }
+    progress.status(&format!("Receiving {}", spec.name));
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -492,6 +494,11 @@ fn download_ranges(
 ) -> Result<()> {
     let count = (spec.size - offset).div_ceil(chunk) as usize;
     let window = 2 * connections;
+    progress.status(&format!(
+        "Connecting to download server for {} ({} connections)",
+        spec.name,
+        connections.min(count)
+    ));
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -520,7 +527,13 @@ fn download_ranges(
                     }
                     drop(waiting);
                     let start = offset + index as u64 * chunk;
-                    let received = range(client, spec, start, (start + chunk).min(spec.size));
+                    let received = range(
+                        client,
+                        spec,
+                        start,
+                        (start + chunk).min(spec.size),
+                        progress,
+                    );
                     let mut chunks = state.lock().expect("download lock");
                     match received {
                         Ok(Some(bytes)) => {
@@ -550,6 +563,7 @@ fn download_ranges(
                 if let Err(error) = appended {
                     chunks.failure.get_or_insert(error.into());
                 } else {
+                    progress.status(&format!("Receiving {}", spec.name));
                     progress.advance(bytes.len() as u64);
                     chunks.written += 1;
                 }
@@ -577,7 +591,13 @@ fn download_ranges(
 }
 
 /// Bytes `start..end` of the file, or None if the server answered with the whole file.
-fn range(client: &Client, spec: &Download<'_>, start: u64, end: u64) -> Result<Option<Vec<u8>>> {
+fn range(
+    client: &Client,
+    spec: &Download<'_>,
+    start: u64,
+    end: u64,
+    progress: &Progress,
+) -> Result<Option<Vec<u8>>> {
     let attempt = || -> Result<Option<Vec<u8>>> {
         let mut response = client
             .get(spec.url)
@@ -609,10 +629,27 @@ fn range(client: &Client, spec: &Download<'_>, start: u64, end: u64) -> Result<O
     };
     // A dropped connection is retried, since one failure would otherwise stop all connections.
     let mut result = attempt();
-    for _ in 0..2 {
-        if result.is_ok() {
-            break;
-        }
+    for retry in 1..=2 {
+        let Err(error) = &result else { break };
+        // The status deliberately omits the raw error, which can contain a redirect URL.
+        let reason = if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            if error.is_timeout() {
+                "connection timed out"
+            } else if error.is_connect() {
+                "connection failed"
+            } else {
+                "connection interrupted"
+            }
+        } else if error.downcast_ref::<std::io::Error>().is_some() {
+            "connection interrupted"
+        } else {
+            "server returned an invalid response"
+        };
+        progress.status(&format!(
+            "Retry {retry}/2: {reason} · {} bytes {start}-{}",
+            spec.name,
+            end - 1
+        ));
         result = attempt();
     }
     result.with_context(|| format!("Cannot download {}", spec.name))
@@ -733,21 +770,42 @@ mod tests {
     }
 
     fn serve(response: &'static str) -> (String, thread::JoinHandle<String>) {
+        serve_sequence(&[response])
+    }
+
+    fn serve_sequence(responses: &[&'static str]) -> (String, thread::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/weights", listener.local_addr().unwrap());
+        let responses = responses.to_vec();
         let worker = thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            let mut reader = std::io::BufReader::new(&mut socket);
             let mut request = String::new();
-            loop {
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                request.push_str(&line);
-                if line == "\r\n" || line.is_empty() {
-                    break;
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            for response in responses {
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "missing HTTP request");
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                };
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(&mut socket);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    request.push_str(&line);
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
                 }
+                socket.write_all(response.as_bytes()).unwrap();
             }
-            socket.write_all(response.as_bytes()).unwrap();
             request
         });
         (url, worker)
@@ -865,6 +923,29 @@ mod tests {
             ranged(&dir, &serve_ranges(&BODY, None, true), 0, &hash).unwrap(),
             BODY
         );
+    }
+
+    #[test]
+    fn ranged_download_retries_transient_failure_and_keeps_its_attempt_limit() {
+        const FAILED: &str =
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        const RECEIVED: &str = "HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 0-5/6\r\nConnection: close\r\n\r\nabcdef";
+        let dir = TestDir::new();
+        let client = Client::builder().no_proxy().build().unwrap();
+        let hash = sha256(&b"abcdef"[..], None).unwrap();
+        let partial = dir.0.join("weights.part");
+        let progress = Progress::new("Downloading weights", Some(6));
+        let (url, worker) = serve_sequence(&[FAILED, RECEIVED]);
+        download_ranges(&client, &spec(&url, &hash), &partial, 0, &progress, 6, 1).unwrap();
+        assert_eq!(fs::read(&partial).unwrap(), b"abcdef");
+        assert_eq!(worker.join().unwrap().matches("GET /weights ").count(), 2);
+
+        let (url, worker) = serve_sequence(&[FAILED, FAILED, FAILED]);
+        let error =
+            download_ranges(&client, &spec(&url, &hash), &partial, 0, &progress, 6, 1).unwrap_err();
+        assert!(error.to_string().contains("run again to resume"));
+        assert_eq!(worker.join().unwrap().matches("GET /weights ").count(), 3);
+        assert_eq!(fs::read(&partial).unwrap(), b"");
     }
 
     #[test]

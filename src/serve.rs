@@ -466,6 +466,7 @@ impl Door {
             eprintln!("{}", Ink::detect().event('○', gone));
         }
         while !stopped.load(Ordering::SeqCst) {
+            crate::update::notice();
             let later = self.later.borrow_mut().pop_front();
             if let Some(ask) = later.or_else(|| self.asks.try_recv().ok()) {
                 // Keys answer the question one at a time, without echo, from the first one asked.
