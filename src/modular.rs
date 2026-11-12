@@ -324,7 +324,11 @@ pub fn doctor(id: &str, cache: &Path) -> Result<()> {
         }
     );
     model_assets(id, &root, &dir, None)?;
-    ensure!(ready, "Run `boubou pull {id}` while online.");
+    ensure!(
+        ready,
+        "Run `{} pull {id}` while online.",
+        crate::update::program()
+    );
     Ok(())
 }
 
@@ -450,7 +454,11 @@ fn model_assets(id: &str, root: &Path, dir: &Path, prepare: Option<bool>) -> Res
             ready = false;
         }
     }
-    ensure!(ready, "Run `boubou pull {id}` while online.");
+    ensure!(
+        ready,
+        "Run `{} pull {id}` while online.",
+        crate::update::program()
+    );
     let listed: Vec<&Path> = files.iter().map(|f| f.path.as_path()).collect();
     integrity::model_snapshots(root, &listed, &selected)
 }

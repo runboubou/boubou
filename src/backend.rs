@@ -132,7 +132,8 @@ impl Backend {
         match &self.log_path {
             Some(path) => format!("See {}", path.display()),
             None => format!(
-                "Check cached assets with `boubou doctor {}`. Runner output is disabled for privacy.",
+                "Check cached assets with `{} doctor {}`. Runner output is disabled for privacy.",
+                crate::update::program(),
                 self.profile.id
             ),
         }
@@ -163,8 +164,9 @@ impl Backend {
             })
         }) {
             return anyhow!(
-                "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `boubou run {} --offline`. Backend log: {}",
+                "This conversation reached Liquid's context capacity ({} tokens). Start a new conversation with `{} run {} --offline`. Backend log: {}",
                 self.profile.context_tokens,
+                crate::update::program(),
                 self.profile.id,
                 log_path.display()
             );

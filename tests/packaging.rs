@@ -29,7 +29,12 @@ impl Package {
         ));
         fs::create_dir(&root).unwrap();
         fs::write(root.join("cli.cjs"), include_str!("../packaging/cli.cjs")).unwrap();
-        fs::copy(env!("CARGO_BIN_EXE_boubou"), root.join("boubou")).unwrap();
+        // macOS checks every fresh copy of the binary on its first start, one copy after another,
+        // which made parallel fixtures wait for each other. A hard link starts at once.
+        let (built, binary) = (env!("CARGO_BIN_EXE_boubou"), root.join("boubou"));
+        if fs::hard_link(built, &binary).is_err() {
+            fs::copy(built, &binary).unwrap();
+        }
         Self(root)
     }
 
@@ -39,12 +44,38 @@ impl Package {
         command
     }
 
+    /// The launcher as npx runs it on a person's computer: from a copy under its cache's
+    /// `_npx` folder.
+    fn npx(&self) -> Command {
+        self.placed("_npx/0/node_modules/boubou")
+    }
+
+    /// The launcher run from a copy of the package in `folder`. No test reaches the real registry.
+    fn placed(&self, folder: &str) -> Command {
+        let copy = self.0.join(folder);
+        if !copy.exists() {
+            fs::create_dir_all(&copy).unwrap();
+            for file in ["cli.cjs", "boubou"] {
+                fs::hard_link(self.0.join(file), copy.join(file)).unwrap();
+            }
+        }
+        let mut command = Command::new("node");
+        command
+            .arg(copy.join("cli.cjs"))
+            .env("npm_config_registry", "http://127.0.0.1:1")
+            .env_remove("CI")
+            .env_remove("BOUBOU_NO_UPDATE_CHECK");
+        command
+    }
+
     fn run(&self, args: &[&str]) -> Output {
         self.command().args(args).output().unwrap()
     }
 
     fn script(&self, text: &str) {
         let path = self.0.join("boubou");
+        // Writing through the link would overwrite the built binary.
+        fs::remove_file(&path).unwrap();
         fs::write(&path, text).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -54,6 +85,16 @@ impl Drop for Package {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// What a copy npx started calls itself: npx and the tag npm publishes this version under.
+fn npx_boubou() -> String {
+    let channel = env!("CARGO_PKG_VERSION_PRE")
+        .split('.')
+        .next()
+        .filter(|channel| !channel.is_empty())
+        .unwrap_or("latest");
+    format!("npx boubou@{channel}")
 }
 
 const MENU: &[&str] = &[
@@ -202,6 +243,23 @@ impl Prompt {
         self.master.write_all(text).unwrap();
     }
 
+    /// Everything the program prints until it exits.
+    fn rest(&mut self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let exited = self.child.try_wait().unwrap().is_some();
+            let mut buffer = [0; 8192];
+            match self.master.read(&mut buffer) {
+                Ok(n) if n > 0 => self.output.push_str(&String::from_utf8_lossy(&buffer[..n])),
+                _ if exited => return std::mem::take(&mut self.output),
+                _ => {
+                    assert!(Instant::now() < deadline, "No exit: {}", self.output);
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
     fn exit_within(&mut self, limit: Duration) -> std::process::ExitStatus {
         let deadline = Instant::now() + limit;
         loop {
@@ -298,6 +356,87 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
     assert_eq!(prompt.finish().code(), Some(1));
     assert!(!package.0.join("menu-cache/native").exists());
     assert!(!package.0.join("menu-cache/models").exists());
+}
+
+#[test]
+fn guided_start_through_npx_shows_commands_that_can_be_typed() {
+    let package = Package::new();
+    let npx = npx_boubou();
+    let mut prompt = Prompt::start(&package, package.npx(), true, &[], true);
+    prompt.expect(MENU);
+    prompt.expect(&["ctrl+c exit"]);
+    // The run box shows only when a voice fits this Mac.
+    assert_eq!(
+        prompt.output.contains("Run locally"),
+        prompt.output.contains(&format!("{npx} run ")),
+        "{}",
+        prompt.output
+    );
+    assert!(!prompt.output.contains("boubou run "), "{}", prompt.output);
+    prompt.send(b"\x1b[A\r");
+    prompt.expect(&["Paste a run command"]);
+    prompt.send(b"LFM3-Audio-2B --offline\r");
+    prompt.expect(&["offline mode is enabled"]);
+    // The checklist breaks the longer command at a space.
+    assert!(prompt.output.contains(&format!(" {npx} run")));
+    assert!(prompt.output.contains(" LFM3-Audio-2B --offline"));
+    assert!(prompt.output.contains(&format!("run `{npx}` again")));
+    assert!(
+        prompt
+            .output
+            .contains(&format!("Run `{npx} pull LFM3-Audio-2B` while online."))
+    );
+    assert_eq!(prompt.finish().code(), Some(1));
+}
+
+#[test]
+fn a_copy_from_npm_says_when_its_command_ends_that_npm_has_a_newer_version() {
+    let package = Package::new();
+    let cache = package.0.join("menu-cache");
+    fs::create_dir(&cache).unwrap();
+    // The registry's answer from earlier today.
+    fs::write(cache.join("npm-tags.json"), r#"{"latest":"99.0.0"}"#).unwrap();
+    let out = format!(
+        "Boubou 99.0.0 is out (this is {})",
+        env!("CARGO_PKG_VERSION")
+    );
+    let printed =
+        |command: Command, args: &[&str]| Prompt::start(&package, command, true, args, true).rest();
+    // A missing input file ends a command that may download before it does.
+    let online = ["run", "LFM3-Audio-2B", "--input", "missing.wav"];
+    let output = printed(package.npx(), &online);
+    let line = format!("{out}. Run: npx boubou@latest\r\n");
+    assert!(
+        output.find("Cannot read").unwrap() < output.find(&line).unwrap(),
+        "{output}"
+    );
+    // A copy from `npm install --global` is updated another way.
+    let line = format!("{out}. Run: npm install --global boubou@latest\r\n");
+    assert!(printed(package.placed("lib/node_modules/boubou"), &online).contains(&line));
+    // Not with --offline, when turned off, in CI or for a copy npm did not put here.
+    let offline = [
+        "run",
+        "LFM3-Audio-2B",
+        "--offline",
+        "--input",
+        "missing.wav",
+    ];
+    assert!(!printed(package.npx(), &offline).contains("is out"));
+    for name in ["BOUBOU_NO_UPDATE_CHECK", "CI"] {
+        let mut command = package.npx();
+        command.env(name, "1");
+        assert!(!printed(command, &online).contains("is out"), "{name}");
+    }
+    assert!(!printed(package.command(), &online).contains("is out"));
+    // Nor away from a terminal.
+    let piped = package
+        .npx()
+        .args(["--cache-dir", cache.to_str().unwrap()])
+        .args(online)
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&piped.stderr);
+    assert!(error.contains("Cannot read") && !error.contains("is out"));
 }
 
 #[test]
@@ -713,6 +852,41 @@ fn npm_launcher_runs_the_native_cli_and_rejects_unknown_models() {
 }
 
 #[test]
+fn help_and_hints_name_the_command_that_started_boubou() {
+    let package = Package::new();
+    let cache = package.0.join("empty-cache");
+    let text = |mut command: Command, args: &[&str]| {
+        let output = command
+            .args(["--cache-dir", cache.to_str().unwrap()])
+            .args(args)
+            .output()
+            .unwrap();
+        [output.stdout, output.stderr]
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .concat()
+    };
+    // Only a copy npx fetched has no `boubou` command to type.
+    let global = |package: &Package| package.placed("lib/node_modules/boubou");
+    for (program, command) in [
+        (
+            "boubou".to_owned(),
+            Package::command as fn(&Package) -> Command,
+        ),
+        ("boubou".to_owned(), global),
+        (npx_boubou(), Package::npx),
+    ] {
+        let usage = format!("Usage: {program} [OPTIONS] [COMMAND]");
+        assert!(text(command(&package), &[]).contains(&usage));
+        let usage = format!("Usage: {program} run [OPTIONS] <MODEL>");
+        assert!(text(command(&package), &["run", "--help"]).contains(&usage));
+        assert!(text(command(&package), &["--version"]).starts_with("boubou "));
+        let hint = format!("Run `{program} pull LFM3-Audio-2B` while online.");
+        assert!(text(command(&package), &["doctor"]).contains(&hint));
+        assert!(text(command(&package), &["pull", "LFM3-Audio-2B", "--offline"]).contains(&hint));
+    }
+}
+
+#[test]
 fn npm_exposes_the_product_name() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
@@ -801,7 +975,9 @@ fn npm_launcher_waits_for_cleanup_before_propagating_termination() {
         .stdin(Stdio::null())
         .spawn()
         .unwrap();
-    for _ in 0..100 {
+    // macOS starts a fresh script only after the fixtures queued before it: nine seconds on an
+    // 18-core Mac running every test at once.
+    for _ in 0..600 {
         if ready.exists() {
             break;
         }
