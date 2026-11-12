@@ -70,7 +70,9 @@ jobs:
   candidate:
     needs: linux
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 30
+    outputs:
+      shards: ${{ steps.profiles.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -103,24 +105,27 @@ jobs:
           fi
           python -B packaging/qwen/build_runner.py "$target" --url "$url" "$@"
       - name: Choose profiles
+        id: profiles
         env:
           ALL: ${{ github.event_name == 'schedule' || inputs.all_profiles == true }}
         run: |
-          all="qwen3-tts:1.7b-customvoice qwen3-tts:0.6b-customvoice kokoro:82m phonon:31m-en supertonic:3 chattts:en"
-          all+=" qwen3-tts:1.7b-customvoice-whisper qwen3-tts:0.6b-customvoice-whisper chattts:whisper"
-          # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
-          all+=" pocket-tts:english_2026-10 pocket-tts:english_2m_2026-10 pocket-tts:french"
-          # KittenTTS: the default, the int8 quantization and a 0.1 checkpoint that names voices only by ID.
-          all+=" kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1"
           # A release that changed neither the runner nor the model files repeats only the pull request
           # subset: the release that published them checked every profile on these exact bytes.
           published() { cmp -s "$RUNNER_TEMP/published/$1" "$RUNNER_TEMP/qwen/$1"; }
           if [ "$ALL" = true ] && ! { published runtime.json && published models.json; }; then
-            profiles="$all"
+            # One Mac per line. The lines take about equally long, and profiles that share model files sit
+            # together. Four Macs and a release's Liquid job are the five that GitHub's free plan runs at once.
+            # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
+            # KittenTTS: the default, the int8 quantization and a 0.1 checkpoint that names voices only by ID.
+            set -- \
+              "qwen3-tts:1.7b-customvoice qwen3-tts:1.7b-customvoice-whisper qwen3-tts:0.6b-customvoice-whisper" \
+              "qwen3-tts:0.6b-customvoice chattts:en chattts:whisper" \
+              "kokoro:82m phonon:31m-en supertonic:3 pocket-tts:english_2026-10" \
+              "pocket-tts:english_2m_2026-10 pocket-tts:french kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1"
           else
-            profiles="qwen3-tts:0.6b-customvoice pocket-tts:english_2026-10"
+            set -- "qwen3-tts:0.6b-customvoice pocket-tts:english_2026-10"
           fi
-          echo "PROFILES=$profiles" >> "$GITHUB_ENV"
+          echo "shards=$(jq -cn '$ARGS.positional' --args "$@")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: boubou-linux-x64
@@ -131,22 +136,55 @@ jobs:
           mkdir -p "$RUNNER_TEMP/linux/qwen"
           cp packaging/qwen/runner-linux-x64.json "$RUNNER_TEMP/linux/qwen/runtime.json"
           python -B packaging/qwen/lock_models.py --cuda "$RUNNER_TEMP/linux/qwen/models.json"
-      - name: Build and install the npm candidate outside the checkout
-        env:
-          BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
+      - name: Build the npm candidate
         run: |
           set -euo pipefail
           cargo fetch --locked
           python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen" --linux "$RUNNER_TEMP/linux"
-          tarball=$(find "$PWD/target/dist" -name 'boubou-*.tgz')
-          tar -tzf "$tarball" | grep -Fx "package/linux-x64/boubou"
-          # A new runner is not a release asset before the tag; place the exact runner where `pull` would download it.
-          sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
-          mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
-          cp "$RUNNER_TEMP/qwen/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
+          tar -tzf "$(find target/dist -name 'boubou-*.tgz')" | grep -Fx "package/linux-x64/boubou"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qwen-mac-candidate
+          retention-days: 3
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/qwen/runtime.json
+            ${{ runner.temp }}/qwen/models.json
+            ${{ runner.temp }}/qwen/runner.tar.gz
+            target/dist/**/*.tgz
+
+  # Each profile spends most of its two minutes loading the speech recognizer and the language model,
+  # so the profiles are split across Macs. Every Mac downloads only its own profiles' model files.
+  inference:
+    needs: candidate
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        profiles: ${{ fromJSON(needs.candidate.outputs.shards) }}
+    env:
+      PROFILES: ${{ matrix.profiles }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: qwen-mac-candidate
+          path: ${{ runner.temp }}/candidate
+      - name: Install the npm candidate outside the checkout and pull the model files
+        env:
+          BOUBOU_HOME: ${{ runner.temp }}/qwen-cache
+        run: |
+          set -euo pipefail
           cd "$RUNNER_TEMP"
+          # A new runner is not a release asset before the tag; place the exact runner where `pull` would download it.
+          sha=$(jq -r .sha256 "$(find candidate -name runtime.json)")
+          mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
+          mv "$(find candidate -name runner.tar.gz)" "$BOUBOU_HOME/qwen/runtimes/$sha/"
           mkdir -p qwen-npm
-          npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts "$tarball"
+          npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts "$(find "$PWD/candidate" -name 'boubou-*.tgz')"
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
           "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
@@ -175,16 +213,6 @@ jobs:
           done
           find "$BOUBOU_HOME/qwen/hub" -type f -exec stat -f '%i %m %N' {} + | LC_ALL=C sort > after
           test -z "$(LC_ALL=C comm -23 before after)"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: qwen-mac-candidate
-          retention-days: 3
-          compression-level: 0
-          path: |
-            ${{ runner.temp }}/qwen/runtime.json
-            ${{ runner.temp }}/qwen/models.json
-            ${{ runner.temp }}/qwen/runner.tar.gz
-            target/dist/**/*.tgz
       - name: Check offline speech inference through the loopback service
         run: |
           set -euo pipefail
@@ -192,7 +220,7 @@ jobs:
           root="$BOUBOU_HOME/qwen"
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
           manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou/qwen/models.json"
-          sha=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/qwen/runtime.json")
+          sha=$(jq -r .sha256 "$(find "$RUNNER_TEMP/candidate" -name runtime.json)")
           python="$root/runtimes/$sha/installed/bin/python3"
           sw_vers -productVersion
           sysctl hw.model hw.memsize
