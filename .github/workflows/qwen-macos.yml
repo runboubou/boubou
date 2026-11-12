@@ -33,6 +33,7 @@ on:
 
 permissions:
   contents: read
+  actions: read # Reuse only a completed release's model checks.
 
 concurrency:
   group: qwen-mac-${{ github.ref }}
@@ -73,6 +74,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       shards: ${{ steps.profiles.outputs.shards }}
+      inference: ${{ steps.profiles.outputs.inference }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,8 +87,10 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - name: Build or reuse the relocatable arm64 runtime and lock the model files
+        id: runner
         env:
-          REUSE: ${{ inputs.reuse == true }}
+          REUSE: ${{ inputs.reuse == true || github.event_name == 'pull_request' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           target="$RUNNER_TEMP/qwen"
@@ -95,24 +99,42 @@ jobs:
           # npm cannot carry the runner. The Release workflow uploads a new one to this URL.
           version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
+          reused=false
           if [ "$REUSE" = true ]; then
             # The newest published package names the runner and model files its release verified.
             newest=$(npm view boubou time --json | jq -r 'del(.created, .modified) | to_entries | max_by(.value).key')
             mkdir "$RUNNER_TEMP/published"
             curl -fsSL --retry 5 --retry-all-errors "$(npm view "boubou@$newest" dist.tarball)" |
-              tar -xzf - -C "$RUNNER_TEMP/published" --strip-components 2 package/qwen
-            set -- --reuse "$RUNNER_TEMP/published/runtime.json"
+              tar -xzf - -C "$RUNNER_TEMP/published" --strip-components 1 package/qwen package/BUILD.json
+            if python -B .github/scripts/reuse_model_checks.py runner "$RUNNER_TEMP/published" "$target"; then
+              reused=true
+            else
+              status=$?
+              [ "$status" = 1 ] || exit "$status"
+            fi
           fi
-          python -B packaging/qwen/build_runner.py "$target" --url "$url" "$@"
+          if [ "$reused" = false ]; then
+            python -B packaging/qwen/build_runner.py "$target" --url "$url"
+          fi
+          echo "reused=$reused" >> "$GITHUB_OUTPUT"
       - name: Choose profiles
         id: profiles
         env:
           ALL: ${{ github.event_name == 'schedule' || inputs.all_profiles == true }}
+          REUSED: ${{ steps.runner.outputs.reused }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # A release that changed neither the runner nor the model files repeats only the pull request
-          # subset: the release that published them checked every profile on these exact bytes.
-          published() { cmp -s "$RUNNER_TEMP/published/$1" "$RUNNER_TEMP/qwen/$1"; }
-          if [ "$ALL" = true ] && ! { published runtime.json && published models.json; }; then
+          # Runner/model identity avoids the full matrix, but changed CLI integration still checks two voices.
+          published() { cmp -s "$RUNNER_TEMP/published/qwen/$1" "$RUNNER_TEMP/qwen/$1"; }
+          same_models=false
+          inference=true
+          if [ "$REUSED" = true ] && published runtime.json && published models.json; then
+            same_models=true
+            if python -B .github/scripts/reuse_model_checks.py qwen; then
+              inference=false
+            fi
+          fi
+          if [ "$ALL" = true ] && [ "$same_models" = false ]; then
             # One Mac per line. The lines take about equally long, and profiles that share model files sit
             # together. Four Macs and a release's Liquid job are the five that GitHub's free plan runs at once.
             # Pocket profiles share snapshots: the default, the smallest (SentencePiece) and French.
@@ -125,6 +147,7 @@ jobs:
           else
             set -- "qwen3-tts:0.6b-customvoice pocket-tts:english_2026-10"
           fi
+          echo "inference=$inference" >> "$GITHUB_OUTPUT"
           echo "shards=$(jq -cn '$ARGS.positional' --args "$@")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -142,6 +165,16 @@ jobs:
           cargo fetch --locked
           python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen" --linux "$RUNNER_TEMP/linux"
           tar -tzf "$(find target/dist -name 'boubou-*.tgz')" | grep -Fx "package/linux-x64/boubou"
+      - name: Check the installed package without loading models
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/package-check" --no-audit --no-fund --ignore-scripts "$(find "$PWD/target/dist" -name 'boubou-*.tgz')"
+          cli="$RUNNER_TEMP/package-check/node_modules/.bin/boubou"
+          version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
+          test "$("$cli" --version)" = "boubou $version"
+          "$cli" list | grep -Fx 'LFM3-Audio-2B'
+          "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
+          "$cli" run --help
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qwen-mac-candidate
@@ -157,6 +190,7 @@ jobs:
   # so the profiles are split across Macs. Every Mac downloads only its own profiles' model files.
   inference:
     needs: candidate
+    if: needs.candidate.outputs.inference == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     strategy:

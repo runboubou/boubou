@@ -405,13 +405,13 @@ fn a_copy_from_npm_says_when_its_command_ends_that_npm_has_a_newer_version() {
     // A missing input file ends a command that may download before it does.
     let online = ["run", "LFM3-Audio-2B", "--input", "missing.wav"];
     let output = printed(package.npx(), &online);
-    let line = format!("{out}. Run: npx boubou@latest\r\n");
+    let line = format!("{out}. Run: npx boubou@99.0.0\r\n");
     assert!(
         output.find("Cannot read").unwrap() < output.find(&line).unwrap(),
         "{output}"
     );
     // A copy from `npm install --global` is updated another way.
-    let line = format!("{out}. Run: npm install --global boubou@latest\r\n");
+    let line = format!("{out}. Run: npm install --global boubou@99.0.0\r\n");
     assert!(printed(package.placed("lib/node_modules/boubou"), &online).contains(&line));
     // Not with --offline, when turned off, in CI or for a copy npm did not put here.
     let offline = [
@@ -446,10 +446,10 @@ fn guided_start_shows_cached_updates_before_a_voice_is_selected() {
     fs::create_dir(&cache).unwrap();
     fs::write(cache.join("npm-tags.json"), r#"{"latest":"99.0.0"}"#).unwrap();
     for (command, upgrade) in [
-        (package.npx(), "Run: npx boubou@latest"),
+        (package.npx(), "Run: npx boubou@99.0.0"),
         (
             package.placed("lib/node_modules/boubou"),
-            "Run: npm install --global boubou@latest",
+            "Run: npm install --global boubou@99.0.0",
         ),
     ] {
         let mut prompt = Prompt::start(&package, command, true, &[], true);
@@ -519,7 +519,7 @@ fn guided_start_refreshes_a_delayed_update_without_keyboard_input() {
     // Hold the HTTP answer until the first complete menu frame; no key wakes the next frame.
     answer.send(()).unwrap();
     prompt.expect(&["Boubou 99.0.0 is out"]);
-    prompt.expect(&["Run: npx boubou@latest"]);
+    prompt.expect(&["Run: npx boubou@99.0.0"]);
     assert!(prompt.child.try_wait().unwrap().is_none());
     prompt.send(b"\x03");
     assert_eq!(prompt.finish().code(), Some(130));

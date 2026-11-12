@@ -619,6 +619,7 @@ fn range(
                 == Some(expected.as_str()),
             "inconsistent Content-Range"
         );
+        progress.status(&format!("Receiving {}", spec.name));
         let mut bytes = Vec::with_capacity((end - start) as usize);
         response
             .by_ref()

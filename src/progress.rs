@@ -619,18 +619,23 @@ impl Progress {
 
     /// Replaces the current operation without hiding byte progress or printing repeated lines.
     pub fn status(&self, message: &str) {
+        // The checklist is the only owner while it is active. A second deduplication value
+        // could get ahead of its displayed state when range workers and the writer interleave.
+        let mut shown = false;
+        update(|state| {
+            shown = true;
+            state.describe(message);
+        });
+        if shown {
+            return;
+        }
         let mut label = self.label.lock().unwrap_or_else(|e| e.into_inner());
         if *label == message {
             return;
         }
         *label = message.into();
         drop(label);
-        let mut shown = false;
-        update(|state| {
-            shown = true;
-            state.describe(message);
-        });
-        if !shown && !tui::interactive(&io::stderr()) {
+        if !tui::interactive(&io::stderr()) {
             let _ = writeln!(io::stderr(), "{message}");
         }
     }
@@ -704,6 +709,47 @@ impl Drop for Progress {
 mod tests {
     use super::*;
     use crate::tui::Colors;
+
+    #[test]
+    fn receiving_replaces_retry_even_when_the_standalone_label_is_unchanged() {
+        // Isolate the process-global terminal owner from other parallel progress/download tests.
+        const CHILD: &str = "BOUBOU_PROGRESS_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "progress::tests::receiving_replaces_retry_even_when_the_standalone_label_is_unchanged"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        let mut state = fixture(false);
+        state.reach(Step::Download);
+        *CHECKLIST.lock().unwrap() = Some(Shared {
+            state,
+            paint: Paint(Colors::None),
+            drawn: 0,
+        });
+        let progress = Progress::new("Receiving model.bin", Some(100));
+        // Reproduce the old interleaving: the label said Receiving but the last UI write was Retry.
+        update(|state| state.describe("Retry 1/2: connection interrupted"));
+        progress.status("Receiving model.bin");
+        assert_eq!(
+            CHECKLIST
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .state
+                .download_status,
+            "Receiving model.bin"
+        );
+        CHECKLIST.lock().unwrap().take();
+    }
 
     #[test]
     fn only_known_totals_show_a_bounded_percentage() {
