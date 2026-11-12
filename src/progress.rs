@@ -316,6 +316,10 @@ impl State {
 
     /// One frame: the header the menu has, with the command where the menu has its title, then
     /// the steps. At one width every frame has the same number of lines, so it is redrawn in place.
+    ///
+    /// The menu redraws when its window changes; these lines stay as printed, and one that wrapped
+    /// in a window made narrower would cut the toucan in two. So the header keeps to the 60
+    /// columns the toucan asks for, and a longer command breaks at its spaces.
     fn frame(&self, paint: Paint, width: usize) -> Vec<String> {
         let room = width.saturating_sub(7).max(1);
         let spinner = tui::SPINNER[self.tick % tui::SPINNER.len()];
@@ -324,9 +328,13 @@ impl State {
         } else {
             (DIM.to_owned(), '○')
         };
-        let mut lines = tui::header(paint, width, (&style, &format!("{mark} {HERE}")), |room| {
-            let command = tui::fit(&self.command, room.saturating_sub(2));
-            vec![format!("{DIM}${RESET} {command}")]
+        let light = format!("{mark} {HERE}");
+        let mut lines = tui::header(paint, width.min(60), (&style, &light), |room| {
+            tui::wrap(&self.command, room.saturating_sub(2))
+                .iter()
+                .zip(std::iter::once('$').chain(std::iter::repeat(' ')))
+                .map(|(line, prompt)| format!("{DIM}{prompt}{RESET} {line}"))
+                .collect()
         });
         lines.push(String::new());
         for (step, title, note) in &self.steps {
@@ -702,10 +710,21 @@ mod tests {
         let wide = state.frame(paint, 80);
         assert!(wide[1].contains("\x1b[43m "), "No toucan beak");
         let top = visible(&wide[0]);
-        assert_eq!(tui::width(&top), 78);
         assert!(top.trim_start().starts_with("boubou "), "{top}");
         assert!(top.ends_with(&format!("○ {HERE}")), "{top}");
         assert_eq!(visible(&wide[2]).trim(), "$ boubou run LFM3-Audio-2B");
+        // A wider window stretches nothing: no line can wrap and cut the toucan in two when the
+        // window is made narrower again, and a long command breaks beside it.
+        assert_eq!(state.frame(paint, 200)[..6], wide[..6]);
+        state.command = "boubou serve qwen3-tts:0.6b-customvoice".into();
+        let long = state.frame(paint, 200);
+        assert_eq!(long.len(), wide.len());
+        assert_eq!(visible(&long[2]).trim(), "$ boubou serve");
+        assert_eq!(visible(&long[3]).trim(), "qwen3-tts:0.6b-customvoice");
+        for line in &long[..6] {
+            assert!(tui::width(&visible(line)) <= 58, "{line}");
+        }
+        state.command = "boubou run LFM3-Audio-2B".into();
         state.ready = true;
         let top = &state.frame(paint, 80)[0];
         assert!(top.ends_with(&format!("\x1b[33m● {HERE}")), "{top}");

@@ -190,8 +190,8 @@ struct Links {
 impl Links {
     /// What is printed under the checklist: a section for each way to connect. What a person
     /// scans or types stands out and the long links stay dim. `code` is the QR code of the
-    /// network link, where the terminal can show one.
-    fn guide(&self, ink: &Ink, columns: usize, code: Option<&str>) -> Vec<String> {
+    /// network link, empty where the terminal cannot show one.
+    fn guide(&self, ink: &Ink, columns: usize, code: &[String]) -> Vec<String> {
         let Ink {
             bold,
             dim,
@@ -213,19 +213,18 @@ impl Links {
         };
         if let Some(link) = &self.network {
             let mut body = match code {
-                Some(code) => {
-                    let scan = "Scan the code with the phone's camera, on the same Wi-Fi.";
-                    let mut body = vec![scan.into()];
-                    // Black on white whatever the terminal's colors, as cameras expect. The
-                    // code's own margin sets it apart from the lines around it.
-                    body.extend(code.lines().map(|line| format!("\x1b[30;107m{line}")));
-                    body.push(format!("{dim}Or open {link}"));
-                    body
-                }
-                None => vec![
+                [] => vec![
                     "Open this link on the phone, on the same Wi-Fi:".into(),
                     link.clone(),
                 ],
+                // On a dark terminal the code is a light card: a line apart from the text.
+                code => {
+                    let scan = "Scan with the phone's camera, on the same Wi-Fi.";
+                    let mut body = vec![scan.to_owned(), String::new()];
+                    body.extend_from_slice(code);
+                    body.extend([String::new(), format!("{dim}Or open {link}")]);
+                    body
+                }
             };
             body.push(match &self.fallback {
                 Some(address) => format!(
@@ -260,6 +259,27 @@ impl Links {
         lines.push(String::new());
         lines
     }
+}
+
+/// The QR code of `link` as lines for a terminal, as small as a phone's camera reads from a
+/// screen: the lowest error correction and two light modules around it. A cell holds two
+/// modules, the upper one as the color of `▀` and the lower one as the cell's own, so the code
+/// stays solid where a terminal spaces its lines.
+fn code(paint: tui::Paint, link: &str) -> Result<Vec<String>> {
+    let code = qrcode::QrCode::with_error_correction_level(link, qrcode::EcLevel::L)?;
+    let (size, modules) = (code.width() as isize, code.to_colors());
+    let tone = |x: isize, y: isize| {
+        let inside = (0..size).contains(&x) && (0..size).contains(&y);
+        match inside && modules[(y * size + x) as usize] == qrcode::Color::Dark {
+            true => tui::CODE_DARK,
+            false => tui::CODE_LIGHT,
+        }
+    };
+    let cell = |x, y| format!("{}{}▀", paint.fg(tone(x, y)), paint.bg(tone(x, y + 1)));
+    Ok((-2..size + 2)
+        .step_by(2)
+        .map(|y| (-2..size + 2).map(|x| cell(x, y)).collect())
+        .collect())
 }
 
 /// Styles for what `serve` prints under the checklist. All empty where stderr takes no escape
@@ -332,15 +352,11 @@ impl Door {
         let ink = Ink::detect();
         // A terminal that shows colors can show the code.
         let code = match &links.network {
-            Some(link) if !ink.accent.is_empty() => Some(
-                qrcode::QrCode::new(link)?
-                    .render::<qrcode::render::unicode::Dense1x2>()
-                    .build(),
-            ),
-            _ => None,
+            Some(link) if !ink.accent.is_empty() => code(tui::Paint::detect(), link)?,
+            _ => Vec::new(),
         };
         let columns = crossterm::terminal::size().map_or(80, |(columns, _)| columns as usize);
-        for line in links.guide(&ink, columns, code.as_deref()) {
+        for line in links.guide(&ink, columns, &code) {
             eprintln!("{line}");
         }
         Ok(door)
@@ -1382,7 +1398,7 @@ mod tests {
             bare: Some((Ipv4Addr::new(192, 168, 1, 20), 2682)),
         };
         // In a log: the same sections, without escape codes or a code to scan.
-        let plain = links.guide(&Ink::default(), 80, None).join("\n");
+        let plain = links.guide(&Ink::default(), 80, &[]).join("\n");
         assert!(!plain.contains('\x1b'));
         let at = |title: &str| plain.find(&format!("\n  {title}\n")).expect(title);
         assert!(at("Phone") < at("Robot or app") && at("Robot or app") < at(progress::HERE));
@@ -1394,8 +1410,8 @@ mod tests {
             accent: "<accent>".into(),
             ..Ink::default()
         };
-        let styled = links.guide(&ink, 80, Some("██")).join("\n");
-        assert!(at("Phone") < styled.find("\x1b[30;107m██").unwrap());
+        let styled = links.guide(&ink, 80, &["<code>".into()]).join("\n");
+        assert!(at("Phone") < styled.find("\n\n  <code>\n\n").unwrap());
         assert!(styled.contains("Address   <b><accent>192.168.1.20\n"));
         assert!(styled.contains("Port      <b><accent>2682\n"));
 
@@ -1405,7 +1421,20 @@ mod tests {
             bare: None,
             ..links
         };
-        assert!(!page.guide(&ink, 80, None).concat().contains("Robot"));
+        assert!(!page.guide(&ink, 80, &[]).concat().contains("Robot"));
+    }
+
+    #[test]
+    fn the_code_is_small_and_made_of_whole_cells() {
+        let link = "https://192-168-100-120.abcdefghijklmnop.lan.runboubou.com:26820/#00112233445566778899aabbccddeeff";
+        let lines = code(tui::Paint(tui::Colors::Basic), link).unwrap();
+        // The longest link a network gives still fits 37 modules, with two light ones around.
+        assert_eq!(lines.len(), 21);
+        let (light, dark) = ("\x1b[97m\x1b[107m▀", "\x1b[30m\x1b[40m▀");
+        assert_eq!(lines[0], light.repeat(41));
+        // The corner pattern starts dark over dark, after the margin.
+        assert!(lines[1].starts_with(&format!("{light}{light}{dark}")));
+        assert!(lines.iter().all(|line| line.matches('▀').count() == 41));
     }
 
     #[test]

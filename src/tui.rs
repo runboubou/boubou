@@ -55,6 +55,9 @@ pub const ROW_TEXT: Tone = Tone(0xf4, 0xf4, 0xf6, 97);
 pub const ACCENT: Tone = Tone(0xf2, 0xc2, 0x1b, 33);
 pub const TRACK: Tone = Tone(0x4a, 0x4a, 0x52, 100);
 pub const WARN: Tone = Tone(0xe8, 0xa3, 0x3d, 33);
+/// A QR code's dark and light modules: the same on every theme, as cameras expect.
+pub const CODE_DARK: Tone = Tone(0x11, 0x11, 0x13, 30);
+pub const CODE_LIGHT: Tone = Tone(0xff, 0xff, 0xff, 97);
 
 #[derive(Clone, Copy)]
 pub struct Paint(pub Colors);
@@ -171,6 +174,21 @@ pub fn pad_left(text: &str, columns: usize) -> String {
     let text = fit(text, columns);
     let gap = columns.saturating_sub(width(&text));
     format!("{}{text}", " ".repeat(gap))
+}
+
+/// Break `text` at its spaces into lines of at most `columns`, cutting a word that is longer.
+pub fn wrap(text: &str, columns: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(line) if width(line) + 1 + width(word) <= columns => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(fit(word, columns)),
+        }
+    }
+    lines
 }
 
 /// Boubou's toucan, a terminal cell per character: `#` body, `y` beak. Whole cells stay solid
@@ -352,6 +370,18 @@ mod tests {
         assert_eq!(pad_left("ab", 4), "  ab");
         assert_eq!(pad_left("abcdef", 4), "abc…");
         assert_eq!(gb(1_620_000_000), "1.62 GB");
+        assert_eq!(
+            wrap("boubou serve qwen3-tts:0.6b-customvoice --voice Vivian", 32),
+            [
+                "boubou serve",
+                "qwen3-tts:0.6b-customvoice",
+                "--voice Vivian"
+            ]
+        );
+        assert_eq!(
+            wrap("boubou run a-long-name", 8),
+            ["boubou", "run", "a-long-…"]
+        );
     }
 
     #[test]
