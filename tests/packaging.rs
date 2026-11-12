@@ -147,6 +147,7 @@ impl Prompt {
                 format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
             )
             .env_remove("NO_COLOR")
+            .env_remove("COLORTERM")
             .stdin(slave.try_clone().unwrap())
             .stdout(slave.try_clone().unwrap())
             .stderr(slave.try_clone().unwrap());
@@ -265,6 +266,7 @@ fn guided_start_opens_english_voices_and_restores_the_terminal() {
     );
     assert!(prompt.output.contains("Run locally") || prompt.output.contains("Continue"));
     assert!(prompt.output.contains("\x1b[38;"), "No color emphasis");
+    assert!(prompt.output.contains("\x1b[48;5;214m "), "No toucan beak");
     // The library entry is last regardless of the number of eligible voices.
     prompt.send(b"\x1b[A\r");
     prompt.expect(&["Paste a run command"]);
