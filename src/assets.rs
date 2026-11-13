@@ -24,7 +24,7 @@ use std::{
 /// to the Hub carries only part of a fast link. Chunks are appended in order, so a partial file
 /// always holds a prefix and stays resumable.
 const CHUNK: u64 = 16 << 20;
-const CONNECTIONS: usize = 8;
+pub(crate) const CONNECTIONS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct Assets {
@@ -628,7 +628,7 @@ fn download_ranges(
 }
 
 /// Bytes `start..end` of the file, or None if the server answered with the whole file.
-fn range(
+pub(crate) fn range(
     client: &Client,
     spec: &Download<'_>,
     start: u64,

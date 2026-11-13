@@ -210,7 +210,7 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     // Download everything first, then verify everything, so startup reads as two clear steps.
     progress::step(Step::Download);
     if !current {
-        current = incremental::install(&runner, &root, &installed, offline)?;
+        current = incremental::install(&runner, &root, &installed, offline);
     }
     if !current && runner.url.is_some() {
         assets::prefetch(&runner.archive(), &engine, offline)?;
@@ -275,7 +275,8 @@ pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
     // An installed runner has no archive left to download or verify.
     if !engine.join("installed").is_dir() {
         let archive = if runner.url.is_some() { &engine } else { &dir }.join("runner.tar.gz");
-        parts[3].files.push((archive, runner.size));
+        let size = incremental::estimate(&runner, &root, &engine.join("installed"));
+        parts[3].files.push((archive, size.unwrap_or(runner.size)));
     }
     for f in model_files(id, &dir)?.iter().filter(|f| f.applies_to(id)) {
         let path = f.path.to_string_lossy().to_lowercase();
