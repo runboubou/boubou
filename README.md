@@ -33,7 +33,7 @@ Apple Silicon Mac with macOS 13.3+ and Node.js 18+. Allow microphone access, the
 
 1. **One command.** `npx boubou@beta` opens Boubou in your terminal.
 2. **Voices that fit your Mac.** Boubou checks the chip, memory and free disk, and lists only the voices this Mac can run.
-3. **Pick a language and a voice.** On [runboubou.com/models](https://runboubou.com/models/), open a model, choose a language and a voice, and copy the command the page writes. Boubou sets up the rest: what hears, what thinks and what speaks.
+3. **Pick a language and a voice.** On [runboubou.com/models](https://runboubou.com/models/), open a model, choose a language and a voice, and copy the command the page writes. Boubou sets up the rest: what hears, what thinks and what speaks. Each page says which Mac it needs.
 
    ```sh
    npx boubou@beta run qwen3-tts:0.6b-customvoice --voice ono_anna
