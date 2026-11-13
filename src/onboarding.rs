@@ -4,7 +4,7 @@ use crate::{
     profiles::{self, Model, Profile},
     progress, update,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
@@ -48,6 +48,8 @@ unsafe extern "C" {
 pub struct Selection {
     pub model: Model,
     pub offline: bool,
+    /// Who speaks, when a pasted command names a voice.
+    pub voice: Option<String>,
     /// What the device check found, for the startup checklist.
     pub check: Option<String>,
 }
@@ -486,15 +488,24 @@ fn parse_selection(text: &str) -> Result<Selection> {
         );
         args = &args[2..];
     }
-    ensure!(
-        args.len() == 1 || (args.len() == 2 && args[1] == "--offline"),
-        "Use a model name or boubou run MODEL [--offline]."
-    );
-    let model =
-        Model::find(&args[0]).context("Model not supported. Check the name or update Boubou.")?;
+    const USAGE: &str = "Use a model name or boubou run MODEL [--voice NAME] [--offline].";
+    let (id, options) = args.split_first().context(USAGE)?;
+    let (mut offline, mut voice) = (false, None);
+    let mut options = options.iter();
+    while let Some(option) = options.next() {
+        match option.as_str() {
+            "--offline" if !offline => offline = true,
+            "--voice" if voice.is_none() => voice = Some(options.next().context(USAGE)?.clone()),
+            _ => bail!(USAGE),
+        }
+    }
+    let model = Model::find(id).context("Model not supported. Check the name or update Boubou.")?;
+    // A voice the model does not have is named here, where the command can be typed again.
+    model.voiced(voice.as_deref())?;
     Ok(Selection {
         model,
-        offline: args.len() == 2,
+        offline,
+        voice,
         check: None,
     })
 }
@@ -616,6 +627,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
         return Ok(Selection {
             model: setup.model,
             offline: false,
+            voice: None,
             check: Some(device.fit(setup.memory)),
         });
     }
@@ -1270,6 +1282,25 @@ mod tests {
                 .unwrap()
                 .offline
         );
+    }
+
+    #[test]
+    fn a_pasted_voice_is_checked_against_the_model() {
+        // The website writes --voice for Qwen3-TTS, which only a packaged build lists.
+        let error = |command| parse_selection(command).err().unwrap().to_string();
+        for command in [
+            "LFM3-Audio-2B --voice ryan",
+            "npx boubou@beta run LFM3-Audio-2B --offline --voice ryan",
+        ] {
+            assert!(error(command).starts_with("LFM3-Audio-2B has one voice."));
+        }
+        for command in [
+            "LFM3-Audio-2B --voice",
+            "LFM3-Audio-2B --voice ryan --voice aiden",
+            "LFM3-Audio-2B --offline --offline",
+        ] {
+            assert!(error(command).contains("[--voice NAME] [--offline]"));
+        }
     }
 
     #[test]

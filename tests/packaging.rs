@@ -388,6 +388,26 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 }
 
 #[test]
+fn guided_start_runs_a_pasted_command_that_names_a_voice() {
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    // Empty manifests list the packaged voices and stop a run before it downloads.
+    fs::write(release.join("runtime.json"), "{}").unwrap();
+    fs::write(release.join("models.json"), "[]").unwrap();
+    let mut prompt = Prompt::new(&package, true, &[]);
+    prompt.expect(MENU);
+    prompt.send(b"\x1b[A\r");
+    prompt.expect(&["Paste a run command"]);
+    prompt.send(b"npx boubou@beta run qwen3-tts:0.6b-customvoice --voice nobody\r");
+    prompt.expect(&["No voice is named nobody"]);
+    prompt.send(b"\x15npx boubou@beta run qwen3-tts:0.6b-customvoice --voice ono_anna\r");
+    prompt.expect(&["Invalid packaged modular runtime manifest"]);
+    assert_eq!(prompt.finish().code(), Some(1));
+    assert!(!package.0.join("menu-cache").exists());
+}
+
+#[test]
 fn guided_start_through_npx_shows_commands_that_can_be_typed() {
     let package = Package::new();
     let npx = npx_boubou();
