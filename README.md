@@ -5,8 +5,8 @@
 <h1 align="center">Boubou</h1>
 
 <p align="center">
-  <strong>A command-line tool for talking with AI out loud.</strong><br />
-  Open models run on your machine. Speak, pause for a reply, and interrupt whenever you like.
+  <strong>Talk with AI out loud, on your own machine.</strong><br />
+  Open voice models. One command. No account.
 </p>
 
 <p align="center">
@@ -16,59 +16,68 @@
 </p>
 
 <p align="center">
-  Apple Silicon · Linux · <a href="LICENSE">MIT licensed code</a>
+  <a href="https://runboubou.com/"><strong>runboubou.com</strong></a> · <a href="https://runboubou.com/models/">Models</a> · <a href="https://runboubou.com/connect/">Phones and robots</a>
 </p>
 
 <p align="center">
   <img src="assets/boubou-banner.svg" width="1040" alt="Boubou — Talk to AI. Keep it on your machine. Open models. One command. A natural conversation." />
 </p>
 
+## Quick start
+
+```sh
+npx boubou@beta
+```
+
+Apple Silicon Mac with macOS 13.3+ and Node.js 18+. Allow microphone access, then speak.
+
+1. **One command.** `npx boubou@beta` opens Boubou in your terminal.
+2. **Voices that fit your Mac.** Boubou checks the chip, memory and free disk, and lists only the voices this Mac can run.
+3. **Pick a language and a voice.** On [runboubou.com/models](https://runboubou.com/models/), open a model, choose a language and a voice, and copy the command the page writes. Boubou sets up the rest: what hears, what thinks and what speaks.
+
+   ```sh
+   npx boubou@beta run qwen3-tts:0.6b-customvoice --voice ono_anna
+   ```
+
+4. **Talk from a phone or a robot.** `serve` shares the voice: a phone scans a QR code, a robot or app takes an address and a port. [Guides with pictures](https://runboubou.com/connect/)
+
+   ```sh
+   npx boubou@beta serve qwen3-tts:0.6b-customvoice
+   ```
+
 <p align="center">
   <img src="assets/terminal-demo.svg" width="1040" alt="Run boubou, choose a local model, speak, hear a reply, and interrupt by speaking again. An illustrative terminal workflow." />
 </p>
 
 <p align="center">
-  <sub>macOS terminal workflow. Illustrative conversation; setup time condensed.</sub>
+  <sub>Illustrative conversation; setup time condensed.</sub><br />
+  <kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
 </p>
 
-## Quick start
+<details>
+<summary>Linux and building from source</summary>
 
-Apple Silicon Mac, macOS 13.3+ and Node.js 18+:
+The npm command also works on x86-64 Linux with the Liquid models; name one, as the menu needs macOS:
 
 ```sh
 npx boubou@beta run LFM3-Audio-2B
 ```
 
-Allow microphone access. The first run downloads about **1.4 GB**. Then speak English.
-
-The npm launcher checks for updates before a command, at most once an hour. In a terminal it asks before updating to the newest version on your release channel (beta can graduate to stable); in scripts it updates without asking. Updates live in your user cache and need no administrator access. Automatic updates use your user/global npm settings and environment, not the current project's `.npmrc`. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor`, and `BOUBOU_NO_UPDATE_CHECK=1` skip the check; use the native binary directly when you need to pin an installed version.
-
-Models stay in the cache across package updates. The small npm package downloads normally; modular runtime updates reuse verified files from older installations and download changed files only when the release and server support incremental downloads. A first installation or an older runtime without an index uses the full runtime archive.
-
-<kbd>Esc</kbd> pause · <kbd>Enter</kbd> resume · <kbd>Ctrl+C</kbd> quit
-
-On macOS, run `npx boubou@beta` to choose from the menu: the Liquid models and, on Macs with 16 GB of memory and macOS 15 or later, three modular voices (Qwen3-TTS 0.6B, Pocket TTS and Phonon). Its last row opens the [model library](https://runboubou.com/models/) for more voices: copy a command there and paste it into the menu.
-
-<details>
-<summary>Build from source / Linux</summary>
-
-The npm command also works on x86-64 Linux. Build from source for arm64 Linux.
-
-You need Rust 1.91+ and Xcode Command Line Tools on macOS. On Linux, install a C compiler, `pkg-config` and ALSA development headers.
+To build from source, you need Rust 1.91+ and Xcode Command Line Tools on macOS. On Linux, install a C compiler, `pkg-config` and ALSA development headers.
 
 ```sh
 git clone https://github.com/runboubou/boubou.git
 cd boubou
 cargo build --locked --release
-./target/release/boubou run LFM3-Audio-2B
+./target/release/boubou
 ```
 
-On macOS, run `./target/release/boubou` to open the picker shown above. Liquid models also support x86-64 and arm64 Linux with glibc 2.38+, OpenSSL 3 and `libgomp`. The picker currently requires macOS.
+Liquid models also run on arm64 Linux built from source. Linux needs glibc 2.38+, OpenSSL 3 and `libgomp`.
 
 </details>
 
 <details>
-<summary>More commands, phones and browsers</summary>
+<summary>More commands</summary>
 
 ```sh
 npx boubou@beta list
@@ -76,51 +85,22 @@ npx boubou@beta pull LFM3-Omni-2B
 npx --offline boubou@beta run LFM3-Omni-2B --offline
 npx boubou@beta doctor LFM3-Omni-2B
 npx boubou@beta ask LFM3-Omni-2B photo.png "What is in this picture?"
-npx boubou@beta serve LFM3-Audio-2B
-npx boubou@beta serve LFM3-Omni-2B
 ```
 
-`serve` prints a browser link and a QR code for a phone on the same Wi-Fi. Allow microphone access and talk; one client can use the conversation at a time. Keep the printed link private: it contains the access key. Use `--local` to listen only on this computer.
+`serve` prints a browser link and a QR code for a phone on the same Wi-Fi; one client can use the conversation at a time. Keep the printed link private: it contains the access key. `--local` listens only on this computer. By default, `serve` requests a trusted certificate from `lan.runboubou.com`, whose name includes the host's local IP address; its private key stays on the host. `--local`, `--self-signed` or `--offline` avoids that service.
 
-Browser audio travels between the device and this computer over HTTPS; model inference stays on the host. By default, `serve` requests a trusted certificate from `lan.runboubou.com`; the name includes the host's local IP address. Its private key stays on the host. `--local`, `--self-signed` or `--offline` avoids that service. The self-signed fallback requires trusting its certificate in the browser.
+Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted. A robot or app that takes only an address and a port connects without the key: `serve` asks in its terminal before letting that address in and remembers the answer.
 
-Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted. A robot or app whose settings take only an address and a port can connect without the key: `serve` asks in its terminal before letting that address in, and remembers the answer in the cache's `serve/allowed` file.
-
-Use `npx boubou@beta --help` or `npx boubou@beta <command> --help` for options. Models and runtimes are cached in `~/Library/Caches/boubou` on macOS or `~/.cache/boubou` on Linux; set `BOUBOU_HOME` to choose another folder.
+Each model page on the website also lists its versions and how to [swap a component](https://runboubou.com/models/qwen3-tts/#swap-title) of a modular model. Use `npx boubou@beta --help` or `npx boubou@beta <command> --help` for every option.
 
 </details>
 
 <details>
-<summary>Choose who speaks</summary>
+<summary>Updates and the cache</summary>
 
-Qwen3-TTS has nine speakers. `--voice` picks one, with `run` or `serve`:
+The npm launcher checks for updates before a command, at most once an hour. In a terminal it asks before updating to the newest version on your release channel; in scripts it updates without asking. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor` and `BOUBOU_NO_UPDATE_CHECK=1` skip the check.
 
-```sh
-npx boubou@beta run qwen3-tts:0.6b-customvoice --voice ono_anna
-```
-
-| Language | Voices |
-| --- | --- |
-| English | `aiden` (the default), `ryan` |
-| Japanese | `ono_anna` |
-| Korean | `sohee` |
-| Chinese | `vivian`, `serena`, `uncle_fu`, `dylan` (Beijing dialect), `eric` (Sichuan dialect) |
-
-A voice of another language than English hears through Whisper, about 1.6 GB more to download the first time, and answers in the language you speak.
-
-</details>
-
-<details>
-<summary>Swap a component of a modular model</summary>
-
-A modular model is a pinned [speech-to-speech](https://github.com/huggingface/speech-to-speech/tree/v1.1.0) pipeline. Its options, placed after the model, replace the model's own. Change the language model or the speech recognition:
-
-```sh
-npx boubou@beta run qwen3-tts:0.6b-customvoice --model_name mlx-community/Llama-3.2-3B-Instruct-4bit
-npx boubou@beta run qwen3-tts:0.6b-customvoice --stt mlx-audio-whisper
-```
-
-They work with `run` and `serve`; put Boubou's own options, such as `--offline`, before them. These options let the pipeline download from the Hugging Face Hub: Boubou does not verify the models they name and keeps them in your own Hugging Face cache. With `--offline`, or on Linux, name local paths instead.
+Models and runtimes stay in `~/Library/Caches/boubou` on macOS or `~/.cache/boubou` on Linux across updates; set `BOUBOU_HOME` to choose another folder. A runtime update downloads only the files that changed.
 
 </details>
 
@@ -131,9 +111,7 @@ Rust connects your microphone and speakers to a local model server, with echo ca
 - **One audio model:** Liquid models hear, think and speak through llama.cpp.
 - **A modular pipeline:** speech recognition → Qwen → your choice of voice. See [models and runtimes](packaging/qwen/README.md).
 
-**Inference runs on your machine.** No account, cloud model API key or telemetry. With `run`, audio stays on this computer. After downloading the models, use `--offline` to run without a network. With npx, pass `--offline` before the package name too, so npm also stays offline.
-
-Automatic update requests go through npm to your configured registry, using npm's normal headers and authentication. They do not include audio, transcripts or model files.
+**Inference runs on your machine.** No account, cloud model API key or telemetry. With `run`, audio stays on this computer. After downloading the models, use `--offline` to run without a network; with npx, pass `--offline` before the package name too. Update checks go through npm to your configured registry and never include audio, transcripts or model files.
 
 ## Contributors
 
