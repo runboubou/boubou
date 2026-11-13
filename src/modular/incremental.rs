@@ -1,16 +1,21 @@
 //! Reuse verified files from an installed runner; fetch changed gzip members by byte range.
 use super::{Runner, integrity, tree_matches};
-use crate::assets;
+use crate::{
+    assets,
+    profiles::Download,
+    progress::{Phase, Progress},
+};
 use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
-use reqwest::{StatusCode, blocking::Client, header};
+use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Read, Write},
     os::unix::fs::{PermissionsExt, symlink},
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
 };
 
 #[derive(Deserialize)]
@@ -95,135 +100,195 @@ pub(super) fn validate(entries: &[Entry], archive_size: u64) -> Result<()> {
     Ok(())
 }
 
-fn regular_matches(root: &Path, entry: &Entry) -> Result<bool> {
-    let Kind::File { size, sha256, .. } = &entry.kind else {
-        return Ok(false);
-    };
-    // No source path may traverse a symlink, even when it points to the expected bytes.
-    if integrity::safe_destination(root, &entry.path).is_err() {
-        return Ok(false);
+impl Entry {
+    /// Bytes of its gzip member in the archive; directories and links have none.
+    fn compressed(&self) -> u64 {
+        match self.kind {
+            Kind::File {
+                compressed_size, ..
+            } => compressed_size,
+            _ => 0,
+        }
     }
-    let path = root.join(&entry.path);
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return Ok(false);
-    };
-    if !metadata.is_file() || metadata.len() != *size {
-        return Ok(false);
-    }
-    Ok(assets::sha256(File::open(path)?, None)? == *sha256)
 }
 
-/// False only for a legacy manifest, a cold install, or a server without Range support.
-/// Errors preserve all older runtimes and never activate a partly assembled tree.
-pub(super) fn install(
+/// Whether `root` holds `entry`'s file: the same size, and with `hash` the same SHA-256.
+fn holds(root: &Path, entry: &Entry, hash: bool) -> bool {
+    let Kind::File { size, sha256, .. } = &entry.kind else {
+        return false;
+    };
+    let path = root.join(&entry.path);
+    // No source path may traverse a symlink, even when it points to the expected bytes.
+    integrity::safe_destination(root, &entry.path).is_ok()
+        && fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() == *size)
+        && (!hash
+            || File::open(&path)
+                .ok()
+                .and_then(|file| assets::sha256(file, None).ok())
+                .is_some_and(|digest| digest == *sha256))
+}
+
+/// Installed runners to reuse files from. None for a legacy manifest or a cold install, or when
+/// a completed archive (including a resumed .part) already supplies every byte, also offline.
+fn sources(runner: &Runner, root: &Path, installed: &Path) -> Vec<PathBuf> {
+    let complete = ["runner.tar.gz", "runner.tar.gz.part"].iter().any(|name| {
+        fs::symlink_metadata(installed.with_file_name(name))
+            .is_ok_and(|m| m.is_file() && m.len() == runner.size)
+    });
+    if runner.url.is_none() || runner.entries.is_empty() || complete {
+        return Vec::new();
+    }
+    fs::read_dir(root.join("runtimes"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().join("installed"))
+        .filter(|path| fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()))
+        .collect()
+}
+
+/// Compressed bytes an update would fetch, judged by file sizes, so the checklist shows the
+/// update rather than the whole archive. Its download replaces this with the hashed result.
+pub(super) fn estimate(runner: &Runner, root: &Path, installed: &Path) -> Option<u64> {
+    let sources = sources(runner, root, installed);
+    (!sources.is_empty()).then(|| {
+        runner
+            .entries
+            .iter()
+            .filter(|entry| !sources.iter().any(|source| holds(source, entry, false)))
+            .map(Entry::compressed)
+            .sum()
+    })
+}
+
+/// Assembles `installed` from verified files of installed runners plus changed members fetched
+/// by byte range. False means the complete archive is needed instead: nothing to reuse, a server
+/// without ranges, or any failure. Older runtimes are preserved, and a partly assembled tree is
+/// never activated.
+pub(super) fn install(runner: &Runner, root: &Path, installed: &Path, offline: bool) -> bool {
+    let sources = sources(runner, root, installed);
+    let staging = installed.with_extension("partial");
+    let done = !sources.is_empty()
+        && assemble(runner, &sources, &staging, installed, offline).unwrap_or(false);
+    let _ = fs::remove_dir_all(&staging);
+    done
+}
+
+fn assemble(
     runner: &Runner,
-    root: &Path,
+    sources: &[PathBuf],
+    staging: &Path,
     installed: &Path,
     offline: bool,
 ) -> Result<bool> {
-    let Some(url) = runner.url.as_deref().filter(|_| !runner.entries.is_empty()) else {
-        return Ok(false);
-    };
-    // A completed archive (including a resumed .part) already supplies every byte offline.
-    // Let the existing full-archive path verify and install it before considering ranges.
-    let engine = installed.parent().context("Missing runtime parent")?;
-    if ["runner.tar.gz", "runner.tar.gz.part"].iter().any(|name| {
-        fs::symlink_metadata(engine.join(name)).is_ok_and(|m| m.is_file() && m.len() == runner.size)
-    }) {
-        return Ok(false);
-    }
-    let runtimes = root.join("runtimes");
-    let mut sources = Vec::new();
-    if runtimes.is_dir() {
-        for entry in fs::read_dir(&runtimes)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                let path = entry.path().join("installed");
-                if fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
-                    sources.push(path);
-                }
-            }
-        }
-    }
-    if sources.is_empty() {
-        return Ok(false);
-    }
     validate(&runner.entries, runner.size)?;
-    let staging = installed.with_extension("partial");
     if staging.exists() {
-        fs::remove_dir_all(&staging)?;
+        fs::remove_dir_all(staging)?;
     }
-    fs::create_dir_all(&staging)?;
+    fs::create_dir_all(staging)?;
     // All parent paths were checked to be directories; links are created only after files.
     for entry in &runner.entries {
         if matches!(entry.kind, Kind::Dir) {
             fs::create_dir_all(staging.join(&entry.path))?;
         }
     }
-    let client = assets::download_client()?;
-    let mut reused = 0;
-    let mut downloaded = 0;
+    let mut missing = Vec::new();
     for entry in &runner.entries {
-        let Kind::File { executable, .. } = entry.kind else {
+        if !matches!(entry.kind, Kind::File { .. }) {
             continue;
-        };
-        let destination = staging.join(&entry.path);
-        let mut found = false;
-        for source in &sources {
-            if regular_matches(source, entry)? {
-                // Copy rather than hard-link: permissions or later corruption must not alter an old runner.
-                fs::copy(source.join(&entry.path), &destination)?;
-                found = true;
-                reused += 1;
-                break;
-            }
         }
-        if !found {
-            ensure!(
-                !offline,
-                "{} is missing or corrupted and offline mode is enabled.",
-                entry.path.display()
-            );
-            if !fetch_member(client, url, runner.size, entry, &destination)? {
-                fs::remove_dir_all(&staging)?;
-                eprintln!(
-                    "The runner server does not support byte ranges; downloading the complete runner."
-                );
-                return Ok(false);
+        match sources.iter().find(|source| holds(source, entry, true)) {
+            // Copy rather than hard-link: permissions or later corruption must not alter an old runner.
+            Some(source) => {
+                fs::copy(source.join(&entry.path), staging.join(&entry.path))?;
             }
-            downloaded += 1;
+            None => missing.push(entry),
         }
-        fs::set_permissions(
-            &destination,
-            fs::Permissions::from_mode(if executable { 0o755 } else { 0o644 }),
-        )?;
+    }
+    if offline && !missing.is_empty() || !fetch(runner, &missing, staging)? {
+        return Ok(false);
     }
     for entry in &runner.entries {
-        if let Kind::Link { target } = &entry.kind {
-            symlink(target, staging.join(&entry.path))?;
+        match &entry.kind {
+            Kind::File { executable, .. } => fs::set_permissions(
+                staging.join(&entry.path),
+                fs::Permissions::from_mode(if *executable { 0o755 } else { 0o644 }),
+            )?,
+            Kind::Link { target } => symlink(target, staging.join(&entry.path))?,
+            Kind::Dir => (),
         }
     }
     ensure!(
-        tree_matches(&staging, &runner.tree_sha256)?,
+        tree_matches(staging, &runner.tree_sha256)?,
         "Incrementally updated runner failed verification"
     );
     if installed.exists() {
         fs::remove_dir_all(installed)?;
     }
-    fs::rename(&staging, installed)?;
+    fs::rename(staging, installed)?;
     File::open(installed.parent().context("Missing runtime parent")?)?.sync_all()?;
-    eprintln!(
-        "Updated the speech engine: reused {reused} files, downloaded {downloaded} changed files."
-    );
     Ok(true)
 }
 
+/// Fetches the changed members on several connections, each range retried as a download's is.
+/// False when the server ignores byte ranges.
+fn fetch(runner: &Runner, missing: &[&Entry], staging: &Path) -> Result<bool> {
+    if missing.is_empty() {
+        return Ok(true);
+    }
+    let client = assets::download_client()?;
+    let archive = runner.archive();
+    let progress = Progress::file(
+        &format!(
+            "Updating the speech engine: downloading {} changed files, reusing {}",
+            missing.len(),
+            runner
+                .entries
+                .iter()
+                .filter(|e| matches!(e.kind, Kind::File { .. }))
+                .count()
+                - missing.len()
+        ),
+        &staging.with_file_name("runner.tar.gz"),
+        missing.iter().map(|entry| entry.compressed()).sum(),
+        Phase::Download,
+    );
+    let next = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        let workers: Vec<_> = (0..assets::CONNECTIONS.min(missing.len()))
+            .map(|_| {
+                scope.spawn(|| -> Result<bool> {
+                    while let Some(entry) = missing.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        let fetched = fetch_member(
+                            client,
+                            &archive,
+                            entry,
+                            &staging.join(&entry.path),
+                            &progress,
+                        );
+                        if !matches!(fetched, Ok(true)) {
+                            // The complete archive replaces this attempt, so the others stop too.
+                            next.store(missing.len(), Ordering::Relaxed);
+                            return fetched;
+                        }
+                    }
+                    Ok(true)
+                })
+            })
+            .collect();
+        workers.into_iter().try_fold(true, |all, worker| {
+            Ok(worker.join().expect("fetch worker")? && all)
+        })
+    })
+}
+
+/// Fetches and verifies one changed file. False when the server answers with the whole archive.
 fn fetch_member(
     client: &Client,
-    url: &str,
-    archive_size: u64,
+    archive: &Download<'_>,
     entry: &Entry,
     destination: &Path,
+    progress: &Progress,
 ) -> Result<bool> {
     let Kind::File {
         size,
@@ -235,30 +300,12 @@ fn fetch_member(
     else {
         unreachable!()
     };
-    let end = offset + compressed_size - 1;
-    let response = client
-        .get(url)
-        .header(header::RANGE, format!("bytes={offset}-{end}"))
-        .header(header::ACCEPT_ENCODING, "identity")
-        .send()?
-        .error_for_status()?;
-    if response.status() == StatusCode::OK {
+    let Some(bytes) = assets::range(client, archive, *offset, offset + compressed_size, progress)?
+    else {
         return Ok(false);
-    }
-    ensure!(
-        response.status() == StatusCode::PARTIAL_CONTENT
-            && response
-                .headers()
-                .get(header::CONTENT_RANGE)
-                .and_then(|v| v.to_str().ok())
-                == Some(format!("bytes {offset}-{end}/{archive_size}").as_str())
-            && response
-                .content_length()
-                .is_none_or(|length| length == *compressed_size),
-        "Invalid incremental runner byte-range response"
-    );
-    let mut archive = tar::Archive::new(GzDecoder::new(response.take(*compressed_size)));
-    let mut entries = archive.entries()?;
+    };
+    let mut member_archive = tar::Archive::new(GzDecoder::new(bytes.as_slice()));
+    let mut entries = member_archive.entries()?;
     let mut member = entries
         .next()
         .context("Missing incremental runner tar member")??;
@@ -270,7 +317,6 @@ fn fetch_member(
     );
     let mut file = File::create(destination)?;
     std::io::copy(&mut member, &mut file)?;
-    file.flush()?;
     ensure!(
         entries.next().is_none(),
         "Extra incremental runner tar member"
@@ -281,6 +327,7 @@ fn fetch_member(
         "Incremental runner file failed verification"
     );
     file.sync_all()?;
+    progress.advance(*compressed_size);
     Ok(true)
 }
 
@@ -289,9 +336,9 @@ mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
     use std::{
+        io::{Read, Write},
         net::TcpListener,
-        sync::atomic::{AtomicU64, Ordering},
-        thread,
+        sync::atomic::AtomicU64,
         time::Duration,
     };
 
@@ -335,45 +382,56 @@ mod tests {
         )
     }
 
-    // A one-request server returns the requested member and records its Range header.
-    fn server(data: Vec<u8>, status: u16, corrupt: bool) -> (String, thread::JoinHandle<String>) {
+    // Answers one connection per reply, in order: 206 with the requested range, 200 with the
+    // whole archive, or 0 by closing the connection unanswered. Returns the requests.
+    fn server(
+        data: Vec<u8>,
+        replies: Vec<u16>,
+        corrupt: bool,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/runner", listener.local_addr().unwrap());
         let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                let mut byte = [0];
-                assert_eq!(stream.read(&mut byte).unwrap(), 1);
-                request.push(byte[0]);
-            }
-            let request = String::from_utf8(request).unwrap().to_lowercase();
-            let range = request
-                .lines()
-                .find_map(|line| line.strip_prefix("range: bytes="))
-                .unwrap();
-            let (start, end) = range.split_once('-').unwrap();
-            let (start, end): (usize, usize) = (start.parse().unwrap(), end.parse().unwrap());
-            let mut body = if status == 200 {
-                data.clone()
-            } else {
-                data[start..=end].to_vec()
+            let answer = |status: u16| {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    assert_eq!(stream.read(&mut byte).unwrap(), 1);
+                    request.push(byte[0]);
+                }
+                let request = String::from_utf8(request).unwrap().to_lowercase();
+                if status == 0 {
+                    return request;
+                }
+                let range = request
+                    .lines()
+                    .find_map(|line| line.strip_prefix("range: bytes="))
+                    .unwrap();
+                let (start, end) = range.split_once('-').unwrap();
+                let (start, end): (usize, usize) = (start.parse().unwrap(), end.parse().unwrap());
+                let mut body = if status == 200 {
+                    data.clone()
+                } else {
+                    data[start..=end].to_vec()
+                };
+                if corrupt {
+                    body[0] ^= 1;
+                }
+                let header = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    data.len()
+                );
+                let _ = stream
+                    .write_all(header.as_bytes())
+                    .and_then(|()| stream.write_all(&body));
+                request
             };
-            if corrupt {
-                body[0] ^= 1;
-            }
-            let header = format!(
-                "HTTP/1.1 {status} OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",
-                body.len(),
-                data.len()
-            );
-            let _ = stream
-                .write_all(header.as_bytes())
-                .and_then(|()| stream.write_all(&body));
-            request
+            replies.into_iter().map(answer).collect()
         });
         (url, handle)
     }
@@ -408,11 +466,11 @@ mod tests {
             let offset = data.len();
             let (script, part) = member("script", b"new script", offset as u64);
             data.extend(part);
-            let (url, served) = server(data.clone(), 206, false);
+            let (url, served) = server(data.clone(), vec![206], false);
             let runner = runner(vec![library, script], &data, url, &expected)?;
             let installed = root.join("runtimes/new/installed");
-            assert!(install(&runner, root, &installed, false)?);
-            let request = served.join().unwrap();
+            assert!(install(&runner, root, &installed, false));
+            let request = &served.join().unwrap()[0];
             assert!(request.contains(&format!("range: bytes={offset}-{}", data.len() - 1)));
             assert!(tree_matches(&installed, &runner.tree_sha256)?);
             assert_eq!(fs::read(old.join("script"))?, b"old script");
@@ -422,8 +480,36 @@ mod tests {
     }
 
     #[test]
-    fn corrupted_ranges_and_offline_missing_files_do_not_activate() -> Result<()> {
-        for offline in [false, true] {
+    fn changed_files_download_on_several_connections_and_a_dropped_one_is_retried() -> Result<()> {
+        fixture(|root| {
+            let old = root.join("runtimes/old/installed");
+            let expected = root.join("expected");
+            fs::create_dir_all(&old)?;
+            fs::create_dir(&expected)?;
+            let (mut entries, mut data) = (Vec::new(), Vec::new());
+            for name in ["one", "two", "three"] {
+                let new = format!("new {name}");
+                fs::write(old.join(name), b"old")?;
+                fs::write(expected.join(name), &new)?;
+                let (entry, part) = member(name, new.as_bytes(), data.len() as u64);
+                entries.push(entry);
+                data.extend(part);
+            }
+            let (url, served) = server(data.clone(), vec![0, 206, 206, 206], false);
+            let runner = runner(entries, &data, url, &expected)?;
+            let installed = root.join("runtimes/new/installed");
+            assert_eq!(estimate(&runner, root, &installed), Some(data.len() as u64));
+            assert!(install(&runner, root, &installed, false));
+            assert_eq!(served.join().unwrap().len(), 4);
+            assert!(tree_matches(&installed, &runner.tree_sha256)?);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn failures_leave_the_complete_archive_to_download() -> Result<()> {
+        // A corrupted member, a server that ignores ranges, and missing files while offline.
+        for reply in [Some((206, true)), Some((200, false)), None] {
             fixture(|root| {
                 let old = root.join("runtimes/old/installed");
                 fs::create_dir_all(&old)?;
@@ -432,19 +518,21 @@ mod tests {
                 fs::create_dir(&expected)?;
                 fs::write(expected.join("file"), b"new")?;
                 let (entry, data) = member("file", b"new", 0);
-                let (url, served) = if offline {
-                    ("http://127.0.0.1:1".into(), None)
-                } else {
-                    let (url, handle) = server(data.clone(), 206, true);
-                    (url, Some(handle))
+                let (url, served) = match reply {
+                    Some((status, corrupt)) => {
+                        let (url, handle) = server(data.clone(), vec![status], corrupt);
+                        (url, Some(handle))
+                    }
+                    None => ("http://127.0.0.1:1".into(), None),
                 };
                 let runner = runner(vec![entry], &data, url, &expected)?;
                 let installed = root.join("runtimes/new/installed");
-                assert!(install(&runner, root, &installed, offline).is_err());
+                assert!(!install(&runner, root, &installed, reply.is_none()));
                 if let Some(served) = served {
                     served.join().unwrap();
                 }
                 assert!(!installed.exists());
+                assert!(!installed.with_extension("partial").exists());
                 assert_eq!(fs::read(old.join("file"))?, b"old");
                 Ok(())
             })?;
@@ -468,7 +556,7 @@ mod tests {
                 fs::create_dir(&engine)?;
                 fs::write(engine.join(name), &data)?;
                 let installed = engine.join("installed");
-                assert!(!install(&runner, root, &installed, true)?);
+                assert!(!install(&runner, root, &installed, true));
                 let archive = assets::fetch(&runner.archive(), &engine, true)?;
                 assets::install_runtime(&archive, &installed, true, |path| {
                     tree_matches(path, &runner.tree_sha256)
@@ -478,24 +566,6 @@ mod tests {
             })?;
         }
         Ok(())
-    }
-
-    #[test]
-    fn range_ignored_falls_back_without_installing() -> Result<()> {
-        fixture(|root| {
-            let (entry, data) = member("file", b"new", 0);
-            let (url, served) = server(data.clone(), 200, false);
-            assert!(!fetch_member(
-                &Client::builder().no_proxy().build()?,
-                &url,
-                data.len() as u64,
-                &entry,
-                &root.join("file")
-            )?);
-            served.join().unwrap();
-            assert!(!root.join("file").exists());
-            Ok(())
-        })
     }
 
     #[test]

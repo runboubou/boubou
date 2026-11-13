@@ -267,15 +267,17 @@ impl State {
         }
     }
 
-    fn file_started(&mut self, path: &Path, phase: Phase) -> Option<usize> {
+    /// A download counts the `size` it fetches: a cached file that failed verification joins the
+    /// download, and an engine update replaces its estimate with the changed files it fetches.
+    fn file_started(&mut self, path: &Path, phase: Phase, size: u64) -> Option<usize> {
         let index = self.files.iter().position(|f| f.path == path)?;
         if phase == Phase::Download {
             let file = &mut self.files[index];
-            if file.cached {
-                // A cached file failed verification and is downloaded again.
-                file.cached = false;
-                self.download_total += file.size;
-            }
+            self.download_total =
+                self.download_total + size - if file.cached { 0 } else { file.size };
+            self.verify_total = self.verify_total + size - file.size;
+            file.size = size;
+            file.cached = false;
             self.download_done -= file.downloaded;
             file.downloaded = 0;
             self.downloading = Some(index);
@@ -381,11 +383,7 @@ impl State {
                         || (status == Status::Done
                             && Some(*step) != self.steps.last().map(|s| s.0)) =>
                 {
-                    format!(
-                        "{note} · {} / {}",
-                        gb_amount(self.verify_done.min(self.verify_total)),
-                        tui::gb(self.verify_total)
-                    )
+                    format!("{note} · {}", amount(self.verify_done, self.verify_total))
                 }
                 _ => note.clone(),
             };
@@ -417,7 +415,7 @@ impl State {
             );
         }
         let done = self.download_done.min(self.download_total);
-        let amount = format!("{} / {}", gb_amount(done), tui::gb(self.download_total));
+        let amount = amount(done, self.download_total);
         let cells = room.saturating_sub(tui::width(&amount) + 2).min(56);
         format!(
             "     {}  {amount}",
@@ -461,9 +459,15 @@ enum Status {
     Pending,
 }
 
-/// The number part of an amount: "0.62" of "0.62 / 1.42 GB".
-fn gb_amount(bytes: u64) -> String {
-    format!("{:.2}", bytes as f64 / 1e9)
+/// "0.62 / 1.42 GB", or MB below 0.1 GB, such as a speech engine update's few changed files.
+fn amount(done: u64, total: u64) -> String {
+    let (unit, scale) = if total < 100_000_000 {
+        ("MB", 1e6)
+    } else {
+        ("GB", 1e9)
+    };
+    let done = done.min(total) as f64 / scale;
+    format!("{done:.2} / {:.2} {unit}", total as f64 / scale)
 }
 
 /// An eighth-block bar on a shaded track. Without colour the track is drawn with ░.
@@ -590,7 +594,7 @@ impl Progress {
     /// A pinned file being downloaded or hashed. The checklist counts it toward its step.
     pub fn file(label: &str, path: &Path, size: u64, phase: Phase) -> Self {
         let mut index = None;
-        update(|state| index = state.file_started(path, phase));
+        update(|state| index = state.file_started(path, phase, size));
         if index.is_some() {
             update(|state| state.describe(label));
         }
@@ -672,11 +676,7 @@ fn bar(paint: Paint, bytes: u64, total: Option<u64>, tick: usize, room: usize) -
     } else {
         u128::from(bytes.min(total)) * 100 / u128::from(total)
     };
-    let amount = format!(
-        "{percent:3}%  {} / {}",
-        gb_amount(bytes.min(total)),
-        tui::gb(total)
-    );
+    let amount = format!("{percent:3}%  {}", amount(bytes, total));
     let cells = room.saturating_sub(tui::width(&amount) + 2).min(24);
     if cells == 0 {
         return tui::fit(&amount, room);
@@ -871,7 +871,7 @@ mod tests {
         let height = state.frame(paint, width).len();
         state.active = Step::Download;
         let engine = state
-            .file_started(&state.files[2].path.clone(), Phase::Download)
+            .file_started(&state.files[2].path.clone(), Phase::Download, 420_000_000)
             .unwrap();
         state.advanced(Counted::Download(engine), 420_000_000);
         assert!(state.part_done(1));
@@ -931,7 +931,7 @@ mod tests {
     fn a_cached_file_that_fails_verification_joins_the_download() {
         let mut state = fixture(true);
         let present = state.files[0].path.clone();
-        state.file_started(&present, Phase::Download).unwrap();
+        state.file_started(&present, Phase::Download, 4).unwrap();
         assert_eq!(state.download_total, 1_420_000_004);
         let _ = std::fs::remove_dir_all(present.parent().unwrap());
         let mut state = fixture(false);
@@ -940,6 +940,20 @@ mod tests {
         let frame = visible(&state.frame(Paint(Colors::None), 40).join("\n"));
         assert!(frame.contains("✗"));
         assert!(frame.contains("✓  Download"));
+    }
+
+    #[test]
+    fn an_engine_update_counts_the_changed_files_it_fetches() {
+        let mut state = fixture(true);
+        let engine = state.files[2].path.clone();
+        state
+            .file_started(&engine, Phase::Download, 3_000_000)
+            .unwrap();
+        assert_eq!(state.download_total, 1_003_000_000);
+        assert_eq!(state.verify_total, 1_003_000_004);
+        assert_eq!(amount(1_330_000, 1_330_000), "1.33 / 1.33 MB");
+        assert_eq!(amount(620_000_000, 1_420_000_000), "0.62 / 1.42 GB");
+        let _ = std::fs::remove_dir_all(state.files[0].path.parent().unwrap());
     }
 
     #[test]
