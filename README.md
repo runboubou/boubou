@@ -57,11 +57,7 @@ Apple Silicon Mac with macOS 13.3+ and Node.js 18+. Allow microphone access, the
 <details>
 <summary>Linux and building from source</summary>
 
-The npm command also works on x86-64 Linux with the Liquid models; name one, as the menu needs macOS:
-
-```sh
-npx boubou@beta run LFM3-Audio-2B
-```
+`npx boubou@beta` also opens the menu on x86-64 Linux, with the Liquid models that fit the computer. Voices that need an NVIDIA GPU are on [runboubou.com/models](https://runboubou.com/models/): copy a command there and paste it into the menu's last row.
 
 To build from source, you need Rust 1.91+ and Xcode Command Line Tools on macOS. On Linux, install a C compiler, `pkg-config` and ALSA development headers.
 
@@ -69,10 +65,10 @@ To build from source, you need Rust 1.91+ and Xcode Command Line Tools on macOS.
 git clone https://github.com/runboubou/boubou.git
 cd boubou
 cargo build --locked --release
-./target/release/boubou run LFM3-Audio-2B
+./target/release/boubou
 ```
 
-On a Mac, `./target/release/boubou` alone opens the menu. Liquid models also run on arm64 Linux built from source. Linux needs glibc 2.38+, OpenSSL 3 and `libgomp`.
+Liquid models also run on arm64 Linux built from source. Linux needs glibc 2.38+, OpenSSL 3 and `libgomp`.
 
 </details>
 
