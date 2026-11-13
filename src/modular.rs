@@ -470,6 +470,7 @@ pub fn run(
     cache: &Path,
     offline: bool,
     door: Option<&crate::serve::Options>,
+    voice: Option<&crate::profiles::Voice>,
     pipeline: &[String],
 ) -> Result<()> {
     use std::sync::{
@@ -491,7 +492,13 @@ pub fn run(
         .arg(id)
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"))
-        // Later options replace earlier ones, so these replace the model's own.
+        // Later options replace earlier ones: the voice replaces the model's own speaker, and
+        // pipeline options replace both.
+        .args(
+            voice
+                .iter()
+                .flat_map(|(speaker, _)| ["--qwen3_tts_speaker", speaker]),
+        )
         .args(pipeline)
         .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
@@ -508,7 +515,13 @@ pub fn run(
             drop(session);
             chat::from_browser(&mut server, door, cache, &stopped)
         }
-        None => chat::microphone(&mut server, &mut session, cache, &stopped, &language(id)),
+        None => chat::microphone(
+            &mut server,
+            &mut session,
+            cache,
+            &stopped,
+            &voice.map_or_else(|| language(id), |(_, language)| (*language).into()),
+        ),
     };
     crate::check_cancel(&stopped)?;
     result

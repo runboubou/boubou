@@ -680,6 +680,17 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         prompt.expect(&[line]);
     }
     assert!(!prompt.finish().success());
+    // A voice reaches the runner as its speaker, before pipeline options, and opens nothing.
+    let mut prompt = Prompt::new(&package, true, &["run", id, "--voice", "ryan"]);
+    for line in [
+        "selected: --qwen3_tts_speaker",
+        "selected: Ryan",
+        "selected: --port",
+        "selected: hub offline 1",
+    ] {
+        prompt.expect(&[line]);
+    }
+    assert!(!prompt.finish().success());
 }
 
 #[test]

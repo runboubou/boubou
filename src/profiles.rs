@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -316,6 +316,21 @@ pub enum Model {
     Modular(&'static str),
 }
 
+/// A Qwen3-TTS CustomVoice speaker and its own language.
+pub type Voice = (&'static str, &'static str);
+
+pub const VOICES: [Voice; 9] = [
+    ("Aiden", "English"),
+    ("Ryan", "English"),
+    ("Ono_Anna", "Japanese"),
+    ("Sohee", "Korean"),
+    ("Vivian", "Chinese"),
+    ("Serena", "Chinese"),
+    ("Uncle_Fu", "Chinese"),
+    ("Dylan", "Chinese"),
+    ("Eric", "Chinese"),
+];
+
 /// Profiles served by the packaged speech-to-speech runner. Pocket TTS profiles name a stock config.
 pub const MODULAR_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice",
@@ -399,6 +414,37 @@ impl Model {
     pub fn find(id: &str) -> Option<Self> {
         Self::all().find(|model| model.id() == id)
     }
+
+    /// This model speaking as the one of `VOICES` that `--voice` names. A speaker of another
+    /// language than English brings the model's Whisper entry, which hears that language.
+    pub fn voiced(self, voice: Option<&str>) -> Result<(Self, Option<&'static Voice>)> {
+        let Some(voice) = voice else {
+            return Ok((self, None));
+        };
+        let names = VOICES.map(|(name, _)| name.to_lowercase()).join(", ");
+        ensure!(
+            self.id().starts_with("qwen3-tts:"),
+            "{} has one voice. Qwen3-TTS models take --voice: {names}.",
+            self.id()
+        );
+        let speaker = VOICES
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(voice))
+            .with_context(|| format!("No voice is named {voice}. Choose from: {names}."))?;
+        if speaker.1 == "English" || crate::modular::whisper(self.id()) {
+            return Ok((self, Some(speaker)));
+        }
+        let hears = MODULAR_IDS
+            .iter()
+            .find(|id| id.strip_suffix("-whisper") == Some(self.id()))
+            .with_context(|| {
+                format!(
+                    "{} speaks {}. Use qwen3-tts:0.6b-customvoice or qwen3-tts:1.7b-customvoice, which can hear it.",
+                    speaker.0, speaker.1
+                )
+            })?;
+        Ok((Self::Modular(hears), Some(speaker)))
+    }
 }
 
 pub fn value_parser() -> impl TypedValueParser<Value = Model> {
@@ -427,5 +473,40 @@ mod tests {
                 .to_string()
                 .contains("Apple Silicon Macs and x86-64 or arm64 Linux")
         );
+    }
+
+    #[test]
+    fn a_voice_names_its_speaker_and_brings_the_ear_for_its_language() {
+        let voiced = |id, voice| {
+            Model::Modular(id)
+                .voiced(Some(voice))
+                .map(|(model, voice)| (model.id(), *voice.unwrap()))
+                .map_err(|error| error.to_string())
+        };
+        let small = "qwen3-tts:0.6b-customvoice";
+        assert_eq!(voiced(small, "RYAN"), Ok((small, ("Ryan", "English"))));
+        let whisper = "qwen3-tts:0.6b-customvoice-whisper";
+        for id in [small, whisper] {
+            assert_eq!(
+                voiced(id, "ono_anna"),
+                Ok((whisper, ("Ono_Anna", "Japanese")))
+            );
+        }
+        assert_eq!(
+            voiced(whisper, "aiden"),
+            Ok((whisper, ("Aiden", "English")))
+        );
+        // A model size without a Whisper entry cannot hear the speaker's language.
+        let error = voiced("qwen3-tts:1.7b-customvoice-9b", "sohee").unwrap_err();
+        assert!(error.starts_with("Sohee speaks Korean."), "{error}");
+        assert!(voiced(small, "nobody").unwrap_err().contains("ono_anna"));
+        assert!(
+            voiced("kokoro:82m", "ryan")
+                .unwrap_err()
+                .starts_with("kokoro:82m has one voice.")
+        );
+        let (model, voice) = Model::Liquid(&DEFAULT).voiced(None).unwrap();
+        assert!(model.id() == DEFAULT.id && voice.is_none());
+        assert!(Model::Liquid(&DEFAULT).voiced(Some("ryan")).is_err());
     }
 }

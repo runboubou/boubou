@@ -75,6 +75,10 @@ enum Action {
         /// Save spoken replies to a PCM16 mono 24 kHz WAV (requires --input).
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
+        /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
+        /// sohee, vivian, serena, uncle_fu, dylan and eric.
+        #[arg(long)]
+        voice: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as
         /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -89,6 +93,10 @@ enum Action {
         offline: bool,
         #[command(flatten)]
         door: serve::Options,
+        /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
+        /// sohee, vivian, serena, uncle_fu, dylan and eric.
+        #[arg(long)]
+        voice: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as
         /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -235,6 +243,7 @@ fn run() -> Result<()> {
                     manual: false,
                     input: Vec::new(),
                     output: None,
+                    voice: None,
                     pipeline: Vec::new(),
                 }
             }
@@ -354,19 +363,17 @@ fn run() -> Result<()> {
             manual,
             input,
             output,
+            voice,
             pipeline,
         } => {
-            let _checklist = checklist(
-                format!(
-                    "{program} run {}{}",
-                    model.id(),
-                    if offline { " --offline" } else { "" }
-                ),
-                check.take(),
-                model,
-                &cache,
-                true,
+            let command = format!(
+                "{program} run {}{}{}",
+                model.id(),
+                voice_option(&voice),
+                if offline { " --offline" } else { "" }
             );
+            let (model, voice) = model.voiced(voice.as_deref())?;
+            let _checklist = checklist(command, check.take(), model, &cache, true);
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
                 profiles::Model::Modular(id) => {
@@ -378,7 +385,7 @@ fn run() -> Result<()> {
                         io::stdin().is_terminal(),
                         "The modular runtime needs a terminal."
                     );
-                    return modular::run(id, &cache, offline, None, &pipeline);
+                    return modular::run(id, &cache, offline, None, voice, &pipeline);
                 }
             };
             if input.is_empty() {
@@ -401,17 +408,14 @@ fn run() -> Result<()> {
             model,
             offline,
             door,
+            voice,
             pipeline,
         } => {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let door = if offline { door.offline() } else { door };
-            let _checklist = checklist(
-                format!("{program} serve {}", model.id()),
-                check.take(),
-                model,
-                &cache,
-                true,
-            );
+            let command = format!("{program} serve {}{}", model.id(), voice_option(&voice));
+            let (model, voice) = model.voiced(voice.as_deref())?;
+            let _checklist = checklist(command, check.take(), model, &cache, true);
             match model {
                 profiles::Model::Liquid(profile) => {
                     with_liquid(profile, &cache, offline, |chat, stopped| {
@@ -419,7 +423,7 @@ fn run() -> Result<()> {
                     })
                 }
                 profiles::Model::Modular(id) => {
-                    modular::run(id, &cache, offline, Some(&door), &pipeline)
+                    modular::run(id, &cache, offline, Some(&door), voice, &pipeline)
                 }
             }
         }
@@ -462,6 +466,14 @@ fn with_liquid(
 }
 
 /// The startup checklist for `run`, `serve` and `pull` on a terminal.
+/// How a command names the voice it was given.
+fn voice_option(voice: &Option<String>) -> String {
+    voice
+        .iter()
+        .map(|voice| format!(" --voice {voice}"))
+        .collect()
+}
+
 fn checklist(
     command: String,
     check: Option<String>,
@@ -1199,6 +1211,16 @@ mod tests {
                 )),
                 (true, "--stt whisper --language auto".into())
             );
+        }
+        let voice = |line: &str| match Cli::try_parse_from(line.split(' ')).unwrap().command {
+            Some(Action::Run { voice, .. } | Action::Serve { voice, .. }) => voice,
+            _ => unreachable!(),
+        };
+        for command in ["run", "serve"] {
+            let line = format!("boubou {command} {id} --voice ono_anna --stt whisper");
+            assert_eq!(voice(&line).as_deref(), Some("ono_anna"));
+            assert_eq!(parse(&line), (false, "--stt whisper".into()));
+            assert_eq!(voice(&format!("boubou {command} {id}")), None);
         }
         // The first pipeline option ends Boubou's own: a later --port goes to the pipeline.
         assert_eq!(
