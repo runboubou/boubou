@@ -415,6 +415,19 @@ impl Model {
         Self::all().find(|model| model.id() == id)
     }
 
+    /// Boubou's estimate of the memory, in GiB, this model needs for speech and conversation,
+    /// where it has one. A Whisper entry takes its English preset's: measured after a short
+    /// conversation, its runner peaked at 9.1 GB against the preset's 10 GB.
+    pub fn memory_gib(self) -> Option<u64> {
+        match self {
+            Self::Liquid(profile) => profile.memory_budget.map(|bytes| bytes >> 30),
+            Self::Modular(id) => presets()
+                .iter()
+                .find(|preset| preset.id == id.strip_suffix("-whisper").unwrap_or(id))
+                .map(|preset| preset.memory_gib),
+        }
+    }
+
     /// This model speaking as the one of `VOICES` that `--voice` names. A speaker of another
     /// language than English brings the model's Whisper entry, which hears that language.
     pub fn voiced(self, voice: Option<&str>) -> Result<(Self, Option<&'static Voice>)> {

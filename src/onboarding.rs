@@ -117,6 +117,23 @@ impl Device {
         })
     }
 
+    /// The checklist's line: this Mac's memory against what the voice needs.
+    fn fit(&self, needs: u64) -> String {
+        let memory = format!(
+            "{:.0} GiB memory · needs about {:.0} GiB",
+            self.memory as f64 / GIB as f64,
+            needs as f64 / GIB as f64
+        );
+        if self.memory < needs + 2 * GIB {
+            format!("{memory} · may be slow or fail to start")
+        } else {
+            format!(
+                "{} · {memory}",
+                self.chip.as_deref().unwrap_or("Apple Silicon")
+            )
+        }
+    }
+
     fn check(&self, setup: &Setup) -> Result<()> {
         ensure!(
             self.apple_silicon,
@@ -465,14 +482,16 @@ pub fn start(cache: &Path) -> Result<Selection> {
         return Ok(Selection {
             model: setup.model,
             offline: false,
-            check: Some(format!(
-                "{} · {:.0} GiB memory · needs about {:.0} GiB",
-                device.chip.as_deref().unwrap_or("Apple Silicon"),
-                device.memory as f64 / GIB as f64,
-                setup.memory as f64 / GIB as f64
-            )),
+            check: Some(device.fit(setup.memory)),
         });
     }
+}
+
+/// What a command typed by hand tells its checklist: this Mac's memory against the model's
+/// estimate, before anything is downloaded.
+pub fn fit(model: Model, cache: &Path) -> Option<String> {
+    let needs = model.memory_gib()? * GIB;
+    Some(Device::detect(cache).ok()?.fit(needs))
 }
 
 pub fn explain_failure(error: anyhow::Error) -> anyhow::Error {
@@ -1011,6 +1030,35 @@ mod tests {
             };
             assert_eq!(actual, expected, "{total} GiB");
         }
+    }
+
+    #[test]
+    fn the_checklist_says_when_a_mac_has_less_memory_than_the_voice_needs() {
+        let mut device = Device {
+            chip: Some("Apple M4".into()),
+            apple_silicon: true,
+            macos: (15, 0, 0),
+            memory: 16 * GIB,
+            available: 16 * GIB,
+            disk: 100 * GIB,
+        };
+        let needs = |id| Model::Modular(id).memory_gib().unwrap() * GIB;
+        assert_eq!(
+            device.fit(needs("qwen3-tts:0.6b-customvoice")),
+            "Apple M4 · 16 GiB memory · needs about 12 GiB"
+        );
+        // The Whisper entry a voice of another language starts needs what its English preset does.
+        device.memory = 8 * GIB;
+        assert_eq!(
+            device.fit(needs("qwen3-tts:0.6b-customvoice-whisper")),
+            "8 GiB memory · needs about 12 GiB · may be slow or fail to start"
+        );
+        assert_eq!(
+            device.fit(Model::Liquid(&DEFAULT).memory_gib().unwrap() * GIB),
+            "Apple M4 · 8 GiB memory · needs about 6 GiB"
+        );
+        // Models without an estimate keep the plain system line.
+        assert_eq!(Model::Modular("supertonic:3").memory_gib(), None);
     }
 
     #[test]
