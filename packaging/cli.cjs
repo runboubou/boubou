@@ -92,6 +92,23 @@ function npm(command, timeout) {
   });
 }
 
+// Asks in the terminal through a short-lived shell, so this process never reads the input the
+// command needs. Without a terminal, such as in scripts, the update goes ahead without asking.
+function agree(question) {
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return Promise.resolve(true);
+  return new Promise((accept) => {
+    let answer = "";
+    activeChild = spawn("/bin/sh", ["-c", 'printf "%s" "$1" >&2; read -r answer && printf "%s" "$answer"', "sh", question],
+      { stdio: ["inherit", "pipe", "inherit"] });
+    activeChild.stdout.on("data", (chunk) => { answer += chunk; });
+    activeChild.once("error", () => accept(false));
+    activeChild.once("close", (code) => {
+      activeChild = undefined;
+      accept(code === 0 && !shutdownSignal && !/^n/i.test(answer.trim()));
+    });
+  });
+}
+
 async function selectPackage() {
   const own = JSON.parse(await fs.readFile(join(__dirname, "package.json"), "utf8")).version;
   let selected = { version: own, directory: __dirname };
@@ -122,6 +139,7 @@ async function selectPackage() {
     let destination = join(versions, newest);
     let directory = join(destination, "node_modules", "boubou");
     if (await ready(directory, newest)) return { version: newest, directory };
+    if (!await agree(`Boubou ${newest} is available (you have ${selected.version}). Update now? [Y/n] `)) return selected;
     console.error(`Updating Boubou ${selected.version} → ${newest}…`);
     await fs.mkdir(versions, { recursive: true });
     staging = await fs.mkdtemp(join(versions, ".install-"));

@@ -161,6 +161,31 @@ test("offline and disabled checks reuse the newest completed version without npm
   assert.deepEqual(await f.calls(), []);
 });
 
+// Runs the launcher on a pseudo-terminal through Python's pty module, typing `input`.
+async function onTerminal(f, input) {
+  await fs.rm(path.join(f.cache, "npm", "checked"), { force: true });
+  const child = spawn("python3", ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", process.execPath, path.join(f.original, "cli.cjs"), "list"], {
+    env: f.env, stdio: ["pipe", "pipe", "inherit"],
+  });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 15000);
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stdin.write(input);
+  await new Promise((resolve) => child.once("close", resolve));
+  clearTimeout(timer);
+  return output.replace(/\r/g, "");
+}
+
+test("in a terminal the launcher asks before updating, and Enter means yes", async (t) => {
+  for (const [input, version, calls] of [["n\n", "0.1.0-beta.10", ["view"]], ["\n", "0.1.0-beta.11", ["view", "install"]]]) {
+    const f = await fixture(t);
+    const output = await onTerminal(f, input);
+    assert.ok(output.includes("Boubou 0.1.0-beta.11 is available (you have 0.1.0-beta.10). Update now? [Y/n]"), output);
+    assert.equal(JSON.parse(output.match(/\{"version".*\}/)[0]).version, version, output);
+    assert.deepEqual((await f.calls()).map((args) => args[0]), calls);
+  }
+});
+
 test("npm is asked at most once an hour, also after a failed check", async (t) => {
   const f = await fixture(t);
   assert.equal(result(await f.run(["list"], { FAKE_VIEW_FAIL: "1" })).version, "0.1.0-beta.10");
