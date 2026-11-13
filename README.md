@@ -41,7 +41,7 @@ npx boubou@beta run LFM3-Audio-2B
 
 Allow microphone access. The first run downloads about **1.4 GB**. Then speak English.
 
-The npm launcher checks for updates before each command and runs the newest version on your release channel (beta can graduate to stable). Updates live in your user cache and need no administrator access. Automatic updates use your user/global npm settings and environment, not the current project's `.npmrc`. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor`, and `BOUBOU_NO_UPDATE_CHECK=1` skip the check; use the native binary directly when you need to pin an installed version.
+The npm launcher checks for updates before a command, at most once an hour, and runs the newest version on your release channel (beta can graduate to stable). Updates live in your user cache and need no administrator access. Automatic updates use your user/global npm settings and environment, not the current project's `.npmrc`. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor`, and `BOUBOU_NO_UPDATE_CHECK=1` skip the check; use the native binary directly when you need to pin an installed version.
 
 Models stay in the cache across package updates. The small npm package downloads normally; modular runtime updates reuse verified files from older installations and download changed files only when the release and server support incremental downloads. A first installation or an older runtime without an index uses the full runtime archive.
 

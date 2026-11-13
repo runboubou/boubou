@@ -426,6 +426,8 @@ fn npm_launcher_does_not_repeat_a_stale_native_update_notice_after_its_check() {
     fs::write(cache.join("npm-tags.json"), r#"{"latest":"99.0.0"}"#).unwrap();
     // The launcher checks first; the Rust notice cache from older versions no longer applies.
     for command in [package.npx(), package.placed("lib/node_modules/boubou")] {
+        // Each start asks npm, as if the launcher's hour had passed.
+        let _ = fs::remove_file(cache.join("npm/checked"));
         let output = Prompt::start(
             &package,
             package.checking(command),
@@ -450,6 +452,7 @@ fn guided_start_ignores_stale_native_update_notices_after_the_launcher_check() {
     fs::create_dir(&cache).unwrap();
     fs::write(cache.join("npm-tags.json"), r#"{"latest":"99.0.0"}"#).unwrap();
     for command in [package.npx(), package.placed("lib/node_modules/boubou")] {
+        let _ = fs::remove_file(cache.join("npm/checked"));
         let mut prompt = Prompt::start(&package, package.checking(command), true, &[], true);
         prompt.expect(MENU);
         prompt.expect(&["ctrl+c exit"]);

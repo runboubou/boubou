@@ -105,7 +105,12 @@ async function fixture(t, version = "0.1.0-beta.10") {
     });
     return text.trim() ? text.trim().split("\n").map(JSON.parse) : [];
   };
-  return { root, cache, original, newer, env, start, calls, run: async (args, extra) => start(args, extra).done };
+  // Each run asks npm as if an hour had passed; the interval has its own test.
+  const run = async (args, extra) => {
+    await fs.rm(path.join(cache, "npm", "checked"), { force: true });
+    return start(args, extra).done;
+  };
+  return { root, cache, original, newer, env, start, calls, run };
 }
 
 function result(run) {
@@ -154,6 +159,17 @@ test("offline and disabled checks reuse the newest completed version without npm
     [["list"], { npm_config_offline: "true" }],
   ]) assert.equal(result(await f.run(args, env)).version, "0.1.0-beta.11");
   assert.deepEqual(await f.calls(), []);
+});
+
+test("npm is asked at most once an hour, also after a failed check", async (t) => {
+  const f = await fixture(t);
+  assert.equal(result(await f.run(["list"], { FAKE_VIEW_FAIL: "1" })).version, "0.1.0-beta.10");
+  assert.equal(result(await f.start(["list"]).done).version, "0.1.0-beta.10");
+  assert.deepEqual((await f.calls()).map((args) => args[0]), ["view"]);
+  const hourAgo = new Date(Date.now() - 3600e3);
+  await fs.utimes(path.join(f.cache, "npm", "checked"), hourAgo, hourAgo);
+  assert.equal(result(await f.start(["list"]).done).version, "0.1.0-beta.11");
+  assert.deepEqual((await f.calls()).map((args) => args[0]), ["view", "view", "install"]);
 });
 
 test("the newest cached launcher owns the next online update", async (t) => {
