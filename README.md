@@ -69,10 +69,10 @@ To build from source, you need Rust 1.91+ and Xcode Command Line Tools on macOS.
 git clone https://github.com/runboubou/boubou.git
 cd boubou
 cargo build --locked --release
-./target/release/boubou
+./target/release/boubou run LFM3-Audio-2B
 ```
 
-Liquid models also run on arm64 Linux built from source. Linux needs glibc 2.38+, OpenSSL 3 and `libgomp`.
+On a Mac, `./target/release/boubou` alone opens the menu. Liquid models also run on arm64 Linux built from source. Linux needs glibc 2.38+, OpenSSL 3 and `libgomp`.
 
 </details>
 
