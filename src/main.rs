@@ -1,5 +1,5 @@
 // macOS compiles every module, so its build is the authoritative dead-code check.
-// On Linux, items used only by guided startup and the macOS audio helper are expected to be unused.
+// On Linux, items used only by the macOS menu and audio helper are expected to be unused.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -11,7 +11,6 @@ mod backend;
 mod liquid;
 mod media;
 mod modular;
-#[cfg(target_os = "macos")]
 mod onboarding;
 mod profiles;
 mod progress;
@@ -232,25 +231,18 @@ fn run() -> Result<()> {
                 println!();
                 return Ok(());
             }
-            #[cfg(target_os = "macos")]
-            {
-                update::check(&cache);
-                let selected = onboarding::start(&cache)?;
-                check = selected.check;
-                Action::Run {
-                    model: selected.model,
-                    offline: selected.offline,
-                    manual: false,
-                    input: Vec::new(),
-                    output: None,
-                    voice: None,
-                    pipeline: Vec::new(),
-                }
+            update::check(&cache);
+            let selected = onboarding::start(&cache)?;
+            check = selected.check;
+            Action::Run {
+                model: selected.model,
+                offline: selected.offline,
+                manual: false,
+                input: Vec::new(),
+                output: None,
+                voice: None,
+                pipeline: Vec::new(),
             }
-            #[cfg(not(target_os = "macos"))]
-            bail!(
-                "Guided startup currently requires an Apple Silicon Mac. Use --help for commands."
-            );
         }
     };
     if let Action::Run {
@@ -428,7 +420,6 @@ fn run() -> Result<()> {
             }
         }
     })();
-    #[cfg(target_os = "macos")]
     if guided {
         return result.map_err(onboarding::explain_failure);
     }

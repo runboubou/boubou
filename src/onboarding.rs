@@ -2,7 +2,7 @@ use crate::tui::{self, BOLD, DIM, Paint, RESET, REVERSE};
 use crate::{
     Cancelled, modular,
     profiles::{self, Model, Profile},
-    update,
+    progress, update,
 };
 use anyhow::{Context, Result, ensure};
 use crossterm::{
@@ -23,13 +23,21 @@ use std::{
     io::{self, Write},
     os::unix::ffi::OsStrExt,
     path::Path,
+    process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
 const GIB: u64 = 1024 * 1024 * 1024;
+/// What the menu calls the computer it runs on.
+const COMPUTER: &str = if cfg!(target_os = "macos") {
+    "Mac"
+} else {
+    "computer"
+};
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn mach_port_deallocate(
         task: libc::mach_port_t,
@@ -44,17 +52,82 @@ pub struct Selection {
     pub check: Option<String>,
 }
 
+/// The system this computer runs. Only on a Mac do voices need a chip and a version of it.
+enum System {
+    Mac {
+        apple_silicon: bool,
+        version: (u32, u32, u32),
+    },
+    /// The distribution, such as "Ubuntu 24.04". A Mac build makes one only in tests.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    Linux(String),
+}
+
 struct Device {
+    /// The chip or processor, such as "Apple M4".
     chip: Option<String>,
-    apple_silicon: bool,
-    macos: (u32, u32, u32),
+    system: System,
     memory: u64,
     available: u64,
     disk: u64,
 }
 
+/// The value of `key` in lines of `key<separator>value`, as /proc and /etc/os-release write them.
+#[cfg(any(target_os = "linux", test))]
+fn value<'a>(text: &'a str, key: &str, separator: char) -> Option<&'a str> {
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once(separator)?;
+        (name.trim() == key).then(|| value.trim().trim_matches('"'))
+    })
+}
+
+/// Total and available memory from /proc/meminfo. MemTotal leaves out what the kernel and
+/// firmware keep, so an 8 GiB computer reads about 7.6 GiB: the total rounds up to a whole GiB.
+#[cfg(any(target_os = "linux", test))]
+fn meminfo(text: &str) -> Option<(u64, u64)> {
+    let bytes = |key| {
+        let kib = value(text, key, ':')?.strip_suffix("kB")?.trim();
+        Some(kib.parse::<u64>().ok()? * 1024)
+    };
+    let total = bytes("MemTotal")?.div_ceil(GIB) * GIB;
+    Some((total, bytes("MemAvailable")?.min(total)))
+}
+
+/// A processor as /proc/cpuinfo names it, without the marks, core count and clock speed:
+/// "AMD Ryzen 9 9950X 16-Core Processor" is "AMD Ryzen 9 9950X".
+#[cfg(any(target_os = "linux", test))]
+fn processor(name: &str) -> String {
+    name.replace("(R)", "")
+        .replace("(TM)", "")
+        .split_whitespace()
+        .take_while(|word| {
+            !["CPU", "@", "with", "Processor"].contains(word) && !word.ends_with("-Core")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl Device {
     fn detect(cache: &Path) -> Result<Self> {
+        let existing = cache
+            .ancestors()
+            .find(|p| p.exists())
+            .unwrap_or(Path::new("."));
+        let path = CString::new(existing.as_os_str().as_bytes())?;
+        let mut volume = unsafe { std::mem::zeroed::<libc::statvfs>() };
+        ensure!(
+            unsafe { libc::statvfs(path.as_ptr(), &mut volume) } == 0,
+            "Cannot check free space on the model cache volume."
+        );
+        // The block count is 32 bits wide on macOS and 64 on Linux.
+        #[allow(clippy::useless_conversion)]
+        let blocks = u64::from(volume.f_bavail);
+        Self::here(blocks.saturating_mul(volume.f_frsize))
+    }
+
+    /// This Mac's chip, system and memory, with `disk` free for the cache.
+    #[cfg(target_os = "macos")]
+    fn here(disk: u64) -> Result<Self> {
         let mut memory = 0_u64;
         let mut length = size_of_val(&memory);
         let mut stats = unsafe { std::mem::zeroed::<libc::vm_statistics64>() };
@@ -90,16 +163,6 @@ impl Device {
         // Inactive pages may be reclaimed; this is a snapshot estimate, not a speed guarantee.
         let available =
             (u64::from(stats.free_count) + u64::from(stats.inactive_count)) * page as u64;
-        let existing = cache
-            .ancestors()
-            .find(|p| p.exists())
-            .unwrap_or(Path::new("."));
-        let path = CString::new(existing.as_os_str().as_bytes())?;
-        let mut volume = unsafe { std::mem::zeroed::<libc::statvfs>() };
-        ensure!(
-            unsafe { libc::statvfs(path.as_ptr(), &mut volume) } == 0,
-            "Cannot check free space on the model cache volume."
-        );
         Ok(Self {
             chip: std::process::Command::new("/usr/sbin/sysctl")
                 .args(["-n", "machdep.cpu.brand_string"])
@@ -109,15 +172,50 @@ impl Device {
                 .and_then(|output| String::from_utf8(output.stdout).ok())
                 .map(|name| name.trim().to_owned())
                 .filter(|name| !name.is_empty()),
-            apple_silicon: cfg!(target_arch = "aarch64"),
-            macos: modular::macos_version()?,
+            system: System::Mac {
+                apple_silicon: cfg!(target_arch = "aarch64"),
+                version: modular::macos_version()?,
+            },
             memory,
             available: available.min(memory),
-            disk: u64::from(volume.f_bavail).saturating_mul(volume.f_frsize),
+            disk,
         })
     }
 
-    /// The checklist's line: this Mac's memory against what the voice needs.
+    /// This computer's processor, distribution and memory, with `disk` free for the cache.
+    #[cfg(target_os = "linux")]
+    fn here(disk: u64) -> Result<Self> {
+        let read = |path| std::fs::read_to_string(path).unwrap_or_default();
+        let (memory, available) =
+            meminfo(&read("/proc/meminfo")).context("Cannot read this computer's memory.")?;
+        let release = read("/etc/os-release");
+        let system: Vec<_> = ["NAME", "VERSION_ID"]
+            .iter()
+            .filter_map(|key| value(&release, key, '='))
+            .collect();
+        Ok(Self {
+            chip: value(&read("/proc/cpuinfo"), "model name", ':').map(processor),
+            system: System::Linux(if system.is_empty() {
+                "Linux".into()
+            } else {
+                system.join(" ")
+            }),
+            memory,
+            available,
+            disk,
+        })
+    }
+
+    /// The chip's name, or what an unnamed one is known by.
+    fn chip(&self) -> &str {
+        self.chip.as_deref().unwrap_or(match self.system {
+            System::Mac { .. } => "Apple Silicon",
+            System::Linux(_) if cfg!(target_arch = "aarch64") => "arm64",
+            System::Linux(_) => "x86-64",
+        })
+    }
+
+    /// The checklist's line: this computer's memory against what the voice needs.
     fn fit(&self, needs: u64) -> String {
         let memory = format!(
             "{:.0} GiB memory · needs about {:.0} GiB",
@@ -127,27 +225,32 @@ impl Device {
         if self.memory < needs + 2 * GIB {
             format!("{memory} · may be slow or fail to start")
         } else {
-            format!(
-                "{} · {memory}",
-                self.chip.as_deref().unwrap_or("Apple Silicon")
-            )
+            format!("{} · {memory}", self.chip())
         }
     }
 
     fn check(&self, setup: &Setup) -> Result<()> {
-        ensure!(
-            self.apple_silicon,
-            "Voice chat requires an Apple Silicon Mac."
-        );
-        let (major, minor, patch) = setup.resources.min_macos;
-        ensure!(
-            self.macos >= setup.resources.min_macos,
-            "This voice needs macOS {major}.{minor}.{patch} or later. Update macOS and retry."
-        );
+        if let System::Mac {
+            apple_silicon,
+            version,
+        } = self.system
+        {
+            ensure!(apple_silicon, "Voice chat requires an Apple Silicon Mac.");
+            let (major, minor, patch) = setup.resources.min_macos;
+            ensure!(
+                version >= setup.resources.min_macos,
+                "This voice needs macOS {major}.{minor}.{patch} or later. Update macOS and retry."
+            );
+        }
         ensure!(
             self.memory >= setup.memory + 2 * GIB,
-            "This voice needs about {:.0} GiB for speech and conversation, plus macOS.",
-            setup.memory as f64 / GIB as f64
+            "This voice needs about {:.0} GiB for speech and conversation, plus {}.",
+            setup.memory as f64 / GIB as f64,
+            if cfg!(target_os = "macos") {
+                "macOS"
+            } else {
+                "Linux"
+            }
         );
         ensure!(
             self.available >= setup.memory,
@@ -163,15 +266,17 @@ impl Device {
     }
 
     fn summary(&self) -> Vec<String> {
-        let chip = if self.apple_silicon {
-            self.chip.as_deref().unwrap_or("Apple Silicon")
-        } else {
-            "Unsupported architecture"
+        let system = match &self.system {
+            System::Mac {
+                version: (major, minor, patch),
+                ..
+            } => format!("macOS {major}.{minor}.{patch}"),
+            System::Linux(distribution) => distribution.clone(),
         };
-        let (major, minor, patch) = self.macos;
         vec![
             format!(
-                "{chip} · macOS {major}.{minor}.{patch} · {:.0} GiB memory",
+                "{} · {system} · {:.0} GiB memory",
+                self.chip(),
                 self.memory as f64 / GIB as f64
             ),
             format!(
@@ -240,7 +345,7 @@ impl Setup {
             command: Some(format!("{} run {}", update::program(), self.model.id())),
             about: vec![
                 format!(
-                    "Needs about {:.0} GiB memory (estimate) · {} GiB Mac or larger · {} free disk",
+                    "Needs about {:.0} GiB memory (estimate) · {} GiB {COMPUTER} or larger · {} free disk",
                     self.memory as f64 / GIB as f64,
                     self.recommended_memory_gib,
                     tui::gb(self.resources.disk)
@@ -275,11 +380,29 @@ impl Row {
 /// Every voice and its run command.
 const LIBRARY: &str = "runboubou.com/models";
 
+/// The command that opens a web page, where a desktop can show one. Without a display, as over
+/// SSH, xdg-open would start a text browser in the menu's terminal.
+fn browser() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("open")
+    } else {
+        ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|display| !display.is_empty()))
+            .then_some("xdg-open")
+    }
+}
+
 /// A menu's last row: the model library opens, and a command copied there pastes into Boubou.
 fn more_voices() -> Row {
     Row {
         about: vec![
-            "Opens the model library in your browser.".into(),
+            if browser().is_some() {
+                "Opens the model library in your browser."
+            } else {
+                "Open the model library in a browser."
+            }
+            .into(),
             "Copy a command there, then paste it here.".into(),
         ],
         ..Row::action(&format!("More voices at {LIBRARY}"))
@@ -378,9 +501,19 @@ fn parse_selection(text: &str) -> Result<Selection> {
 
 fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
     // Without a browser, as over SSH, the paste screen still names the address.
-    let _ = std::process::Command::new("open")
-        .arg(format!("https://{LIBRARY}/"))
-        .output();
+    if let Some(open) = browser() {
+        let mut open = std::process::Command::new(open);
+        open.arg(format!("https://{LIBRARY}/"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // `open` returns at once. xdg-open may stay until the browser closes, so it runs on.
+        if cfg!(target_os = "macos") {
+            let _ = open.status();
+        } else if let Ok(mut browser) = open.spawn() {
+            std::thread::spawn(move || browser.wait());
+        }
+    }
     let mut text = String::new();
     let mut notice = String::new();
     while screen.input(&mut text, &notice)? {
@@ -419,7 +552,8 @@ pub fn start(cache: &Path) -> Result<Selection> {
             Setup::liquid(&profiles::OMNI, cache)?,
         ];
         let mut unavailable = Vec::new();
-        if modular::packaged() {
+        // On Linux the packaged voices need an NVIDIA GPU: the model library has their commands.
+        if cfg!(target_os = "macos") && modular::packaged() {
             for preset in profiles::presets().iter().filter(|preset| preset.guided) {
                 match modular::requirements(preset.id, cache) {
                     Ok(resources) => setups.push(Setup {
@@ -439,9 +573,9 @@ pub fn start(cache: &Path) -> Result<Selection> {
             if let Err(error) = device.check(&setups[0]) {
                 details.push(error.to_string());
             }
-            "No English voice fits this Mac right now"
+            format!("No English voice fits this {COMPUTER} right now")
         } else {
-            "Choose a voice for this Mac"
+            format!("Choose a voice for this {COMPUTER}")
         };
         if let Some(error) = unavailable.first() {
             details.push(format!("Some packaged voices are unavailable: {error}"));
@@ -451,7 +585,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
             rows.push(Row::action("Check again"));
         }
         rows.push(more_voices());
-        let Some(selected) = screen.choose(title, &details, &rows)? else {
+        let Some(selected) = screen.choose(&title, &details, &rows)? else {
             return Err(Cancelled.into());
         };
         if selected == rows.len() - 1 {
@@ -487,7 +621,7 @@ pub fn start(cache: &Path) -> Result<Selection> {
     }
 }
 
-/// What a command typed by hand tells its checklist: this Mac's memory against the model's
+/// What a command typed by hand tells its checklist: this computer's memory against the model's
 /// estimate, before anything is downloaded.
 pub fn fit(model: Model, cache: &Path) -> Option<String> {
     let needs = model.memory_gib()? * GIB;
@@ -500,9 +634,13 @@ pub fn explain_failure(error: anyhow::Error) -> anyhow::Error {
     }
     error.context(format!(
         "Voice chat could not start or continue. Close other apps if memory is low. \
-         Check the connection for download failures, or microphone access in System Settings \
-         > Privacy & Security > Microphone. Then run `{}` again to recheck this Mac \
-         and resume verified downloads. Details below",
+         Check the connection for download failures, or {}. Then run `{}` again to recheck \
+         this {COMPUTER} and resume verified downloads. Details below",
+        if cfg!(target_os = "macos") {
+            "microphone access in System Settings > Privacy & Security > Microphone"
+        } else {
+            "that a microphone is connected"
+        },
         update::program()
     ))
 }
@@ -601,7 +739,7 @@ impl Screen {
         let lines = tui::header(
             self.paint,
             size.0 as usize,
-            (DIM, "○ On this Mac"),
+            (DIM, &format!("○ {}", progress::HERE)),
             |room| {
                 std::iter::once(format!("{BOLD}{}", tui::fit(title, room)))
                     .chain(
@@ -973,6 +1111,13 @@ mod tests {
     use super::*;
     use crate::profiles::DEFAULT;
 
+    fn mac(version: (u32, u32, u32)) -> System {
+        System::Mac {
+            apple_silicon: true,
+            version,
+        }
+    }
+
     fn catalog_setups() -> Vec<Setup> {
         let mut setups = vec![
             Setup::liquid(&profiles::DEFAULT, Path::new("/nonexistent-boubou-cache")).unwrap(),
@@ -1003,8 +1148,7 @@ mod tests {
         for total in [8, 16, 24, 32, 64, 128] {
             let device = Device {
                 chip: Some("Apple Silicon".into()),
-                apple_silicon: true,
-                macos: (15, 0, 0),
+                system: mac((15, 0, 0)),
                 memory: total * GIB,
                 available: if total == 8 {
                     6 * GIB
@@ -1036,8 +1180,7 @@ mod tests {
     fn the_checklist_says_when_a_mac_has_less_memory_than_the_voice_needs() {
         let mut device = Device {
             chip: Some("Apple M4".into()),
-            apple_silicon: true,
-            macos: (15, 0, 0),
+            system: mac((15, 0, 0)),
             memory: 16 * GIB,
             available: 16 * GIB,
             disk: 100 * GIB,
@@ -1066,8 +1209,7 @@ mod tests {
         let setups = catalog_setups();
         let mut device = Device {
             chip: None,
-            apple_silicon: true,
-            macos: (15, 0, 0),
+            system: mac((15, 0, 0)),
             memory: 128 * GIB,
             available: 15 * GIB,
             disk: 100 * GIB,
@@ -1091,19 +1233,20 @@ mod tests {
         let setups = catalog_setups();
         let mut device = Device {
             chip: None,
-            apple_silicon: true,
-            macos: (14, 7, 0),
+            system: mac((14, 7, 0)),
             memory: 128 * GIB,
             available: 100 * GIB,
             disk: 100 * GIB,
         };
         assert_eq!(available_setups(&device, &setups).len(), 2);
-        device.macos = (13, 2, 9);
+        device.system = mac((13, 2, 9));
         assert!(available_setups(&device, &setups).is_empty());
-        device.macos = (15, 0, 0);
-        device.apple_silicon = false;
+        device.system = System::Mac {
+            apple_silicon: false,
+            version: (15, 0, 0),
+        };
         assert!(available_setups(&device, &setups).is_empty());
-        device.apple_silicon = true;
+        device.system = mac((15, 0, 0));
         device.disk = 0;
         assert!(available_setups(&device, &setups).is_empty());
         device.disk = 3 * GIB;
@@ -1160,8 +1303,7 @@ mod tests {
         assert!(omni.resources.download > setup.resources.download);
         let mut device = Device {
             chip: None,
-            apple_silicon: true,
-            macos: (13, 3, 0),
+            system: mac((13, 3, 0)),
             memory: 8 * GIB,
             available: setup.memory,
             disk: setup.resources.disk,
@@ -1170,7 +1312,10 @@ mod tests {
             device.check(&setup).is_ok(),
             "Estimated 8 GiB fit at the boundary"
         );
-        device.apple_silicon = false;
+        device.system = System::Mac {
+            apple_silicon: false,
+            version: (13, 3, 0),
+        };
         assert!(
             device
                 .check(&setup)
@@ -1178,8 +1323,7 @@ mod tests {
                 .to_string()
                 .contains("Apple Silicon")
         );
-        device.apple_silicon = true;
-        device.macos = (13, 2, 9);
+        device.system = mac((13, 2, 9));
         assert!(
             device
                 .check(&setup)
@@ -1187,7 +1331,7 @@ mod tests {
                 .to_string()
                 .contains("macOS")
         );
-        device.macos = (13, 3, 0);
+        device.system = mac((13, 3, 0));
         device.available = setup.memory - 1;
         assert!(
             device
@@ -1226,8 +1370,7 @@ mod tests {
         };
         let mut device = Device {
             chip: None,
-            apple_silicon: true,
-            macos: (15, 0, 0),
+            system: mac((15, 0, 0)),
             memory: 8 * GIB,
             available: 8 * GIB,
             disk: 1,
@@ -1243,7 +1386,7 @@ mod tests {
             device.check(&setup).is_ok(),
             "Estimated fit, not hardware validation"
         );
-        device.macos = (14, 7, 0);
+        device.system = mac((14, 7, 0));
         assert!(
             device.check(&setup).is_err(),
             "The packaged MLX backend needs macOS 15"
@@ -1261,8 +1404,83 @@ mod tests {
     }
 
     #[test]
+    fn linux_reads_its_processor_distribution_and_memory_from_text() {
+        // An 8 GiB computer reads about 7.5 GiB and counts as the 8 GiB its voices are sized for.
+        assert_eq!(
+            meminfo(
+                "MemTotal:        7907396 kB\nMemFree:  210288 kB\nMemAvailable:    5924316 kB\n"
+            ),
+            Some((8 * GIB, 5_924_316 * 1024))
+        );
+        assert_eq!(meminfo("MemTotal:        7907396 kB\n"), None);
+        let release = "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\n";
+        assert_eq!(value(release, "NAME", '='), Some("Ubuntu"));
+        assert_eq!(value(release, "VERSION_ID", '='), Some("24.04"));
+        assert_eq!(value(release, "VERSION", '='), None);
+        let cpuinfo = "processor\t: 0\nmodel name\t: AMD Ryzen 9 9950X 16-Core Processor\n";
+        for (name, short) in [
+            (
+                value(cpuinfo, "model name", ':').unwrap(),
+                "AMD Ryzen 9 9950X",
+            ),
+            (
+                "Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz",
+                "Intel Core i7-8700K",
+            ),
+            (
+                "12th Gen Intel(R) Core(TM) i7-12700K",
+                "12th Gen Intel Core i7-12700K",
+            ),
+            (
+                "AMD Ryzen 7 5800H with Radeon Graphics",
+                "AMD Ryzen 7 5800H",
+            ),
+        ] {
+            assert_eq!(processor(name), short);
+        }
+    }
+
+    #[test]
+    fn a_linux_computer_is_offered_the_liquid_voices_that_fit() {
+        let cache = Path::new("/nonexistent-boubou-cache");
+        let setups = [
+            Setup::liquid(&profiles::DEFAULT, cache).unwrap(),
+            Setup::liquid(&profiles::OMNI, cache).unwrap(),
+        ];
+        let mut device = Device {
+            chip: Some("AMD Ryzen 9 9950X".into()),
+            system: System::Linux("Ubuntu 24.04".into()),
+            memory: 8 * GIB,
+            available: 6 * GIB,
+            disk: 100 * GIB,
+        };
+        let offered = |device: &Device| {
+            available_setups(device, &setups)
+                .iter()
+                .map(|setup| setup.model.id())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(offered(&device), [DEFAULT.id]);
+        device.memory = 16 * GIB;
+        assert_eq!(offered(&device), [DEFAULT.id, profiles::OMNI.id]);
+        assert_eq!(
+            device.summary()[0],
+            "AMD Ryzen 9 9950X · Ubuntu 24.04 · 16 GiB memory"
+        );
+        assert_eq!(
+            device.fit(setups[0].memory),
+            "AMD Ryzen 9 9950X · 16 GiB memory · needs about 6 GiB"
+        );
+        device.available = 5 * GIB;
+        assert!(offered(&device).is_empty());
+        // A processor without a name, as on most arm64 boards, is known by its architecture.
+        device.chip = None;
+        assert!(["x86-64", "arm64"].contains(&device.chip()));
+    }
+
+    #[test]
     fn reads_device_resources_without_creating_the_cache() {
-        if !cfg!(target_arch = "aarch64") {
+        if cfg!(all(target_os = "macos", not(target_arch = "aarch64"))) {
             return;
         }
         let cache =
