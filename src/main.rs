@@ -465,7 +465,6 @@ fn with_liquid(
     result
 }
 
-/// The startup checklist for `run`, `serve` and `pull` on a terminal.
 /// How a command names the voice it was given.
 fn voice_option(voice: &Option<String>) -> String {
     voice
@@ -474,6 +473,8 @@ fn voice_option(voice: &Option<String>) -> String {
         .collect()
 }
 
+/// The startup checklist for `run`, `serve` and `pull` on a terminal. A command typed by hand
+/// checks this Mac's memory here; the menu has done so already.
 fn checklist(
     command: String,
     check: Option<String>,
@@ -486,6 +487,8 @@ fn checklist(
         profiles::Model::Modular(id) => modular::parts(id, cache),
     }
     .unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let check = check.or_else(|| onboarding::fit(model, cache));
     let check = check.unwrap_or_else(|| {
         #[cfg(target_os = "macos")]
         let os = modular::macos_version().map_or_else(
