@@ -108,6 +108,9 @@ async function selectPackage() {
   if (selected.directory !== __dirname) return { ...selected, checked: false };
   const commandArgs = args.filter((arg, i) => arg !== "--cache-dir" && args[i - 1] !== "--cache-dir" && !arg.startsWith("--cache-dir="));
   if (process.env.BOUBOU_NO_UPDATE_CHECK || process.env.npm_config_offline === "true" || args.includes("--offline") || commandArgs[0] === "doctor") return selected;
+  // Ask npm at most once an hour, whatever its answer, so most starts never wait for the network.
+  const checked = join(versions, "..", "checked");
+  if (Date.now() - (await fs.stat(checked).catch(() => ({ mtimeMs: 0 }))).mtimeMs < 3600e3) return selected;
   let staging;
   try {
     const tags = JSON.parse(await npm(["view", "boubou", "dist-tags", "--json", "--prefer-online", "--fetch-retries=0", "--fetch-timeout=5000"], 8000));
@@ -142,6 +145,7 @@ async function selectPackage() {
     return selected;
   } finally {
     if (staging) await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+    await fs.mkdir(versions, { recursive: true }).then(() => fs.writeFile(checked, "")).catch(() => {});
   }
 }
 
