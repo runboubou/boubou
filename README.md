@@ -91,6 +91,26 @@ Use `npx boubou@beta --help` or `npx boubou@beta <command> --help` for options. 
 </details>
 
 <details>
+<summary>Choose who speaks</summary>
+
+Qwen3-TTS has nine speakers. `--voice` picks one, with `run` or `serve`:
+
+```sh
+npx boubou@beta run qwen3-tts:0.6b-customvoice --voice ono_anna
+```
+
+| Language | Voices |
+| --- | --- |
+| English | `aiden` (the default), `ryan` |
+| Japanese | `ono_anna` |
+| Korean | `sohee` |
+| Chinese | `vivian`, `serena`, `uncle_fu`, `dylan` (Beijing dialect), `eric` (Sichuan dialect) |
+
+A voice of another language than English hears through Whisper, about 1.6 GB more to download the first time, and answers in the language you speak.
+
+</details>
+
+<details>
 <summary>Swap a component of a modular model</summary>
 
 A modular model is a pinned [speech-to-speech](https://github.com/huggingface/speech-to-speech/tree/v1.1.0) pipeline. Its options, placed after the model, replace the model's own. Change the language model or the speech recognition:
