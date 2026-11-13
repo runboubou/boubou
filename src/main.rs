@@ -240,7 +240,7 @@ fn run() -> Result<()> {
                 manual: false,
                 input: Vec::new(),
                 output: None,
-                voice: None,
+                voice: selected.voice,
                 pipeline: Vec::new(),
             }
         }
