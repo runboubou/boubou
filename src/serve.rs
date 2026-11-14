@@ -47,6 +47,11 @@ const PAGE: &str = include_str!("serve.html");
 const GUIDE: &str = "https://runboubou.com/connect/robots/";
 /// The steps for an app on the same computer, with N.E.K.O as the example.
 const APPS: &str = "https://runboubou.com/connect/apps/";
+const APP_HERE: &str = if cfg!(target_os = "macos") {
+    "App on this Mac"
+} else {
+    "App on this computer"
+};
 /// Far above a 20 ms frame or a playback report.
 const MAX_MESSAGE: usize = 1 << 16;
 /// Requests answered at once; a flood beyond this is turned away.
@@ -302,7 +307,7 @@ impl Links {
         }
         if let Some((url, voice)) = &self.app {
             section(
-                "App on this Mac",
+                APP_HERE,
                 vec![
                     "In its voice settings, choose OpenAI-compatible, then type:".into(),
                     String::new(),
@@ -1529,7 +1534,7 @@ mod tests {
         let plain = links.guide(&Ink::default(), 80, &[]).join("\n");
         assert!(!plain.contains('\x1b'));
         let at = |title: &str| plain.find(&format!("\n  {title}\n")).expect(title);
-        let order = ["Phone", "Robot or app", "App on this Mac", progress::HERE].map(at);
+        let order = ["Phone", "Robot or app", APP_HERE, progress::HERE].map(at);
         assert!(order.is_sorted(), "{plain}");
         assert!(plain.contains("\n     Address   192.168.1.20\n     Port      2682\n"));
         // An app on this computer gets every value its voice settings ask for, and no question.
