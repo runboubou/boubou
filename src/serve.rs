@@ -27,11 +27,11 @@ use std::{
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
-    thread,
+    thread::{self, ThreadId},
     time::{Duration, Instant, SystemTime},
 };
 use tungstenite::{
@@ -56,6 +56,8 @@ const CERTIFICATE_DAYS: u32 = 397;
 /// How long a robot or program without the key waits for the person to let it in. Tests wait
 /// out an unanswered question.
 const ASKING: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 60 });
+/// How often a text waiting to be read checks that its program still waits.
+const WAITING: Duration = Duration::from_millis(100);
 
 /// A connection from this computer, or an encrypted one from the network.
 trait Stream: Read + Write + Send {}
@@ -68,6 +70,11 @@ struct Desk {
     key: String,
     /// Set while someone is talking, or a text is being read aloud.
     seated: AtomicBool,
+    /// The texts to read aloud, by the thread that answers each, in the order they came. The
+    /// first is being read. A program sends the sentences of a reply together.
+    line: Mutex<VecDeque<ThreadId>>,
+    /// Told when a text leaves the line.
+    next: Condvar,
     /// Proves the network address to browsers.
     identity: Option<Arc<ServerConfig>>,
     /// The model server's own API for robots and programs, where it has one.
@@ -94,6 +101,32 @@ impl Desk {
             })
             .is_ok()
             && answered.recv_timeout(ASKING).unwrap_or(false)
+    }
+
+    /// Waits until the texts that came before this one are read. Fails once the program on
+    /// `socket` stops waiting.
+    fn turn(&self, socket: &TcpStream) -> Result<Turn<'_>> {
+        let me = thread::current().id();
+        self.line.lock().unwrap().push_back(me);
+        // Made before the line is locked, so one that leaves unlocks the line first.
+        let turn = Turn(self);
+        let mut line = self.line.lock().unwrap();
+        while line.front() != Some(&me) {
+            ensure!(!closed(socket), "The program left");
+            line = self.next.wait_timeout(line, WAITING).unwrap().0;
+        }
+        Ok(turn)
+    }
+}
+
+/// A text's place in the line. Dropping it calls the next text.
+struct Turn<'a>(&'a Desk);
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        let me = thread::current().id();
+        self.0.line.lock().unwrap().retain(|text| *text != me);
+        self.0.next.notify_all();
     }
 }
 
@@ -425,6 +458,8 @@ impl Door {
         let desk = Arc::new(Desk {
             key,
             seated: AtomicBool::new(false),
+            line: Mutex::default(),
+            next: Condvar::new(),
             identity,
             api,
             allowed: allowed.clone(),
@@ -825,10 +860,13 @@ fn answer(
         }
         _ => return respond("404 Not Found", "text/html", ""),
     };
+    // A text waits for the texts before it. Whoever talks, or wants to, does not wait.
+    let _turn = (method == "POST").then(|| desk.turn(socket)).transpose()?;
     if desk.seated.swap(true, Ordering::SeqCst) {
         return respond("409 Conflict", "text/html", "");
     }
-    // Held from here on, so a handshake that fails frees the seat again.
+    // Held from here on, so a handshake that fails frees the seat again. It is freed before
+    // the next text is called.
     let seat = Seat(Arc::clone(desk));
     if let Some(api) = api {
         return relay(stream, socket, api, request, method == "POST").map(|()| None);
@@ -1586,7 +1624,7 @@ mod tests {
             assert!(unvoiced.starts_with("HTTP/1.1 404 "), "{unvoiced}");
         }
 
-        let mut program = ask();
+        let program = ask();
         // The list needs no seat, so it is there while the voice reads.
         let listed = request(link, &list(key));
         let json = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n";
@@ -1594,13 +1632,35 @@ mod tests {
             listed.starts_with(json) && listed.ends_with(VOICES),
             "{listed}"
         );
-        finish.send(()).unwrap();
-        let mut answer = String::new();
-        program.read_to_string(&mut answer).unwrap();
+        let read = |mut program: TcpStream| {
+            finish.send(()).unwrap();
+            let mut answer = String::new();
+            program.read_to_string(&mut answer).unwrap();
+            answer
+        };
+        let answer = read(program);
         // The model server was asked to answer once, and its answer came back whole.
         assert!(answer.starts_with("HTTP/1.1 200 OK\r\n"), "{answer}");
         assert!(answer.contains("POST /v1/audio/speech HTTP/1.1\r\nConnection: close\r\nAuth"));
         assert!(answer.ends_with(&body));
+
+        // Sentences sent together are read in the order they came: the second waits for the
+        // first. One whose program stopped waiting is never read.
+        let send = |body: &str| {
+            let mut program = TcpStream::connect(address(link)).unwrap();
+            program.write_all(post(key, body).as_bytes()).unwrap();
+            program
+        };
+        let second = r#"{"input":"second"}"#;
+        let (reading, waiting) = (ask(), send(second));
+        drop(send(r#"{"input":"left"}"#));
+        let quiet = || arrived.recv_timeout(WAITING * 3).is_err();
+        assert!(quiet(), "The second text did not wait for the first");
+        assert!(read(reading).ends_with(&body));
+        let asked = arrived.recv_timeout(Duration::from_secs(5));
+        asked.expect("The second text was never read");
+        assert!(read(waiting).ends_with(second));
+        assert!(quiet(), "A text nobody waits for was read");
 
         // The answer freed the seat for the next program, which frees it by leaving early.
         drop(ask());
