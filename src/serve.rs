@@ -952,8 +952,10 @@ mod tests {
 
     /// What a model server at `address` offers, with one voice to ask for.
     fn offers(address: SocketAddr) -> Option<Api> {
-        let voices = VOICES.into();
-        Some(Api { address, voices })
+        Some(Api {
+            address,
+            voices: VOICES.into(),
+        })
     }
 
     const VOICES: &str = r#"{"voices":[{"id":"default"}]}"#;

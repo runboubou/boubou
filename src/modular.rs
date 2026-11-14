@@ -318,23 +318,25 @@ fn language(id: &str) -> String {
 /// language Boubou talks with it in; every other model has the one voice it starts with.
 fn voices(id: &str, voice: Option<&profiles::Voice>) -> String {
     let named = |name: &str, speaks: &[&str]| {
-        let languages = speaks.iter().map(|&title| {
-            let code = match title {
-                "Chinese" => "zh",
-                "Dutch" => "nl",
-                "French" => "fr",
-                "German" => "de",
-                "Italian" => "it",
-                "Japanese" => "ja",
-                "Korean" => "ko",
-                "Portuguese" => "pt",
-                "Spanish" => "es",
-                // Every other voice speaks English.
-                _ => "en",
-            };
-            json!({"code": code, "title": title})
-        });
-        let languages: Vec<_> = languages.collect();
+        let languages: Vec<_> = speaks
+            .iter()
+            .map(|&title| {
+                let code = match title {
+                    "Chinese" => "zh",
+                    "Dutch" => "nl",
+                    "French" => "fr",
+                    "German" => "de",
+                    "Italian" => "it",
+                    "Japanese" => "ja",
+                    "Korean" => "ko",
+                    "Portuguese" => "pt",
+                    "Spanish" => "es",
+                    // Every other voice speaks English.
+                    _ => "en",
+                };
+                json!({"code": code, "title": title})
+            })
+            .collect();
         json!({"id": name.to_lowercase(), "name": name, "languages": languages})
     };
     let voices: Vec<_> = if id.starts_with("qwen3-tts:") {
