@@ -137,6 +137,8 @@
   // What will be saved: the voice as a WAV, its words and language, and how it was given.
   const voice = { way: 'record', language: 'en', clip: null, words: '' };
   let run = '';
+  // The names this Mac already keeps.
+  let kept = new Set();
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
@@ -285,6 +287,7 @@
     if (!voice.words) return say('Write what the clip says.', 'bad');
     if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad');
     if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as mom.', 'bad');
+    if (kept.has(name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
     const form = new FormData();
     form.append('audio', voice.clip, 'voice.wav');
     for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes' })) form.append(field, value);
@@ -327,6 +330,7 @@
   async function list() {
     const listed = await (await api('/voices')).json();
     run = listed.run;
+    kept = new Set(listed.voices.map((voice) => voice.name));
     $('yours').hidden = !listed.voices.length;
     $('voices').replaceChildren(...listed.voices.map(({ name, language }) => {
       const row = document.createElement('li');

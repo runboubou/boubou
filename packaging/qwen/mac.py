@@ -178,8 +178,8 @@ def clone(profile, cache, manifest, *extra):
         @app.middleware("http")
         async def keyed(request: Request, call_next):
             # The page is public; everything it does needs the key in the link Boubou opened.
-            sent = request.headers.get("authorization", "")
-            if request.url.path != "/" and not secrets.compare_digest(sent, f"Bearer {key}"):
+            sent = request.headers.get("authorization", "").encode()
+            if request.url.path != "/" and not secrets.compare_digest(sent, f"Bearer {key}".encode()):
                 return Response(status_code=403)
             return await call_next(request)
 
