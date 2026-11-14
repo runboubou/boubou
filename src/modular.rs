@@ -11,6 +11,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
+use serde_json::json;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -312,6 +313,51 @@ fn language(id: &str) -> String {
     })
 }
 
+/// What `GET /v1/audio/voices` answers for a model: the voices a text to read aloud can name,
+/// first the one that reads when none is named. Qwen3-TTS has its speakers, each with the
+/// language Boubou talks with it in; every other model has the one voice it starts with.
+fn voices(id: &str, voice: Option<&profiles::Voice>) -> String {
+    let named = |name: &str, speaks: &[&str]| {
+        let languages: Vec<_> = speaks
+            .iter()
+            .map(|&title| {
+                let code = match title {
+                    "Chinese" => "zh",
+                    "Dutch" => "nl",
+                    "French" => "fr",
+                    "German" => "de",
+                    "Italian" => "it",
+                    "Japanese" => "ja",
+                    "Korean" => "ko",
+                    "Portuguese" => "pt",
+                    "Spanish" => "es",
+                    // Every other voice speaks English.
+                    _ => "en",
+                };
+                json!({"code": code, "title": title})
+            })
+            .collect();
+        json!({"id": name.to_lowercase(), "name": name, "languages": languages})
+    };
+    let voices: Vec<_> = if id.starts_with("qwen3-tts:") {
+        // The speaker the runner starts this entry with, unless --voice names another.
+        let own = voice.map_or(if whisper(id) { "Vivian" } else { "Aiden" }, |voice| {
+            voice.0
+        });
+        let mut speakers = profiles::VOICES;
+        speakers.sort_by_key(|(name, _)| *name != own);
+        speakers
+            .iter()
+            .map(|(name, speaks)| named(name, &[speaks]))
+            .collect()
+    } else if whisper(id) {
+        vec![named("Default", &["Chinese", "English"])]
+    } else {
+        vec![named("Default", &[&language(id)])]
+    };
+    json!({ "voices": voices }).to_string()
+}
+
 pub fn doctor(id: &str, cache: &Path) -> Result<()> {
     let dir = release_dir()?;
     println!(
@@ -513,7 +559,7 @@ pub fn run(
         Some(door) => {
             // Starting proved the runner ready; its one conversation goes to whoever visits.
             drop(session);
-            chat::from_browser(&mut server, door, cache, &stopped)
+            chat::from_browser(&mut server, door, voices(id, voice), cache, &stopped)
         }
         None => chat::microphone(
             &mut server,
@@ -530,6 +576,38 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_lists_the_voices_a_text_can_name_with_its_own_first() {
+        let ids = |id, voice| {
+            let listed: serde_json::Value = serde_json::from_str(&voices(id, voice)).unwrap();
+            let voices = listed["voices"].as_array().unwrap().iter();
+            let ids = voices.map(|voice| voice["id"].as_str().unwrap().to_owned());
+            ids.collect::<Vec<_>>()
+        };
+        let small = "qwen3-tts:0.6b-customvoice";
+        let whisper = "qwen3-tts:0.6b-customvoice-whisper";
+        assert_eq!(ids(small, None).len(), 9);
+        assert_eq!(ids(small, None)[..3], ["aiden", "ryan", "ono_anna"]);
+        assert_eq!(ids(whisper, None)[..2], ["vivian", "aiden"]);
+        let anna = ids(whisper, Some(&("Ono_Anna", "Japanese")));
+        assert_eq!(anna[..3], ["ono_anna", "aiden", "ryan"]);
+        assert_eq!(
+            voices(whisper, None).split_once(',').unwrap().0,
+            r#"{"voices":[{"id":"vivian""#
+        );
+        assert!(voices(whisper, None).contains(
+            r#"{"id":"ono_anna","languages":[{"code":"ja","title":"Japanese"}],"name":"Ono_Anna"}"#
+        ));
+        assert_eq!(
+            voices("pocket-tts:french_24l", None),
+            r#"{"voices":[{"id":"default","languages":[{"code":"fr","title":"French"}],"name":"Default"}]}"#
+        );
+        let both =
+            r#""languages":[{"code":"zh","title":"Chinese"},{"code":"en","title":"English"}]"#;
+        assert!(voices("chattts:whisper", None).contains(both));
+        assert_eq!(ids("kokoro:82m", None), ["default"]);
+    }
 
     #[test]
     fn runner_manifests_name_their_host() {

@@ -411,10 +411,15 @@ pub(super) fn microphone(
 pub(super) fn from_browser(
     server: &mut Server,
     door: &crate::serve::Options,
+    voices: String,
     cache: &std::path::Path,
     stopped: &AtomicBool,
 ) -> Result<()> {
-    let door = crate::serve::Door::open(door, cache, Some(server.address))?;
+    let api = crate::serve::Api {
+        address: server.address,
+        voices,
+    };
+    let door = crate::serve::Door::open(door, cache, Some(api))?;
     while let Some(guest) = door.wait(stopped, || server.check())? {
         let mut session = match server.session(stopped) {
             Ok(session) => session,

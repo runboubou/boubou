@@ -85,7 +85,7 @@ npx boubou@beta ask LFM3-Omni-2B photo.png "What is in this picture?"
 
 `serve` prints a browser link and a QR code for a phone on the same Wi-Fi; one client can use the conversation at a time. Keep the printed link private: it contains the access key. `--local` listens only on this computer. By default, `serve` requests a trusted certificate from `lan.runboubou.com`, whose name includes the host's local IP address; its private key stays on the host. `--local`, `--self-signed` or `--offline` avoids that service.
 
-Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted. A robot or app that takes only an address and a port connects without the key: `serve` asks in its terminal before letting that address in and remembers the answer.
+Modular models also expose OpenAI-compatible Realtime and speech endpoints through `serve`. The speech endpoint reads in the `voice` a request names; `GET /v1/audio/voices`, with the same key, lists the names, the default first. Any other name reads in the voice `serve` started with. Prefer the printed HTTPS/WSS address; the HTTP/WS fallback is unencrypted. A robot or app that takes only an address and a port connects without the key: `serve` asks in its terminal before letting that address in and remembers the answer.
 
 Each model page on the website also lists its versions and how to [swap a component](https://runboubou.com/models/qwen3-tts/#swap-title) of a modular model. Use `npx boubou@beta --help` or `npx boubou@beta <command> --help` for every option.
 

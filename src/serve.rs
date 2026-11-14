@@ -71,7 +71,7 @@ struct Desk {
     /// Proves the network address to browsers.
     identity: Option<Arc<ServerConfig>>,
     /// The model server's own API for robots and programs, where it has one.
-    api: Option<SocketAddr>,
+    api: Option<Api>,
     allowed: Arc<Allowed>,
     /// Robots and programs without the key, for the person to answer.
     asks: Sender<Ask>,
@@ -95,6 +95,13 @@ impl Desk {
             .is_ok()
             && answered.recv_timeout(ASKING).unwrap_or(false)
     }
+}
+
+/// A model server's own API for robots and programs.
+pub struct Api {
+    pub address: SocketAddr,
+    /// What `GET /v1/audio/voices` answers: the voices a text to read aloud can name.
+    pub voices: String,
 }
 
 /// A robot or program without the key, waiting `until` for the person's answer.
@@ -341,7 +348,7 @@ impl Door {
     /// Starts serving and tells the person where to connect. `cache` keeps the certificate
     /// between starts. `api` is the model server's own API for robots and programs, where it
     /// has one.
-    pub fn open(options: &Options, cache: &Path, api: Option<SocketAddr>) -> Result<Self> {
+    pub fn open(options: &Options, cache: &Path, api: Option<Api>) -> Result<Self> {
         let network = network_address().filter(|_| !options.local);
         let service = (!options.self_signed).then_some(names::SERVICE);
         let (door, links) = Self::bind(options.port, cache, network, api, service)?;
@@ -368,7 +375,7 @@ impl Door {
         port: u16,
         cache: &Path,
         network: Option<Ipv4Addr>,
-        api: Option<SocketAddr>,
+        api: Option<Api>,
         service: Option<&str>,
     ) -> Result<(Self, Links)> {
         let names = match (network, service) {
@@ -407,11 +414,11 @@ impl Door {
                 None => by_address.clone(),
             },
             fallback: named.as_ref().and(by_address),
-            realtime: api.map(|_| match &named {
+            realtime: api.as_ref().map(|_| match &named {
                 Some(name) => format!("wss://{name}:{port}/v1/realtime?key={key}"),
                 None => format!("ws://{reachable}:{port}/v1/realtime?key={key}"),
             }),
-            bare: api.map(|_| (reachable, port)),
+            bare: api.as_ref().map(|_| (reachable, port)),
         };
         let allowed = Arc::new(Allowed::load(cache)?);
         let (asks, asked) = mpsc::channel();
@@ -790,28 +797,36 @@ fn answer(
     // Robots whose settings take only an address and a port cannot send the key.
     let robot = matches!(
         (method.as_str(), path, accept.is_some()),
-        ("GET", "/v1/realtime", true) | ("POST", "/v1/audio/speech", false)
+        ("GET", "/v1/realtime", true)
+            | ("POST", "/v1/audio/speech", false)
+            | ("GET", "/v1/audio/voices", false)
     );
     let allowed = keyed || (robot && desk.api.is_some() && desk.lets_in(peer) && !closed(socket));
-    let mut respond = |status: &str, body: &str| -> Result<Option<Guest>> {
+    let mut respond = |status: &str, kind: &str, body: &str| -> Result<Option<Guest>> {
         write!(
             stream,
-            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\nContent-Type: {kind}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )?;
         stream.flush()?;
         Ok(None)
     };
-    let (accept, api) = match (method.as_str(), path, accept, desk.api) {
-        ("GET", "/", None, _) if trusted => return respond("200 OK", PAGE),
+    let (accept, api) = match (method.as_str(), path, accept, &desk.api) {
+        ("GET", "/", None, _) if trusted => return respond("200 OK", "text/html", PAGE),
         ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
-        ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api)),
+        ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api.address)),
         // A text to read aloud, which opens no socket.
-        ("POST", "/v1/audio/speech", None, Some(api)) if allowed => (String::new(), Some(api)),
-        _ => return respond("404 Not Found", ""),
+        ("POST", "/v1/audio/speech", None, Some(api)) if allowed => {
+            (String::new(), Some(api.address))
+        }
+        // Answered here, so a program can ask while someone talks.
+        ("GET", "/v1/audio/voices", None, Some(api)) if allowed => {
+            return respond("200 OK", "application/json", &api.voices);
+        }
+        _ => return respond("404 Not Found", "text/html", ""),
     };
     if desk.seated.swap(true, Ordering::SeqCst) {
-        return respond("409 Conflict", "");
+        return respond("409 Conflict", "text/html", "");
     }
     // Held from here on, so a handshake that fails frees the seat again.
     let seat = Seat(Arc::clone(desk));
@@ -934,6 +949,16 @@ mod tests {
         assert!(links.network.is_none() && links.realtime.is_none());
         (door, links.here)
     }
+
+    /// What a model server at `address` offers, with one voice to ask for.
+    fn offers(address: SocketAddr) -> Option<Api> {
+        Some(Api {
+            address,
+            voices: VOICES.into(),
+        })
+    }
+
+    const VOICES: &str = r#"{"voices":[{"id":"default"}]}"#;
 
     /// A stand-in for a model server's Realtime API: it greets, then echoes.
     fn model_server() -> SocketAddr {
@@ -1347,7 +1372,7 @@ mod tests {
     #[test]
     fn robots_and_programs_are_carried_to_the_realtime_api() {
         let cache = cache();
-        let (door, links) = Door::bind(0, &cache, None, Some(model_server()), None).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, offers(model_server()), None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         let link = links.realtime.unwrap();
         let key = key(&links.here);
@@ -1442,7 +1467,7 @@ mod tests {
     fn a_robot_without_the_key_talks_once_the_person_lets_it_in() {
         let cache = cache();
         let api = model_server();
-        let (door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, offers(api), None).unwrap();
         let link = links.realtime.unwrap();
         let port = address(&link).split(':').nth(1).unwrap();
         assert_eq!(
@@ -1487,7 +1512,7 @@ mod tests {
         );
 
         // A later start lets it in without asking. The page still needs the key.
-        let (_later, later) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let (_later, later) = Door::bind(0, &cache, None, offers(api), None).unwrap();
         let mut socket = realtime(&later.realtime.unwrap(), "", Some("DUMMY")).unwrap();
         assert_eq!(socket.read().unwrap().to_text().unwrap(), "created");
         assert_eq!(status(plain(&later.here, "")), 404);
@@ -1526,7 +1551,7 @@ mod tests {
             }
         });
         let cache = cache();
-        let (door, links) = Door::bind(0, &cache, None, Some(api), None).unwrap();
+        let (door, links) = Door::bind(0, &cache, None, offers(api), None).unwrap();
         fs::remove_dir_all(cache).unwrap();
         let (link, key) = (links.here.as_str(), key(&links.here));
         // More text than the door reads before it decides.
@@ -1546,16 +1571,29 @@ mod tests {
             program
         };
 
-        let (unanswered, _) = asking(&door, || Ok(None), || request(link, &post("wrong", "")));
-        assert!(unanswered.starts_with("HTTP/1.1 404 "), "{unanswered}");
+        // The voices a text can name are listed under the same key.
+        let list = |key: &str| format!("GET /v1/audio/voices?key={key} HTTP/1.1\r\n\r\n");
+        for wrong in [post("wrong", ""), list("wrong")] {
+            let (unanswered, _) = asking(&door, || Ok(None), || request(link, &wrong));
+            assert!(unanswered.starts_with("HTTP/1.1 404 "), "{unanswered}");
+        }
         let got = format!("GET /v1/audio/speech?key={key} HTTP/1.1\r\n\r\n");
         assert!(request(link, &got).starts_with("HTTP/1.1 404 "));
         // A model without a voice of its own to ask.
         let (_other, other) = local();
-        let unvoiced = request(&other, &post(self::key(&other), ""));
-        assert!(unvoiced.starts_with("HTTP/1.1 404 "), "{unvoiced}");
+        for asked in [post(self::key(&other), ""), list(self::key(&other))] {
+            let unvoiced = request(&other, &asked);
+            assert!(unvoiced.starts_with("HTTP/1.1 404 "), "{unvoiced}");
+        }
 
         let mut program = ask();
+        // The list needs no seat, so it is there while the voice reads.
+        let listed = request(link, &list(key));
+        let json = "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n";
+        assert!(
+            listed.starts_with(json) && listed.ends_with(VOICES),
+            "{listed}"
+        );
         finish.send(()).unwrap();
         let mut answer = String::new();
         program.read_to_string(&mut answer).unwrap();
