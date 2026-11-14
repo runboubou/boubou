@@ -59,7 +59,7 @@ def arguments(model_id, cache, manifest, work):
     if CLONER:
         (base,) = (path for name, path in snapshots(manifest, CLONER).items() if name.startswith("Qwen3-TTS"))
         at = options.index("--qwen3_tts_model_name") + 1
-        weights.update(custom_voice=options[at], base=str(Path(cache) / base))
+        weights.update(custom_voice=options[at], base=str(Path(cache).resolve() / base))
         # A cloned voice that speaks first starts with the Base weights, as upstream clones.
         if own := cloned(OWN):
             options[at] = weights["base"]
@@ -157,7 +157,8 @@ def clone(profile, cache, manifest, *extra):
     address.add_argument("--host")
     address.add_argument("--port", type=int)
     address = address.parse_args(extra)
-    folder, key, mlx = Path(CLONES), os.environ["BOUBOU_KEY"], threading.Lock()
+    # Links made in temporary storage must not point at a cache named relative to here.
+    cache, folder, key, mlx = Path(cache).resolve(), Path(CLONES), os.environ["BOUBOU_KEY"], threading.Lock()
     folder.mkdir(parents=True, exist_ok=True)
     found = snapshots(manifest, profile)
     with TemporaryDirectory(prefix="boubou-clone-") as work:
@@ -166,12 +167,12 @@ def clone(profile, cache, manifest, *extra):
         whisper = Path(work, "whisper")
         whisper.mkdir()
         for name in ("whisper-large-v3-turbo", "whisper-large-v3"):
-            for path in (Path(cache) / found[name]).iterdir():
+            for path in (cache / found[name]).iterdir():
                 if not (whisper / path.name).exists():
                     (whisper / path.name).symlink_to(path)
         hear = ears(str(whisper))
         (base,) = (path for name, path in found.items() if name.startswith("Qwen3-TTS"))
-        speak = mouth(str(Path(cache) / base))
+        speak = mouth(str(cache / base))
         page = (HERE / "clone.html").read_text()
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
