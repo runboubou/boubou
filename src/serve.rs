@@ -45,7 +45,7 @@ mod names;
 const PAGE: &str = include_str!("serve.html");
 /// The pictured steps for connecting a robot or an app.
 const GUIDE: &str = "https://runboubou.com/connect/robots/";
-/// The steps for an app on the same computer, with N.E.K.O as the example.
+/// The steps for any app on the same computer that has an OpenAI-compatible voice setting.
 const APPS: &str = "https://runboubou.com/connect/apps/";
 const APP_HERE: &str = if cfg!(target_os = "macos") {
     "App on this Mac"
