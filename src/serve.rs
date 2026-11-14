@@ -27,7 +27,7 @@ use std::{
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
@@ -56,8 +56,8 @@ const CERTIFICATE_DAYS: u32 = 397;
 /// How long a robot or program without the key waits for the person to let it in. Tests wait
 /// out an unanswered question.
 const ASKING: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 60 });
-/// How often a text waiting to be read checks that its program still waits.
-const WAITING: Duration = Duration::from_millis(100);
+/// How long a text waiting to be read listens to its program before it looks at the line again.
+const WAITING: Duration = Duration::from_millis(20);
 
 /// A connection from this computer, or an encrypted one from the network.
 trait Stream: Read + Write + Send {}
@@ -73,8 +73,6 @@ struct Desk {
     /// The texts to read aloud, by the thread that answers each, in the order they came. The
     /// first is being read. A program sends the sentences of a reply together.
     line: Mutex<VecDeque<ThreadId>>,
-    /// Told when a text leaves the line.
-    next: Condvar,
     /// Proves the network address to browsers.
     identity: Option<Arc<ServerConfig>>,
     /// The model server's own API for robots and programs, where it has one.
@@ -103,30 +101,32 @@ impl Desk {
             && answered.recv_timeout(ASKING).unwrap_or(false)
     }
 
-    /// Waits until the texts that came before this one are read. Fails once the program on
-    /// `socket` stops waiting.
-    fn turn(&self, socket: &TcpStream) -> Result<Turn<'_>> {
+    /// Waits until the texts that came before this one are read, keeping in `request` what
+    /// its program still sends. Fails once the program stops waiting.
+    fn turn(&self, program: &mut impl Read, request: &mut Vec<u8>) -> Result<Turn<'_>> {
         let me = thread::current().id();
         self.line.lock().unwrap().push_back(me);
-        // Made before the line is locked, so one that leaves unlocks the line first.
         let turn = Turn(self);
-        let mut line = self.line.lock().unwrap();
-        while line.front() != Some(&me) {
-            ensure!(!closed(socket), "The program left");
-            line = self.next.wait_timeout(line, WAITING).unwrap().0;
+        let mut buffer = [0; 1024];
+        while self.line.lock().unwrap().front() != Some(&me) {
+            if request.len() > MAX_MESSAGE {
+                // Longer than any text. The rest stays unread, and so does a goodbye.
+                thread::sleep(WAITING);
+            } else {
+                ensure!(pass(program, request, &mut buffer)?, "The program left");
+            }
         }
         Ok(turn)
     }
 }
 
-/// A text's place in the line. Dropping it calls the next text.
+/// A text's place in the line. Dropping it lets the next text be read.
 struct Turn<'a>(&'a Desk);
 
 impl Drop for Turn<'_> {
     fn drop(&mut self) {
         let me = thread::current().id();
         self.0.line.lock().unwrap().retain(|text| *text != me);
-        self.0.next.notify_all();
     }
 }
 
@@ -459,7 +459,6 @@ impl Door {
             key,
             seated: AtomicBool::new(false),
             line: Mutex::default(),
-            next: Condvar::new(),
             identity,
             api,
             allowed: allowed.clone(),
@@ -837,7 +836,7 @@ fn answer(
             | ("GET", "/v1/audio/voices", false)
     );
     let allowed = keyed || (robot && desk.api.is_some() && desk.lets_in(peer) && !closed(socket));
-    let mut respond = |status: &str, kind: &str, body: &str| -> Result<Option<Guest>> {
+    let respond = |stream: &mut dyn Write, status: &str, kind: &str, body: &str| {
         write!(
             stream,
             "HTTP/1.1 {status}\r\nContent-Type: {kind}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
@@ -847,7 +846,9 @@ fn answer(
         Ok(None)
     };
     let (accept, api) = match (method.as_str(), path, accept, &desk.api) {
-        ("GET", "/", None, _) if trusted => return respond("200 OK", "text/html", PAGE),
+        ("GET", "/", None, _) if trusted => {
+            return respond(&mut stream, "200 OK", "text/html", PAGE);
+        }
         ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
         ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api.address)),
         // A text to read aloud, which opens no socket.
@@ -856,14 +857,19 @@ fn answer(
         }
         // Answered here, so a program can ask while someone talks.
         ("GET", "/v1/audio/voices", None, Some(api)) if allowed => {
-            return respond("200 OK", "application/json", &api.voices);
+            return respond(&mut stream, "200 OK", "application/json", &api.voices);
         }
-        _ => return respond("404 Not Found", "text/html", ""),
+        _ => return respond(&mut stream, "404 Not Found", "text/html", ""),
     };
     // A text waits for the texts before it. Whoever talks, or wants to, does not wait.
-    let _turn = (method == "POST").then(|| desk.turn(socket)).transpose()?;
+    let _turn = if method == "POST" {
+        socket.set_read_timeout(Some(WAITING))?;
+        Some(desk.turn(&mut stream, &mut request)?)
+    } else {
+        None
+    };
     if desk.seated.swap(true, Ordering::SeqCst) {
-        return respond("409 Conflict", "text/html", "");
+        return respond(&mut stream, "409 Conflict", "text/html", "");
     }
     // Held from here on, so a handshake that fails frees the seat again. It is freed before
     // the next text is called.
@@ -1653,8 +1659,9 @@ mod tests {
         };
         let second = r#"{"input":"second"}"#;
         let (reading, waiting) = (ask(), send(second));
-        drop(send(r#"{"input":"left"}"#));
-        let quiet = || arrived.recv_timeout(WAITING * 3).is_err();
+        // It leaves with most of its text still unread by the door.
+        drop(send(&body));
+        let quiet = || arrived.recv_timeout(Duration::from_millis(300)).is_err();
         assert!(quiet(), "The second text did not wait for the first");
         assert!(read(reading).ends_with(&body));
         let asked = arrived.recv_timeout(Duration::from_secs(5));
