@@ -211,6 +211,8 @@
     } catch {
       return say('Allow the microphone for this page, then try again.', 'bad');
     }
+    // A second click, or another language, while the browser asked for the microphone.
+    if (turn !== choice || recorder) return stream.getTracks().forEach((track) => track.stop());
     const parts = [];
     const started = Date.now();
     // The bar shows how loud the microphone hears the person, so they see that it does.
