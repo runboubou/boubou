@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Clone a voice · Boubou</title>
+<style>
+  :root {
+    --page: #fafaf9; --card: #fff; --ink: #18181b; --muted: #71717a; --line: #e4e4e7;
+    --accent: #2563eb; --on-accent: #fff; --soft: #eff6ff; --bad: #b91c1c; --good: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0b0b0c; --card: #161618; --ink: #f4f4f5; --muted: #a1a1aa; --line: #2e2e33;
+      --accent: #60a5fa; --on-accent: #0b0b0c; --soft: #172033; --bad: #f87171; --good: #4ade80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 20px; }
+  h1 { margin: 0; font-size: 1.6rem; font-weight: 600; }
+  h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .step { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 10px; border-radius: 50%; background: var(--soft); color: var(--accent); font-size: .85rem; }
+  p { margin: 0; }
+  .muted { color: var(--muted); font-size: .92rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 14px; }
+  button, .file { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 14px; cursor: pointer; }
+  button:hover, .file:hover { border-color: var(--muted); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ways button[aria-pressed="true"], .languages button[aria-pressed="true"] { border: 2px solid var(--accent); color: var(--accent); background: var(--soft); }
+  .languages { display: flex; flex-wrap: wrap; gap: 6px; }
+  .languages button { padding: 4px 10px; font-size: .9rem; }
+  blockquote { margin: 0; padding: 14px 16px; border-radius: 10px; background: var(--soft); font-size: 1.12rem; line-height: 1.6; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .level { flex: 1; min-width: 80px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .level span { display: block; height: 100%; width: 0; background: var(--good); transition: width .08s linear; }
+  input[type="text"], textarea { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--page); color: var(--ink); }
+  textarea { min-height: 84px; resize: vertical; }
+  input[type="file"] { position: absolute; opacity: 0; width: 1px; }
+  .name { flex: 1; min-width: 160px; }
+  audio { width: 100%; }
+  label.consent { display: flex; gap: 10px; align-items: flex-start; }
+  label.consent input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--accent); }
+  #status:empty { display: none; }
+  .bad { color: var(--bad); } .good { color: var(--good); }
+  code, .command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
+  .command { display: flex; gap: 8px; align-items: center; background: #18181b; color: #f4f4f5; border-radius: 10px; padding: 10px 12px; }
+  .command span { flex: 1; overflow-wrap: anywhere; }
+  .command button { background: none; color: #f4f4f5; border-color: #52525b; padding: 2px 10px; font-size: .85rem; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  li b { flex: 1; font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+<main>
+  <header>
+    <h1>Clone a voice</h1>
+    <p class="muted">Give Boubou about 10 seconds of a voice. It stays on this Mac. Nothing is uploaded.</p>
+  </header>
+
+  <section>
+    <h2><span class="step">1</span>Give a voice</h2>
+    <div class="ways">
+      <button type="button" data-way="record" aria-pressed="true">Record</button>
+      <button type="button" data-way="upload" aria-pressed="false">Upload a clip</button>
+    </div>
+    <div class="languages" role="group" aria-label="Language"></div>
+    <div id="record">
+      <div style="display: grid; gap: 12px">
+        <p class="muted">Read this aloud, in your own natural voice:</p>
+        <blockquote id="sentence"></blockquote>
+        <div class="row">
+          <button type="button" class="primary" id="microphone">Record</button>
+          <span class="muted" id="time">Up to 15 seconds</span>
+          <div class="level" id="level" hidden><span></span></div>
+        </div>
+      </div>
+    </div>
+    <div id="upload" hidden>
+      <div style="display: grid; gap: 12px">
+        <div class="row">
+          <label class="file"><input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav">Choose an audio file</label>
+          <span class="muted" id="chosen">One person speaking, about 10 seconds. Boubou uses the first 15.</span>
+        </div>
+        <label for="words" class="muted">What it says. Whisper writes it down; fix any mistakes.</label>
+        <textarea id="words"></textarea>
+      </div>
+    </div>
+    <audio id="sample" controls hidden></audio>
+  </section>
+
+  <section>
+    <h2><span class="step">2</span>Name it and save</h2>
+    <label class="consent"><input type="checkbox" id="consent"><span>This is my own voice, or I have permission to use it.</span></label>
+    <div class="row">
+      <input type="text" class="name" id="name" placeholder="mom" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Name">
+      <button type="button" class="primary" id="save">Save voice</button>
+    </div>
+    <p id="status" role="status"></p>
+  </section>
+
+  <section id="use" hidden>
+    <h2>Use <span class="named"></span></h2>
+    <p class="muted">Talk with it:</p>
+    <div class="command"><span id="command"></span><button type="button" id="copy">Copy</button></div>
+    <p class="muted">In an app's voice setting, while <code>boubou serve</code> runs, type <b class="named"></b>.</p>
+  </section>
+
+  <section id="yours" hidden>
+    <h2>Your voices</h2>
+    <ul id="voices"></ul>
+  </section>
+</main>
+<script>
+  // English first, then Japanese, then the other languages Qwen3-TTS speaks. Each sentence takes
+  // about 10 seconds to read and becomes the words of the recording.
+  const LANGUAGES = [
+    ['en', 'English', "The weather is lovely today, so let's take a slow walk to the park, sit by the lake for a while, and talk about everything that happened this week.", 'Hello! This is my new voice. How does it sound?'],
+    ['ja', '日本語', '今日はとてもいい天気なので、公園までゆっくり散歩して、湖のそばに座りながら、今週あったことをのんびり話しましょう。', 'こんにちは。これが私の新しい声です。どうですか？'],
+    ['zh', '中文', '今天天气很好，我们一起去公园散步吧。走累了就在湖边坐一会儿，聊聊这个星期发生的事情。', '你好！这是我的新声音，听起来怎么样？'],
+    ['ko', '한국어', '오늘은 날씨가 정말 좋으니까 공원까지 천천히 산책하고, 호숫가에 앉아서 이번 주에 있었던 일들을 이야기해요.', '안녕하세요! 이게 제 새 목소리예요. 어떻게 들리나요?'],
+    ['es', 'Español', 'Hoy hace un día precioso, así que vamos a caminar despacio hasta el parque, sentarnos junto al lago y hablar de todo lo que pasó esta semana.', '¡Hola! Esta es mi nueva voz. ¿Qué te parece?'],
+    ['fr', 'Français', "Il fait très beau aujourd'hui, alors allons marcher tranquillement jusqu'au parc, nous asseoir au bord du lac et parler de tout ce qui s'est passé cette semaine.", "Bonjour ! Voici ma nouvelle voix. Qu'en penses-tu ?"],
+    ['de', 'Deutsch', 'Heute ist so schönes Wetter, also lass uns langsam in den Park spazieren, eine Weile am See sitzen und über alles reden, was diese Woche passiert ist.', 'Hallo! Das ist meine neue Stimme. Wie klingt sie?'],
+    ['pt', 'Português', 'Hoje está um dia lindo, então vamos caminhar devagar até o parque, sentar perto do lago e conversar sobre tudo o que aconteceu nesta semana.', 'Olá! Esta é a minha nova voz. O que você acha?'],
+    ['it', 'Italiano', 'Oggi è una giornata bellissima, quindi andiamo a fare una passeggiata fino al parco, sediamoci vicino al lago e parliamo di tutto quello che è successo questa settimana.', 'Ciao! Questa è la mia nuova voce. Come ti sembra?'],
+    ['ru', 'Русский', 'Сегодня прекрасная погода, так что давай не спеша прогуляемся до парка, посидим у озера и поговорим обо всём, что случилось на этой неделе.', 'Привет! Это мой новый голос. Как он звучит?'],
+  ];
+  const RATE = 24000;
+  const LONGEST = 15;
+  const $ = (id) => document.getElementById(id);
+  const key = location.hash.slice(1);
+  // What will be saved: the voice as a WAV, its words and language, and how it was given.
+  const voice = { way: 'record', language: 'en', clip: null, words: '' };
+  let run = '';
+  // The names this Mac already keeps.
+  let kept = new Set();
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
+    if (response.status === 403) throw new Error('This page no longer has the right key. Run boubou clone again.');
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? 'Boubou could not do that. Try again.');
+    return response;
+  }
+
+  function say(text, tone = '') {
+    $('status').textContent = text;
+    $('status').className = tone;
+  }
+
+  function sentence() {
+    return LANGUAGES.find(([code]) => code === voice.language)[2];
+  }
+
+  function show() {
+    for (const button of document.querySelectorAll('[data-way]')) button.setAttribute('aria-pressed', button.dataset.way === voice.way);
+    for (const button of document.querySelectorAll('[data-language]')) button.setAttribute('aria-pressed', button.dataset.language === voice.language);
+    $('record').hidden = voice.way !== 'record';
+    $('upload').hidden = voice.way !== 'upload';
+    $('sentence').textContent = sentence();
+    $('sample').hidden = !voice.clip;
+  }
+
+  // Any audio the browser can play becomes 24 kHz mono 16-bit WAV, at most 15 seconds, its loudest
+  // moment near full scale. A clip with no voice in it is refused, not made loud.
+  async function toWav(blob) {
+    const decoder = new AudioContext();
+    const decoded = await decoder.decodeAudioData(await blob.arrayBuffer()).finally(() => decoder.close());
+    const length = Math.ceil(Math.min(decoded.duration, LONGEST) * RATE);
+    const mixer = new OfflineAudioContext(1, length, RATE);
+    const source = mixer.createBufferSource();
+    source.buffer = decoded;
+    source.connect(mixer.destination);
+    source.start();
+    const samples = (await mixer.startRendering()).getChannelData(0);
+    const middle = samples.reduce((sum, sample) => sum + sample, 0) / samples.length;
+    samples.forEach((sample, i) => { samples[i] = sample - middle; });
+    const peak = samples.reduce((loudest, sample) => Math.max(loudest, Math.abs(sample)), 0);
+    if (peak < 0.01) throw new RangeError('Boubou heard no voice. Check the microphone or the clip, then try again.');
+    const gain = 0.9 / peak;
+    const wav = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const text = (at, value) => [...value].forEach((char, i) => wav.setUint8(at + i, char.charCodeAt(0)));
+    text(0, 'RIFF'); wav.setUint32(4, 36 + samples.length * 2, true); text(8, 'WAVEfmt ');
+    wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
+    wav.setUint32(24, RATE, true); wav.setUint32(28, RATE * 2, true); wav.setUint16(32, 2, true);
+    wav.setUint16(34, 16, true); text(36, 'data'); wav.setUint32(40, samples.length * 2, true);
+    samples.forEach((sample, i) => wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample * gain)) * 32767, true));
+    return { wav: new Blob([wav], { type: 'audio/wav' }), seconds: samples.length / RATE };
+  }
+
+  function keep(clip) {
+    voice.clip = clip.wav;
+    URL.revokeObjectURL($('sample').src);
+    $('sample').src = URL.createObjectURL(clip.wav);
+    show();
+  }
+
+  // Changes whenever the person changes what they give. A recording or a clip is kept only if
+  // nothing changed since it began, with the words it began with.
+  let choice = 0;
+  let recorder;
+  async function record() {
+    if (recorder) return recorder.stop();
+    const turn = ++choice, words = sentence();
+    say('');
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, autoGainControl: false, noiseSuppression: true } });
+    } catch {
+      return say('Allow the microphone for this page, then try again.', 'bad');
+    }
+    // A second click, or another language, while the browser asked for the microphone.
+    if (turn !== choice || recorder) return stream.getTracks().forEach((track) => track.stop());
+    const parts = [];
+    const started = Date.now();
+    // The bar shows how loud the microphone hears the person, so they see that it does.
+    const listener = new AudioContext();
+    const meter = listener.createAnalyser();
+    const heard = new Float32Array(meter.fftSize);
+    listener.createMediaStreamSource(stream).connect(meter);
+    $('level').hidden = false;
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = ({ data }) => parts.push(data);
+    const tick = setInterval(() => {
+      meter.getFloatTimeDomainData(heard);
+      const loudest = heard.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0);
+      $('level').firstElementChild.style.width = `${Math.min(100, loudest * 250)}%`;
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      $('time').textContent = `0:${String(seconds).padStart(2, '0')} of about 0:10`;
+      if (seconds >= LONGEST) recorder.stop();
+    }, 100);
+    recorder.onstop = async () => {
+      clearInterval(tick);
+      listener.close();
+      stream.getTracks().forEach((track) => track.stop());
+      recorder = null;
+      $('level').hidden = true;
+      $('microphone').classList.remove('recording');
+      $('microphone').textContent = 'Record';
+      $('time').textContent = 'Up to 15 seconds';
+      const clip = await toWav(new Blob(parts, { type: parts[0]?.type })).catch((error) => error);
+      if (turn !== choice) return;
+      if (clip instanceof Error) return say(clip.message, 'bad');
+      if (clip.seconds < 3) return say('That was short. Record the whole sentence.', 'bad');
+      voice.words = words;
+      $('microphone').textContent = 'Record again';
+      $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below, then save it.`;
+      keep(clip);
+    };
+    recorder.start();
+    $('microphone').textContent = 'Stop';
+    $('microphone').classList.add('recording');
+  }
+
+  async function upload(file) {
+    const turn = ++choice;
+    voice.clip = null;
+    $('words').value = voice.words = '';
+    show();
+    $('chosen').textContent = file.name;
+    say('Listening to the clip…');
+    try {
+      const clip = await toWav(file);
+      if (clip.seconds < 3) throw new RangeError('The clip is too short. Choose one with at least 3 seconds of speech.');
+      const form = new FormData();
+      form.append('audio', clip.wav, 'clip.wav');
+      const heard = await (await api('/transcribe', { method: 'POST', body: form })).json();
+      if (turn !== choice) return;
+      keep(clip);
+      $('words').value = voice.words = heard.text;
+      if (heard.language) voice.language = heard.language;
+      show();
+      say(heard.language ? 'Check the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
+    } catch (error) {
+      if (turn === choice) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
+    }
+  }
+
+  async function save() {
+    const name = $('name').value.trim().toLowerCase();
+    if (voice.way === 'upload') voice.words = $('words').value.trim();
+    if (!voice.clip) return say(voice.way === 'record' ? 'Record the sentence first.' : 'Choose a clip first.', 'bad');
+    if (!voice.words) return say('Write what the clip says.', 'bad');
+    if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad');
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as mom.', 'bad');
+    if (kept.has(name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
+    const form = new FormData();
+    form.append('audio', voice.clip, 'voice.wav');
+    for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes' })) form.append(field, value);
+    $('save').disabled = true;
+    say('Saving…');
+    try {
+      await api('/voices', { method: 'POST', body: form });
+      say(`Saved as ${name}. Only this Mac has it.`, 'good');
+      for (const named of document.querySelectorAll('.named')) named.textContent = name;
+      $('command').textContent = `${run} --voice ${name}`;
+      $('use').hidden = false;
+      $('use').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      await list();
+      hear(name, voice.language, $(`play-${name}`));
+    } catch (error) {
+      say(error.message, 'bad');
+    } finally {
+      $('save').disabled = false;
+    }
+  }
+
+  async function hear(name, language, button) {
+    const label = button.textContent;
+    button.textContent = 'Speaking…';
+    button.disabled = true;
+    try {
+      const hello = LANGUAGES.find(([code]) => code === language)?.[3] ?? LANGUAGES[0][3];
+      const spoken = await api('/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: name, input: hello }) });
+      const player = new Audio(URL.createObjectURL(await spoken.blob()));
+      player.onended = () => URL.revokeObjectURL(player.src);
+      await player.play();
+    } catch (error) {
+      say(error.message, 'bad');
+    } finally {
+      button.textContent = label;
+      button.disabled = false;
+    }
+  }
+
+  async function list() {
+    const listed = await (await api('/voices')).json();
+    run = listed.run;
+    kept = new Set(listed.voices.map((voice) => voice.name));
+    $('yours').hidden = !listed.voices.length;
+    $('voices').replaceChildren(...listed.voices.map(({ name, language }) => {
+      const row = document.createElement('li');
+      const title = document.createElement('b');
+      const speaks = document.createElement('span');
+      const play = document.createElement('button');
+      const remove = document.createElement('button');
+      title.textContent = name;
+      speaks.className = 'muted';
+      speaks.textContent = LANGUAGES.find(([code]) => code === language)?.[1] ?? '';
+      play.id = `play-${name}`;
+      play.textContent = 'Play';
+      play.onclick = () => hear(name, language, play);
+      remove.textContent = 'Delete';
+      remove.onclick = async () => {
+        if (!confirm(`Delete ${name} from this Mac?`)) return;
+        await api(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch((error) => say(error.message, 'bad'));
+        list();
+      };
+      row.append(title, speaks, play, remove);
+      return row;
+    }));
+  }
+
+  $('consent').checked = false;
+  document.querySelector('.languages').append(...LANGUAGES.map(([code, label]) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.language = code;
+    button.textContent = label;
+    button.onclick = () => {
+      voice.language = code;
+      // Another sentence: a recording of the last one, finished or not, is let go.
+      if (voice.way === 'record') { choice++; voice.clip = null; recorder?.stop(); }
+      show();
+    };
+    return button;
+  }));
+  for (const button of document.querySelectorAll('[data-way]')) {
+    button.onclick = () => { choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
+  }
+  $('microphone').onclick = record;
+  $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
+  $('name').oninput = () => { $('name').value = $('name').value.toLowerCase().replace(/[^a-z0-9_-]/g, ''); };
+  $('save').onclick = save;
+  $('copy').onclick = async () => {
+    await navigator.clipboard.writeText($('command').textContent);
+    $('copy').textContent = 'Copied';
+    setTimeout(() => { $('copy').textContent = 'Copy'; }, 1500);
+  };
+  show();
+  if (!key) say('This link is incomplete. Run boubou clone again.', 'bad');
+  else list().catch((error) => say(error.message, 'bad'));
+</script>
+</html>

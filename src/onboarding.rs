@@ -54,6 +54,12 @@ pub struct Selection {
     pub check: Option<String>,
 }
 
+/// What the person chose in the menu: a voice to talk with, or to clone a voice.
+pub enum Choice {
+    Talk(Selection),
+    Clone,
+}
+
 /// The system this computer runs. Only on a Mac do voices need a chip and a version of it.
 enum System {
     Mac {
@@ -450,7 +456,7 @@ fn liquid_requirements(model: &Profile, cache: &Path) -> Result<modular::Require
     })
 }
 
-fn parse_selection(text: &str) -> Result<Selection> {
+fn parse_selection(text: &str, cache: &Path) -> Result<Selection> {
     ensure!(
         !text.contains(['\n', '\r', '\0', ';', '|', '&', '>', '<', '`']) && !text.contains("$("),
         "Paste one Boubou run command or a model name."
@@ -501,7 +507,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
     }
     let model = Model::find(id).context("Model not supported. Check the name or update Boubou.")?;
     // A voice the model does not have is named here, where the command can be typed again.
-    model.voiced(voice.as_deref())?;
+    model.voiced(voice.as_deref(), cache)?;
     Ok(Selection {
         model,
         offline,
@@ -510,7 +516,7 @@ fn parse_selection(text: &str) -> Result<Selection> {
     })
 }
 
-fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
+fn choose_model(screen: &mut Screen, cache: &Path) -> Result<Option<Selection>> {
     // Without a browser, as over SSH, the paste screen still names the address.
     if let Some(open) = browser() {
         let mut open = std::process::Command::new(open);
@@ -528,7 +534,7 @@ fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
     let mut text = String::new();
     let mut notice = String::new();
     while screen.input(&mut text, &notice)? {
-        match parse_selection(&text) {
+        match parse_selection(&text, cache) {
             Ok(selection) => return Ok(Some(selection)),
             Err(error) => notice = error.to_string(),
         }
@@ -536,7 +542,7 @@ fn choose_model(screen: &mut Screen) -> Result<Option<Selection>> {
     Ok(None)
 }
 
-pub fn start(cache: &Path) -> Result<Selection> {
+pub fn start(cache: &Path) -> Result<Choice> {
     let mut screen = Screen::enter()?;
     loop {
         let device = match Device::detect(cache) {
@@ -549,8 +555,8 @@ pub fn start(cache: &Path) -> Result<Selection> {
                 )? {
                     Some(0) => continue,
                     Some(_) => {
-                        if let Some(selection) = choose_model(&mut screen)? {
-                            return Ok(selection);
+                        if let Some(selection) = choose_model(&mut screen, cache)? {
+                            return Ok(Choice::Talk(selection));
                         }
                         continue;
                     }
@@ -595,15 +601,29 @@ pub fn start(cache: &Path) -> Result<Selection> {
         if choices.is_empty() {
             rows.push(Row::action("Check again"));
         }
+        // Cloning needs Qwen3-TTS, which only a Mac's packaged runner has. The library stays last.
+        let clone = cfg!(target_os = "macos") && modular::packaged();
+        if clone {
+            rows.push(Row {
+                about: vec![
+                    "Opens a page in your browser. Record or upload about 10 seconds".into(),
+                    "of a voice, and Qwen3-TTS speaks it. It stays on this Mac.".into(),
+                ],
+                ..Row::action("Clone a voice")
+            });
+        }
         rows.push(more_voices());
         let Some(selected) = screen.choose(&title, &details, &rows)? else {
             return Err(Cancelled.into());
         };
         if selected == rows.len() - 1 {
-            if let Some(selection) = choose_model(&mut screen)? {
-                return Ok(selection);
+            if let Some(selection) = choose_model(&mut screen, cache)? {
+                return Ok(Choice::Talk(selection));
             }
             continue;
+        }
+        if clone && selected == rows.len() - 2 {
+            return Ok(Choice::Clone);
         }
         if choices.is_empty() {
             continue;
@@ -624,12 +644,12 @@ pub fn start(cache: &Path) -> Result<Selection> {
             continue;
         }
         let device = device?;
-        return Ok(Selection {
+        return Ok(Choice::Talk(Selection {
             model: setup.model,
             offline: false,
             voice: None,
             check: Some(device.fit(setup.memory)),
-        });
+        }));
     }
 }
 
@@ -1273,12 +1293,12 @@ mod tests {
             "npx boubou@beta run LFM3-Audio-2B",
             "npx --yes --cache \"$HOME/a cache\" boubou@beta run LFM3-Audio-2B",
         ] {
-            let selection = parse_selection(command).unwrap();
+            let selection = parse_selection(command, Path::new("/missing")).unwrap();
             assert_eq!(selection.model.id(), DEFAULT.id);
             assert!(!selection.offline);
         }
         assert!(
-            parse_selection("boubou run LFM3-Audio-2B --offline")
+            parse_selection("boubou run LFM3-Audio-2B --offline", Path::new("/missing"))
                 .unwrap()
                 .offline
         );
@@ -1287,7 +1307,10 @@ mod tests {
     #[test]
     fn a_pasted_voice_is_checked_against_the_model() {
         // The website writes --voice for Qwen3-TTS, which only a packaged build lists.
-        let error = |command| parse_selection(command).err().unwrap().to_string();
+        let error = |command| {
+            let selection = parse_selection(command, Path::new("/missing"));
+            selection.err().unwrap().to_string()
+        };
         for command in [
             "LFM3-Audio-2B --voice ryan",
             "npx boubou@beta run LFM3-Audio-2B --offline --voice ryan",
@@ -1319,7 +1342,8 @@ mod tests {
             "LFM3-Audio-2B\necho bad",
             "$(echo LFM3-Audio-2B)",
         ] {
-            assert!(parse_selection(command).is_err(), "Accepted {command}");
+            let selection = parse_selection(command, Path::new("/missing"));
+            assert!(selection.is_err(), "Accepted {command}");
         }
     }
 

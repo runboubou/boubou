@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use serde::Deserialize;
-use std::sync::OnceLock;
+use std::{path::Path, sync::OnceLock};
 
 /// Complete English speech pipelines, shared with asset locking and the packaged runner.
 #[derive(Deserialize)]
@@ -316,10 +316,12 @@ pub enum Model {
     Modular(&'static str),
 }
 
-/// A Qwen3-TTS CustomVoice speaker and its own language.
-pub type Voice = (&'static str, &'static str);
+/// Who speaks, a Qwen3-TTS CustomVoice speaker or a voice cloned on this computer, and the
+/// language Boubou talks with it in.
+pub type Voice = (String, &'static str);
 
-pub const VOICES: [Voice; 9] = [
+/// Qwen3-TTS CustomVoice's speakers, each with its own language.
+pub const VOICES: [(&str, &str); 9] = [
     ("Aiden", "English"),
     ("Ryan", "English"),
     ("Ono_Anna", "Japanese"),
@@ -428,20 +430,27 @@ impl Model {
         }
     }
 
-    /// This model speaking as the one of `VOICES` that `--voice` names. A speaker of another
-    /// language than English brings the model's Whisper entry, which hears that language.
-    pub fn voiced(self, voice: Option<&str>) -> Result<(Self, Option<&'static Voice>)> {
+    /// This model speaking as the one of `VOICES`, or of the voices cloned in `cache`, that
+    /// `--voice` names. A voice of another language than English brings the model's Whisper
+    /// entry, which hears that language.
+    pub fn voiced(self, voice: Option<&str>, cache: &Path) -> Result<(Self, Option<Voice>)> {
         let Some(voice) = voice else {
             return Ok((self, None));
         };
-        let names = VOICES.map(|(name, _)| name.to_lowercase()).join(", ");
+        let voices: Vec<Voice> = VOICES
+            .iter()
+            .map(|&(name, speaks)| (name.to_owned(), speaks))
+            .chain(crate::modular::clones(cache))
+            .collect();
+        let names: Vec<_> = voices.iter().map(|(name, _)| name.to_lowercase()).collect();
+        let names = names.join(", ");
         ensure!(
             self.id().starts_with("qwen3-tts:"),
             "{} has one voice. Qwen3-TTS models take --voice: {names}.",
             self.id()
         );
-        let speaker = VOICES
-            .iter()
+        let speaker = voices
+            .into_iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(voice))
             .with_context(|| format!("No voice is named {voice}. Choose from: {names}."))?;
         if speaker.1 == "English" || crate::modular::whisper(self.id()) {
@@ -468,6 +477,7 @@ pub fn value_parser() -> impl TypedValueParser<Value = Model> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn profiles_select_the_engine_built_for_this_host() {
@@ -490,25 +500,53 @@ mod tests {
 
     #[test]
     fn a_voice_names_its_speaker_and_brings_the_ear_for_its_language() {
+        let cache = std::env::temp_dir().join(format!("boubou-voiced-{}", std::process::id()));
         let voiced = |id, voice| {
             Model::Modular(id)
-                .voiced(Some(voice))
-                .map(|(model, voice)| (model.id(), *voice.unwrap()))
+                .voiced(Some(voice), &cache)
+                .map(|(model, voice)| {
+                    let (name, language) = voice.unwrap();
+                    (model.id(), (name, language))
+                })
                 .map_err(|error| error.to_string())
         };
+        let voice = |name: &str, language| Ok((name.to_owned(), language));
         let small = "qwen3-tts:0.6b-customvoice";
-        assert_eq!(voiced(small, "RYAN"), Ok((small, ("Ryan", "English"))));
+        assert_eq!(
+            voiced(small, "RYAN"),
+            voice("Ryan", "English").map(|v| (small, v))
+        );
         let whisper = "qwen3-tts:0.6b-customvoice-whisper";
         for id in [small, whisper] {
             assert_eq!(
                 voiced(id, "ono_anna"),
-                Ok((whisper, ("Ono_Anna", "Japanese")))
+                voice("Ono_Anna", "Japanese").map(|v| (whisper, v))
             );
         }
         assert_eq!(
             voiced(whisper, "aiden"),
-            Ok((whisper, ("Aiden", "English")))
+            voice("Aiden", "English").map(|v| (whisper, v))
         );
+        // A voice cloned on this computer is found by its name, and heard in its language.
+        fs::create_dir_all(cache.join("voices")).unwrap();
+        for (name, language) in [("mom", "zh"), ("dad", "en")] {
+            let words = format!(r#"{{"text":"Hello.","language":"{language}"}}"#);
+            fs::write(cache.join(format!("voices/{name}.json")), words).unwrap();
+        }
+        assert_eq!(
+            voiced(small, "Mom"),
+            voice("mom", "Chinese").map(|v| (whisper, v))
+        );
+        assert_eq!(
+            voiced(small, "dad"),
+            voice("dad", "English").map(|v| (small, v))
+        );
+        assert!(
+            voiced(small, "nobody")
+                .unwrap_err()
+                .ends_with("eric, dad, mom.")
+        );
+        fs::remove_dir_all(&cache).unwrap();
         // A model size without a Whisper entry cannot hear the speaker's language.
         let error = voiced("qwen3-tts:1.7b-customvoice-9b", "sohee").unwrap_err();
         assert!(error.starts_with("Sohee speaks Korean."), "{error}");
@@ -518,8 +556,12 @@ mod tests {
                 .unwrap_err()
                 .starts_with("kokoro:82m has one voice.")
         );
-        let (model, voice) = Model::Liquid(&DEFAULT).voiced(None).unwrap();
+        let (model, voice) = Model::Liquid(&DEFAULT).voiced(None, &cache).unwrap();
         assert!(model.id() == DEFAULT.id && voice.is_none());
-        assert!(Model::Liquid(&DEFAULT).voiced(Some("ryan")).is_err());
+        assert!(
+            Model::Liquid(&DEFAULT)
+                .voiced(Some("ryan"), &cache)
+                .is_err()
+        );
     }
 }

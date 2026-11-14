@@ -24,7 +24,7 @@ TARGETS = {
         "python_sha256": "f3e1cd83a7f1d70e58b0d69102c18bd6867d2f973068dc5cbfd5822e445c66df",
         "lock": "requirements-macos.lock",
         "entries": ["voice.py", "mac.py"],
-        "files": ["runtimes.json"],
+        "files": ["runtimes.json", "clone.html"],
         # A release reuses the published runner, and its check of every profile, while this digest holds,
         # so the digest also covers how the runner is built and checked.
         "tools": ["build_runner.py", "smoke.py"],
