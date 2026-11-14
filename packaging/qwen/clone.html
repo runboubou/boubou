@@ -220,7 +220,7 @@
       if (!clip) return;
       if (clip.seconds < 3) return say('That was short. Record the whole sentence.', 'bad');
       voice.words = sentence();
-      $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below.`;
+      $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below, then save it.`;
       keep(clip);
     };
     recorder.start();
@@ -228,22 +228,29 @@
     $('microphone').classList.add('recording');
   }
 
+  // A clip is kept only with its own words, and only while it is the latest one chosen.
+  let uploads = 0;
   async function upload(file) {
+    const turn = ++uploads;
+    voice.clip = null;
+    $('words').value = voice.words = '';
+    show();
     $('chosen').textContent = file.name;
     say('Listening to the clip…');
     try {
       const clip = await toWav(file);
-      if (clip.seconds < 3) return say('The clip is too short. Choose one with at least 3 seconds of speech.', 'bad');
-      keep(clip);
+      if (clip.seconds < 3) throw new RangeError('The clip is too short. Choose one with at least 3 seconds of speech.');
       const form = new FormData();
       form.append('audio', clip.wav, 'clip.wav');
       const heard = await (await api('/transcribe', { method: 'POST', body: form })).json();
+      if (turn !== uploads) return;
+      keep(clip);
       $('words').value = voice.words = heard.text;
       if (heard.language) voice.language = heard.language;
       show();
       say(heard.language ? 'Check the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
     } catch (error) {
-      say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
+      if (turn === uploads) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
     }
   }
 
@@ -329,7 +336,7 @@
     return button;
   }));
   for (const button of document.querySelectorAll('[data-way]')) {
-    button.onclick = () => { voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
+    button.onclick = () => { uploads++; voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
   }
   $('microphone').onclick = record;
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
