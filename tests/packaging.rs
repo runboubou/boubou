@@ -408,6 +408,21 @@ fn guided_start_runs_a_pasted_command_that_names_a_voice() {
 }
 
 #[test]
+fn guided_start_offers_to_clone_a_voice_above_the_library() {
+    let package = Package::new();
+    let release = package.0.join("qwen");
+    fs::create_dir(&release).unwrap();
+    fs::write(release.join("runtime.json"), "{}").unwrap();
+    fs::write(release.join("models.json"), "[]").unwrap();
+    let mut prompt = Prompt::new(&package, true, &[]);
+    prompt.expect(&["Clone a voice"]);
+    prompt.send(b"\x1b[A\x1b[A\r");
+    prompt.expect(&["Invalid packaged modular runtime manifest"]);
+    assert!(prompt.output.contains("clone"), "{}", prompt.output);
+    assert_eq!(prompt.finish().code(), Some(1));
+}
+
+#[test]
 fn guided_start_through_npx_shows_commands_that_can_be_typed() {
     let package = Package::new();
     let npx = npx_boubou();

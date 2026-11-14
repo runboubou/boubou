@@ -51,6 +51,14 @@ ORIGINALS = [
     ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "0c0e3051f131929182e2c023b9537f8b1c68adfe", {"README.md"}, "qwen3-tts:1.7b-customvoice"),
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987", {"README.md"}, "kokoro:82m"),
 ]
+# Qwen3-TTS Base weights clone a voice; CustomVoice weights cannot. A Qwen3-TTS entry reads a cloned
+# voice with the Base weights of its own size, and `boubou clone` with the 0.6B ones and Whisper, which
+# writes down what an uploaded clip says. Nobody else downloads them.
+CLONE = "qwen3-tts:clone"
+BASE = [
+    ("0.6B", "4e44ed4bcee28a0f89a493e07bde16e6dccd43eb", "5d83992436eae1d760afd27aff78a71d676296fc"),
+    ("1.7B", "34ff5318365b59cba9c03ff729f2eee0814caf72", "fd4b254389122332181a7c3db7f27e918eec64e3"),
+]
 # ptts 0.4.0 defaults: its checkpoint, read locally (q8 weights, tokenizer, default voice), and its
 # voice catalog, which the upstream handler lists at startup. The Hub client ptts uses ignores
 # HF_HUB_OFFLINE, but returns a file cached at an exact commit without connecting.
@@ -280,6 +288,22 @@ def with_runtime_profiles(files):
     return result
 
 
+def with_cloning(files):
+    """Add the Base weights, which own nothing else, and lend Whisper to `boubou clone`."""
+    whisper = ("hub/models--mlx-community--whisper-large-v3-turbo/", "hub/models--openai--whisper-large-v3/")
+    files = [{**file, "profiles": [*file["profiles"], CLONE]} if file["path"].startswith(whisper) else file
+             for file in files]
+    for size, revision, original in BASE:
+        profile = f"qwen3-tts:{size.lower()}-base"
+        profiles = [profile, CLONE] if size == "0.6B" else [profile]
+        name, repo = f"Qwen3-TTS-12Hz-{size}-Base-6bit", f"Qwen/Qwen3-TTS-12Hz-{size}-Base"
+        for file in [*snapshot(f"mlx-community/{name}", revision, f"hub/models--mlx-community--{name}/snapshots/{revision}", profile),
+                     *snapshot(repo, original, f"licenses/{repo}/{original}", profile, {"README.md"})]:
+            del file["profile"]
+            files.append({**file, "profiles": profiles})
+    return files
+
+
 def shared():
     """Weights both runners load the same way, the turn detector and license texts."""
     files = []
@@ -338,7 +362,7 @@ def main():
     for repo, revision, only, profile in ORIGINALS:
         files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
     files.extend(shared())
-    args.output.write_text(json.dumps(with_runtime_profiles(with_whisper_profiles(files)), indent=2) + "\n")
+    args.output.write_text(json.dumps(with_cloning(with_runtime_profiles(with_whisper_profiles(files))), indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -101,6 +101,9 @@ enum Action {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         pipeline: Vec<String>,
     },
+    /// Clone a voice on a page in your browser, from a recording or a clip. It stays on this
+    /// Mac, and Qwen3-TTS models speak it with --voice.
+    Clone,
     /// Download and verify the selected model and its inference backend.
     Pull {
         #[arg(value_parser = profiles::value_parser())]
@@ -232,16 +235,20 @@ fn run() -> Result<()> {
                 return Ok(());
             }
             update::check(&cache);
-            let selected = onboarding::start(&cache)?;
-            check = selected.check;
-            Action::Run {
-                model: selected.model,
-                offline: selected.offline,
-                manual: false,
-                input: Vec::new(),
-                output: None,
-                voice: selected.voice,
-                pipeline: Vec::new(),
+            match onboarding::start(&cache)? {
+                onboarding::Choice::Clone => Action::Clone,
+                onboarding::Choice::Talk(selected) => {
+                    check = selected.check;
+                    Action::Run {
+                        model: selected.model,
+                        offline: selected.offline,
+                        manual: false,
+                        input: Vec::new(),
+                        output: None,
+                        voice: selected.voice,
+                        pipeline: Vec::new(),
+                    }
+                }
             }
         }
     };
@@ -267,6 +274,7 @@ fn run() -> Result<()> {
             command,
             Action::Run { offline: false, .. }
                 | Action::Serve { offline: false, .. }
+                | Action::Clone
                 | Action::Pull { offline: false, .. }
                 | Action::Ask { offline: false, .. }
         )
@@ -309,6 +317,21 @@ fn run() -> Result<()> {
             );
             println!("Cache: {}", cache.display());
             assets::status(model, &cache)
+        }
+        Action::Clone => {
+            ensure!(
+                cfg!(target_os = "macos") && modular::packaged(),
+                "Cloning a voice needs Qwen3-TTS, on a Mac with Apple silicon."
+            );
+            let clone = profiles::Model::Modular(modular::CLONE);
+            let _checklist = checklist(
+                format!("{program} clone"),
+                check.take(),
+                clone,
+                &cache,
+                true,
+            );
+            modular::clone(&cache, &format!("{program} run qwen3-tts:0.6b-customvoice"))
         }
         Action::Pull { model, offline } => {
             let _checklist = checklist(
@@ -364,7 +387,7 @@ fn run() -> Result<()> {
                 voice_option(&voice),
                 if offline { " --offline" } else { "" }
             );
-            let (model, voice) = model.voiced(voice.as_deref())?;
+            let (model, voice) = model.voiced(voice.as_deref(), &cache)?;
             let _checklist = checklist(command, check.take(), model, &cache, true);
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
@@ -377,7 +400,7 @@ fn run() -> Result<()> {
                         io::stdin().is_terminal(),
                         "The modular runtime needs a terminal."
                     );
-                    return modular::run(id, &cache, offline, None, voice, &pipeline);
+                    return modular::run(id, &cache, offline, None, voice.as_ref(), &pipeline);
                 }
             };
             if input.is_empty() {
@@ -406,7 +429,7 @@ fn run() -> Result<()> {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let door = if offline { door.offline() } else { door };
             let command = format!("{program} serve {}{}", model.id(), voice_option(&voice));
-            let (model, voice) = model.voiced(voice.as_deref())?;
+            let (model, voice) = model.voiced(voice.as_deref(), &cache)?;
             let _checklist = checklist(command, check.take(), model, &cache, true);
             match model {
                 profiles::Model::Liquid(profile) => {
@@ -415,7 +438,7 @@ fn run() -> Result<()> {
                     })
                 }
                 profiles::Model::Modular(id) => {
-                    modular::run(id, &cache, offline, Some(&door), voice, &pipeline)
+                    modular::run(id, &cache, offline, Some(&door), voice.as_ref(), &pipeline)
                 }
             }
         }

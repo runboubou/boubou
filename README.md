@@ -81,7 +81,10 @@ npx boubou@beta pull LFM3-Omni-2B
 npx --offline boubou@beta run LFM3-Omni-2B --offline
 npx boubou@beta doctor LFM3-Omni-2B
 npx boubou@beta ask LFM3-Omni-2B photo.png "What is in this picture?"
+npx boubou@beta clone
 ```
+
+`clone` opens a page in your browser on the Mac. Record yourself reading a sentence, or upload a clip, and name the voice; Qwen3-TTS models then speak it with `--voice`, and `serve` lists it for apps. The first time, it downloads Qwen3-TTS Base weights, which clone, and Whisper, which writes down what a clip says.
 
 `serve` prints a browser link and a QR code for a phone on the same Wi-Fi; one client can use the conversation at a time. Keep the printed link private: it contains the access key. `--local` listens only on this computer. By default, `serve` requests a trusted certificate from `lan.runboubou.com`, whose name includes the host's local IP address; its private key stays on the host. `--local`, `--self-signed` or `--offline` avoids that service.
 
@@ -96,7 +99,7 @@ Each model page on the website also lists its versions and how to [swap a compon
 
 The npm launcher checks for updates before a command, at most once an hour. In a terminal it asks before updating to the newest version on your release channel; in scripts it updates without asking. If the check or installation fails, it warns and uses the last available version. `--offline`, `doctor` and `BOUBOU_NO_UPDATE_CHECK=1` skip the check.
 
-Models and runtimes stay in `~/Library/Caches/boubou` on macOS or `~/.cache/boubou` on Linux across updates; set `BOUBOU_HOME` to choose another folder. A runtime update downloads only the files that changed.
+Models and runtimes stay in `~/Library/Caches/boubou` on macOS or `~/.cache/boubou` on Linux across updates; set `BOUBOU_HOME` to choose another folder. Voices you clone stay in its `voices` folder. A runtime update downloads only the files that changed.
 
 </details>
 

@@ -27,7 +27,7 @@ const OUTPUT_LINES: usize = 40;
 
 /// The runner logs conversation text, so its output is kept only in memory for failures.
 pub(super) struct Server {
-    address: SocketAddr,
+    pub(super) address: SocketAddr,
     child: Child,
     output: Arc<Mutex<VecDeque<String>>>,
     readers: Vec<thread::JoinHandle<()>>,
@@ -35,10 +35,21 @@ pub(super) struct Server {
 
 impl Server {
     pub(super) fn start(
-        mut command: Command,
+        command: Command,
         patience: Duration,
         stopped: &AtomicBool,
     ) -> Result<(Self, Session)> {
+        let (server, stream) = Self::launch(command, patience, stopped)?;
+        let session = Session::connect(stream, server.address, stopped)?;
+        Ok((server, session))
+    }
+
+    /// Starts the runner and waits until it listens, which it does once its models are loaded.
+    pub(super) fn launch(
+        mut command: Command,
+        patience: Duration,
+        stopped: &AtomicBool,
+    ) -> Result<(Self, TcpStream)> {
         let progress = crate::progress::Progress::new("Starting the local voice engine", None);
         let address = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?.local_addr()?;
         let mut child = command
@@ -92,9 +103,8 @@ impl Server {
             server.check()?;
             // The port opens once the models are loaded.
             if let Ok(stream) = TcpStream::connect_timeout(&address, Duration::from_millis(200)) {
-                progress.status("Models loaded; connecting the voice session");
-                let session = Session::connect(stream, address, stopped)?;
-                return Ok((server, session));
+                progress.status("Models loaded");
+                return Ok((server, stream));
             }
             ensure!(
                 Instant::now() < deadline,

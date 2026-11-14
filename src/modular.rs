@@ -216,7 +216,7 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     if !current && runner.url.is_some() {
         assets::prefetch(&runner.archive(), &engine, offline)?;
     }
-    for f in model_files(id, &dir)?.iter().filter(|f| f.applies_to(id)) {
+    for f in needed(id, cache, &dir)? {
         integrity::safe_destination(&root, &f.path)?;
         let path = root.join(&f.path);
         assets::prefetch(
@@ -231,7 +231,9 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     } else {
         Some(archive(&runner, &dir, &engine, offline)?)
     };
-    model_assets(id, &root, &dir, Some(offline))?;
+    for id in [id].into_iter().chain(cloner(id, cache)) {
+        model_assets(id, &root, &dir, Some(offline))?;
+    }
     progress::step(Step::Start);
     let Some(archive) = archive else {
         return Ok(installed);
@@ -279,7 +281,7 @@ pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
         let size = incremental::estimate(&runner, &root, &engine.join("installed"));
         parts[3].files.push((archive, size.unwrap_or(runner.size)));
     }
-    for f in model_files(id, &dir)?.iter().filter(|f| f.applies_to(id)) {
+    for f in needed(id, cache, &dir)? {
         let path = f.path.to_string_lossy().to_lowercase();
         let part = if path.contains("parakeet") || path.contains("whisper") {
             0
@@ -313,28 +315,73 @@ fn language(id: &str) -> String {
     })
 }
 
+/// The languages of every voice, by the codes a voice list gives them. Other voices speak English.
+const LANGUAGES: [(&str, &str); 11] = [
+    ("en", "English"),
+    ("ja", "Japanese"),
+    ("zh", "Chinese"),
+    ("ko", "Korean"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("pt", "Portuguese"),
+    ("it", "Italian"),
+    ("ru", "Russian"),
+    ("nl", "Dutch"),
+];
+
+/// The voices `boubou clone` kept in `cache`, by name, each with the language it speaks.
+pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
+    let Ok(folder) = fs::read_dir(cache.join("voices")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<_> = folder
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_stem()?.to_str()?;
+            // The page names a voice in lowercase letters, digits, - and _.
+            let named = name.len() <= 32
+                && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+                && name
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'));
+            if !named || path.extension()? != "json" {
+                return None;
+            }
+            let words: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+            let (_, speaks) = LANGUAGES
+                .iter()
+                .find(|(code, _)| words["language"] == *code)?;
+            Some((name.to_owned(), *speaks))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// The Base weights that read the voices cloned in `cache`, for a Qwen3-TTS entry, once there
+/// are any. CustomVoice weights cannot clone.
+fn cloner(id: &str, cache: &Path) -> Option<&'static str> {
+    let base = match id.get(..14)? {
+        "qwen3-tts:0.6b" => "qwen3-tts:0.6b-base",
+        "qwen3-tts:1.7b" => "qwen3-tts:1.7b-base",
+        _ => return None,
+    };
+    (!clones(cache).is_empty()).then_some(base)
+}
+
 /// What `GET /v1/audio/voices` answers for a model: the voices a text to read aloud can name,
-/// first the one that reads when none is named. Qwen3-TTS has its speakers, each with the
-/// language Boubou talks with it in; every other model has the one voice it starts with.
-fn voices(id: &str, voice: Option<&profiles::Voice>) -> String {
+/// first the one that reads when none is named. Qwen3-TTS has its speakers and the voices
+/// `cloned` on this computer, each with the language Boubou talks with it in; every other model
+/// has the one voice it starts with.
+fn voices(id: &str, voice: Option<&profiles::Voice>, cloned: &[profiles::Voice]) -> String {
     let named = |name: &str, speaks: &[&str]| {
         let languages: Vec<_> = speaks
             .iter()
             .map(|&title| {
-                let code = match title {
-                    "Chinese" => "zh",
-                    "Dutch" => "nl",
-                    "French" => "fr",
-                    "German" => "de",
-                    "Italian" => "it",
-                    "Japanese" => "ja",
-                    "Korean" => "ko",
-                    "Portuguese" => "pt",
-                    "Spanish" => "es",
-                    // Every other voice speaks English.
-                    _ => "en",
-                };
-                json!({"code": code, "title": title})
+                let code = LANGUAGES.iter().find(|(_, speaks)| *speaks == title);
+                json!({"code": code.map_or("en", |(code, _)| *code), "title": title})
             })
             .collect();
         json!({"id": name.to_lowercase(), "name": name, "languages": languages})
@@ -342,9 +389,14 @@ fn voices(id: &str, voice: Option<&profiles::Voice>) -> String {
     let voices: Vec<_> = if id.starts_with("qwen3-tts:") {
         // The speaker the runner starts this entry with, unless --voice names another.
         let own = voice.map_or(if whisper(id) { "Vivian" } else { "Aiden" }, |voice| {
-            voice.0
+            &voice.0
         });
-        let mut speakers = profiles::VOICES;
+        let speakers = profiles::VOICES
+            .iter()
+            .map(|&(name, speaks)| (name, speaks));
+        let mut speakers: Vec<_> = speakers
+            .chain(cloned.iter().map(|(name, speaks)| (name.as_str(), *speaks)))
+            .collect();
         speakers.sort_by_key(|(name, _)| *name != own);
         speakers
             .iter()
@@ -418,6 +470,14 @@ impl ModelFile {
     }
 }
 
+/// The files `id` reads: its own, and the Base weights that read voices cloned in `cache`.
+fn needed(id: &str, cache: &Path, dir: &Path) -> Result<Vec<ModelFile>> {
+    let ids: Vec<_> = [id].into_iter().chain(cloner(id, cache)).collect();
+    let mut files = model_files(id, dir)?;
+    files.retain(|f| ids.iter().any(|id| f.applies_to(id)));
+    Ok(files)
+}
+
 fn model_files(id: &str, dir: &Path) -> Result<Vec<ModelFile>> {
     let files: Vec<ModelFile> = serde_json::from_slice(&fs::read(dir.join("models.json"))?)?;
     ensure!(
@@ -445,10 +505,9 @@ fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
     let Host::Mac { min_macos } = &runner.host else {
         bail!("Guided startup requires the macOS modular runtime.");
     };
-    let files = model_files(id, dir)?;
     let root = cache.join("qwen");
     let mut download = 0;
-    for file in files.iter().filter(|file| file.applies_to(id)) {
+    for file in needed(id, cache, dir)? {
         integrity::safe_destination(&root, &file.path)?;
         if !root
             .join(&file.path)
@@ -531,22 +590,31 @@ pub fn run(
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
+    let cloned = clones(cache);
     let mut command = Command::new(installed.join("bin/python3"));
     command
         .args(["-I", "-B"])
         .arg(installed.join(entry))
         .arg(id)
         .arg(cache.join("qwen"))
-        .arg(release_dir()?.join("models.json"))
-        // Later options replace earlier ones: the voice replaces the model's own speaker, and
-        // pipeline options replace both.
-        .args(
-            voice
-                .iter()
-                .flat_map(|(speaker, _)| ["--qwen3_tts_speaker", speaker]),
-        )
-        .args(pipeline)
-        .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
+        .arg(release_dir()?.join("models.json"));
+    // The runner reads cloned voices with the Base weights that preparing verified.
+    if let Some(base) = cloner(id, cache) {
+        command
+            .env("BOUBOU_VOICES", cache.join("voices"))
+            .env("BOUBOU_CLONER", base);
+    }
+    // Later options replace earlier ones: the voice replaces the model's own speaker, and
+    // pipeline options replace both.
+    match voice {
+        Some((name, _)) if cloned.iter().any(|(clone, _)| clone == name) => {
+            command.env("BOUBOU_VOICE", name)
+        }
+        Some((speaker, _)) => command.args(["--qwen3_tts_speaker", speaker]),
+        None => &mut command,
+    }
+    .args(pipeline)
+    .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
         // A model that the Hub client fetches first can take long to arrive.
         chat::Server::start(
@@ -559,7 +627,13 @@ pub fn run(
         Some(door) => {
             // Starting proved the runner ready; its one conversation goes to whoever visits.
             drop(session);
-            chat::from_browser(&mut server, door, voices(id, voice), cache, &stopped)
+            chat::from_browser(
+                &mut server,
+                door,
+                voices(id, voice, &cloned),
+                cache,
+                &stopped,
+            )
         }
         None => chat::microphone(
             &mut server,
@@ -573,40 +647,131 @@ pub fn run(
     result
 }
 
+/// What `boubou clone` prepares: Qwen3-TTS 0.6B Base weights, which clone, and Whisper, which
+/// writes down what an uploaded clip says.
+pub const CLONE: &str = "qwen3-tts:clone";
+
+/// Opens the runner's page in a browser, where a person clones a voice into `cache`, until
+/// Ctrl+C. The page shows `run` with `--voice` to talk with it.
+pub fn clone(cache: &Path, run: &str) -> Result<()> {
+    use std::{
+        io::Read,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    let installed = prepare(CLONE, cache, false)?;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = stopped.clone();
+    ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
+    // Only the browser Boubou opens holds the key to what the page does.
+    let mut key = [0; 16];
+    fs::File::open("/dev/urandom")?.read_exact(&mut key)?;
+    let key = assets::hex(&key);
+    let mut command = Command::new(installed.join("bin/python3"));
+    command
+        .args(["-I", "-B"])
+        .arg(installed.join("mac.py"))
+        .args(["clone", CLONE])
+        .arg(cache.join("qwen"))
+        .arg(release_dir()?.join("models.json"))
+        .env("BOUBOU_VOICES", cache.join("voices"))
+        .env("BOUBOU_KEY", &key)
+        .env("BOUBOU_RUN", run);
+    let (mut server, _) = chat::Server::launch(command, Duration::from_secs(300), &stopped)?;
+    let link = format!("http://127.0.0.1:{}/#{key}", server.address.port());
+    let opened = Command::new("open").arg(&link).status();
+    let note = if opened.is_ok_and(|status| status.success()) {
+        "Opened the voice page in your browser."
+    } else {
+        "Open the voice page in a browser:"
+    };
+    if !progress::finish(note) {
+        eprintln!("{note}");
+    }
+    eprintln!("  {link}\n  Press Ctrl+C when you are done.");
+    while !stopped.load(Ordering::SeqCst) {
+        server.check()?;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_model_lists_the_voices_a_text_can_name_with_its_own_first() {
-        let ids = |id, voice| {
-            let listed: serde_json::Value = serde_json::from_str(&voices(id, voice)).unwrap();
+        let cloned = [("mom".to_owned(), "Chinese")];
+        let ids = |id, voice: Option<(&str, &'static str)>, cloned: &[profiles::Voice]| {
+            let voice = voice.map(|(name, speaks)| (name.to_owned(), speaks));
+            let listed = voices(id, voice.as_ref(), cloned);
+            let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
             let voices = listed["voices"].as_array().unwrap().iter();
             let ids = voices.map(|voice| voice["id"].as_str().unwrap().to_owned());
             ids.collect::<Vec<_>>()
         };
         let small = "qwen3-tts:0.6b-customvoice";
         let whisper = "qwen3-tts:0.6b-customvoice-whisper";
-        assert_eq!(ids(small, None).len(), 9);
-        assert_eq!(ids(small, None)[..3], ["aiden", "ryan", "ono_anna"]);
-        assert_eq!(ids(whisper, None)[..2], ["vivian", "aiden"]);
-        let anna = ids(whisper, Some(&("Ono_Anna", "Japanese")));
+        assert_eq!(ids(small, None, &[]).len(), 9);
+        assert_eq!(ids(small, None, &[])[..3], ["aiden", "ryan", "ono_anna"]);
+        assert_eq!(ids(whisper, None, &[])[..2], ["vivian", "aiden"]);
+        let anna = ids(whisper, Some(("Ono_Anna", "Japanese")), &[]);
         assert_eq!(anna[..3], ["ono_anna", "aiden", "ryan"]);
+        // Cloned voices follow the speakers, unless one speaks first.
+        assert_eq!(ids(small, None, &cloned)[8..], ["eric", "mom"]);
         assert_eq!(
-            voices(whisper, None).split_once(',').unwrap().0,
+            ids(small, Some(("mom", "Chinese")), &cloned)[..2],
+            ["mom", "aiden"]
+        );
+        assert!(voices(small, None, &cloned).ends_with(
+            r#"{"id":"mom","languages":[{"code":"zh","title":"Chinese"}],"name":"mom"}]}"#
+        ));
+        assert_eq!(
+            voices(whisper, None, &[]).split_once(',').unwrap().0,
             r#"{"voices":[{"id":"vivian""#
         );
-        assert!(voices(whisper, None).contains(
+        assert!(voices(whisper, None, &[]).contains(
             r#"{"id":"ono_anna","languages":[{"code":"ja","title":"Japanese"}],"name":"Ono_Anna"}"#
         ));
         assert_eq!(
-            voices("pocket-tts:french_24l", None),
+            voices("pocket-tts:french_24l", None, &cloned),
             r#"{"voices":[{"id":"default","languages":[{"code":"fr","title":"French"}],"name":"Default"}]}"#
         );
         let both =
             r#""languages":[{"code":"zh","title":"Chinese"},{"code":"en","title":"English"}]"#;
-        assert!(voices("chattts:whisper", None).contains(both));
-        assert_eq!(ids("kokoro:82m", None), ["default"]);
+        assert!(voices("chattts:whisper", None, &[]).contains(both));
+        assert_eq!(ids("kokoro:82m", None, &cloned), ["default"]);
+    }
+
+    #[test]
+    fn cloned_voices_are_listed_and_bring_the_base_weights_of_their_size() {
+        let cache = std::env::temp_dir().join(format!("boubou-clones-{}", std::process::id()));
+        let small = "qwen3-tts:0.6b-customvoice-whisper";
+        assert_eq!(cloner(small, &cache), None);
+        fs::create_dir_all(cache.join("voices")).unwrap();
+        for (file, words) in [
+            ("mom.json", r#"{"text":"你好。","language":"zh"}"#),
+            ("dad.json", r#"{"text":"Hello.","language":"en"}"#),
+            // Half-written, in a language Qwen3-TTS does not speak, or not a name the page gives.
+            (".kid.json", r#"{"text":"Hi.","language":"en"}"#),
+            ("pet.json", r#"{"text":"Hej.","language":"sv"}"#),
+            ("Big.json", r#"{"text":"Hi.","language":"en"}"#),
+            ("mom.wav", ""),
+        ] {
+            fs::write(cache.join("voices").join(file), words).unwrap();
+        }
+        let both = vec![("dad".into(), "English"), ("mom".into(), "Chinese")];
+        assert_eq!(clones(&cache), both);
+        assert_eq!(cloner(small, &cache), Some("qwen3-tts:0.6b-base"));
+        let large = "qwen3-tts:1.7b-customvoice-27b";
+        assert_eq!(cloner(large, &cache), Some("qwen3-tts:1.7b-base"));
+        assert_eq!(cloner("kokoro:82m", &cache), None);
+        assert_eq!(cloner(CLONE, &cache), None);
+        fs::remove_dir_all(&cache).unwrap();
     }
 
     #[test]
