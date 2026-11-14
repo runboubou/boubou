@@ -19,7 +19,8 @@
   body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 20px; }
   h1 { margin: 0; font-size: 1.6rem; font-weight: 600; }
-  h2 { margin: 0 0 12px; font-size: 1.05rem; font-weight: 600; }
+  h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .step { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 10px; border-radius: 50%; background: var(--soft); color: var(--accent); font-size: .85rem; }
   p { margin: 0; }
   .muted { color: var(--muted); font-size: .92rem; }
   section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 14px; }
@@ -34,6 +35,8 @@
   blockquote { margin: 0; padding: 14px 16px; border-radius: 10px; background: var(--soft); font-size: 1.12rem; line-height: 1.6; }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+  .level { flex: 1; min-width: 80px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .level span { display: block; height: 100%; width: 0; background: var(--good); transition: width .08s linear; }
   input[type="text"], textarea { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--page); color: var(--ink); }
   textarea { min-height: 84px; resize: vertical; }
   input[type="file"] { position: absolute; opacity: 0; width: 1px; }
@@ -59,7 +62,8 @@
     <p class="muted">Give Boubou about 10 seconds of a voice. It stays on this Mac. Nothing is uploaded.</p>
   </header>
 
-  <section aria-label="The voice">
+  <section>
+    <h2><span class="step">1</span>Give a voice</h2>
     <div class="ways">
       <button type="button" data-way="record" aria-pressed="true">Record</button>
       <button type="button" data-way="upload" aria-pressed="false">Upload a clip</button>
@@ -72,6 +76,7 @@
         <div class="row">
           <button type="button" class="primary" id="microphone">Record</button>
           <span class="muted" id="time">Up to 15 seconds</span>
+          <div class="level" id="level" hidden><span></span></div>
         </div>
       </div>
     </div>
@@ -88,7 +93,8 @@
     <audio id="sample" controls hidden></audio>
   </section>
 
-  <section aria-label="Keep it">
+  <section>
+    <h2><span class="step">2</span>Name it and save</h2>
     <label class="consent"><input type="checkbox" id="consent"><span>This is my own voice, or I have permission to use it.</span></label>
     <div class="row">
       <input type="text" class="name" id="name" placeholder="mom" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Name">
@@ -191,9 +197,13 @@
     show();
   }
 
+  // Changes whenever the person changes what they give. A recording or a clip is kept only if
+  // nothing changed since it began, with the words it began with.
+  let choice = 0;
   let recorder;
   async function record() {
     if (recorder) return recorder.stop();
+    const turn = ++choice, words = sentence();
     say('');
     let stream;
     try {
@@ -203,23 +213,37 @@
     }
     const parts = [];
     const started = Date.now();
+    // The bar shows how loud the microphone hears the person, so they see that it does.
+    const listener = new AudioContext();
+    const meter = listener.createAnalyser();
+    const heard = new Float32Array(meter.fftSize);
+    listener.createMediaStreamSource(stream).connect(meter);
+    $('level').hidden = false;
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = ({ data }) => parts.push(data);
     const tick = setInterval(() => {
+      meter.getFloatTimeDomainData(heard);
+      const loudest = heard.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0);
+      $('level').firstElementChild.style.width = `${Math.min(100, loudest * 250)}%`;
       const seconds = Math.floor((Date.now() - started) / 1000);
       $('time').textContent = `0:${String(seconds).padStart(2, '0')} of about 0:10`;
       if (seconds >= LONGEST) recorder.stop();
-    }, 250);
+    }, 100);
     recorder.onstop = async () => {
       clearInterval(tick);
+      listener.close();
       stream.getTracks().forEach((track) => track.stop());
       recorder = null;
-      $('microphone').textContent = 'Record again';
+      $('level').hidden = true;
       $('microphone').classList.remove('recording');
-      const clip = await toWav(new Blob(parts, { type: parts[0]?.type })).catch((error) => say(error.message, 'bad'));
-      if (!clip) return;
+      $('microphone').textContent = 'Record';
+      $('time').textContent = 'Up to 15 seconds';
+      const clip = await toWav(new Blob(parts, { type: parts[0]?.type })).catch((error) => error);
+      if (turn !== choice) return;
+      if (clip instanceof Error) return say(clip.message, 'bad');
       if (clip.seconds < 3) return say('That was short. Record the whole sentence.', 'bad');
-      voice.words = sentence();
+      voice.words = words;
+      $('microphone').textContent = 'Record again';
       $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below, then save it.`;
       keep(clip);
     };
@@ -228,10 +252,8 @@
     $('microphone').classList.add('recording');
   }
 
-  // A clip is kept only with its own words, and only while it is the latest one chosen.
-  let uploads = 0;
   async function upload(file) {
-    const turn = ++uploads;
+    const turn = ++choice;
     voice.clip = null;
     $('words').value = voice.words = '';
     show();
@@ -243,14 +265,14 @@
       const form = new FormData();
       form.append('audio', clip.wav, 'clip.wav');
       const heard = await (await api('/transcribe', { method: 'POST', body: form })).json();
-      if (turn !== uploads) return;
+      if (turn !== choice) return;
       keep(clip);
       $('words').value = voice.words = heard.text;
       if (heard.language) voice.language = heard.language;
       show();
       say(heard.language ? 'Check the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
     } catch (error) {
-      if (turn === uploads) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
+      if (turn === choice) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
     }
   }
 
@@ -272,6 +294,7 @@
       for (const named of document.querySelectorAll('.named')) named.textContent = name;
       $('command').textContent = `${run} --voice ${name}`;
       $('use').hidden = false;
+      $('use').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       await list();
       hear(name, voice.language, $(`play-${name}`));
     } catch (error) {
@@ -332,11 +355,16 @@
     button.type = 'button';
     button.dataset.language = code;
     button.textContent = label;
-    button.onclick = () => { voice.language = code; if (voice.way === 'record') voice.clip = null; show(); };
+    button.onclick = () => {
+      voice.language = code;
+      // Another sentence: a recording of the last one, finished or not, is let go.
+      if (voice.way === 'record') { choice++; voice.clip = null; recorder?.stop(); }
+      show();
+    };
     return button;
   }));
   for (const button of document.querySelectorAll('[data-way]')) {
-    button.onclick = () => { uploads++; voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
+    button.onclick = () => { choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
   }
   $('microphone').onclick = record;
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
