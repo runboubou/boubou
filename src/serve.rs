@@ -45,6 +45,8 @@ mod names;
 const PAGE: &str = include_str!("serve.html");
 /// The pictured steps for connecting a robot or an app.
 const GUIDE: &str = "https://runboubou.com/connect/robots/";
+/// The steps for an app on the same computer, with N.E.K.O as the example.
+const APPS: &str = "https://runboubou.com/connect/apps/";
 /// Far above a 20 ms frame or a playback report.
 const MAX_MESSAGE: usize = 1 << 16;
 /// Requests answered at once; a flood beyond this is turned away.
@@ -225,6 +227,9 @@ struct Links {
     realtime: Option<String>,
     /// Where robots and programs that take only an address and a port connect, in the clear.
     bare: Option<(Ipv4Addr, u16)>,
+    /// For an app on this computer with an OpenAI-compatible voice setting: the API's address
+    /// and the voice a text reads in when it names none.
+    app: Option<(String, String)>,
 }
 
 impl Links {
@@ -292,6 +297,21 @@ impl Links {
                         "{dim}Takes one full address instead? This one carries the key, so Boubou does not ask:"
                     ),
                     format!("{dim}{link}"),
+                ],
+            );
+        }
+        if let Some((url, voice)) = &self.app {
+            section(
+                "App on this Mac",
+                vec![
+                    "In its voice settings, choose OpenAI-compatible, then type:".into(),
+                    String::new(),
+                    format!("   API URL   {bold}{accent}{url}"),
+                    format!("   Model     {bold}{accent}boubou"),
+                    format!("   Voice     {bold}{accent}{voice}"),
+                    "   API key   leave it empty".into(),
+                    String::new(),
+                    format!("{dim}Step by step: {APPS}"),
                 ],
             );
         }
@@ -452,6 +472,17 @@ impl Door {
                 None => format!("ws://{reachable}:{port}/v1/realtime?key={key}"),
             }),
             bare: api.as_ref().map(|_| (reachable, port)),
+            app: api.as_ref().map(|api| {
+                // The list offers the voice that reads when a text names none first.
+                let voices = serde_json::from_str::<serde_json::Value>(&api.voices);
+                let voice = voices
+                    .ok()
+                    .and_then(|list| Some(list["voices"][0]["id"].as_str()?.into()));
+                (
+                    format!("http://127.0.0.1:{port}/v1"),
+                    voice.unwrap_or("default".into()),
+                )
+            }),
         };
         let allowed = Arc::new(Allowed::load(cache)?);
         let (asks, asked) = mpsc::channel();
@@ -797,7 +828,7 @@ fn answer(
 ) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
-    let (method, target, accept, bearer, head) = loop {
+    let (method, target, accept, bearer, page, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
@@ -817,9 +848,11 @@ fn answer(
             let bearer = header("Authorization")
                 .and_then(|sent| sent.value.strip_prefix(b"Bearer "))
                 .map(|key| String::from_utf8_lossy(key).into_owned());
+            // Browsers say which site a page comes from; programs do not.
+            let page = header("Origin").is_some();
             let method = parsed.method.unwrap_or_default().to_owned();
             let target = parsed.path.unwrap_or_default().to_owned();
-            break (method, target, accept, bearer, head);
+            break (method, target, accept, bearer, page, head);
         }
     };
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -835,7 +868,10 @@ fn answer(
             | ("POST", "/v1/audio/speech", false)
             | ("GET", "/v1/audio/voices", false)
     );
-    let allowed = keyed || (robot && desk.api.is_some() && desk.lets_in(peer) && !closed(socket));
+    // A program on this computer is the person's own; a web page, even one opened here, is not.
+    let own = peer.is_loopback() && !page;
+    let allowed =
+        keyed || (robot && desk.api.is_some() && (own || desk.lets_in(peer)) && !closed(socket));
     let respond = |stream: &mut dyn Write, status: &str, kind: &str, body: &str| {
         write!(
             stream,
@@ -1024,14 +1060,29 @@ mod tests {
         address
     }
 
-    /// Connects as a robot or program would, with the key in the address or as an API key.
-    fn realtime(link: &str, query: &str, bearer: Option<&str>) -> tungstenite::Result<Page> {
+    /// Tests connect from this computer, where only a web page is asked before it is let in:
+    /// one stands in for a robot on another device.
+    const SITE: Option<&str> = Some("https://page.test");
+
+    /// Connects as a robot or program would, with the key in the address or as an API key, or
+    /// as a web page from `site`.
+    fn realtime(
+        link: &str,
+        query: &str,
+        bearer: Option<&str>,
+        site: Option<&str>,
+    ) -> tungstenite::Result<Page> {
         use tungstenite::client::IntoClientRequest;
         let url = format!("ws://{}/v1/realtime{query}", address(link));
         let mut request = url.into_client_request().unwrap();
         if let Some(bearer) = bearer {
             let value = format!("Bearer {bearer}").parse().unwrap();
             request.headers_mut().insert("Authorization", value);
+        }
+        if let Some(site) = site {
+            request
+                .headers_mut()
+                .insert("Origin", site.parse().unwrap());
         }
         handshake(request, TcpStream::connect(address(link)).unwrap())
     }
@@ -1422,19 +1473,25 @@ mod tests {
         let key = key(&links.here);
         assert_eq!(link.split("key=").nth(1), Some(key));
         // Without the key, or with another, the person is asked first.
-        let wrong = || realtime(&link, "?key=wrong", Some("wrong"));
+        let wrong = || realtime(&link, "?key=wrong", Some("wrong"), SITE);
         let (refused, asked) = asking(&door, || Ok(Some(false)), wrong);
         assert_eq!(asked, IpAddr::from(Ipv4Addr::LOCALHOST));
         assert_eq!(status(refused), 404);
         let not_again = || panic!("Asked again about a robot that was turned away");
-        let (refused, _) = asking(&door, not_again, || realtime(&link, "", None));
+        let (refused, _) = asking(&door, not_again, || realtime(&link, "", None, SITE));
         assert_eq!(status(refused), 404);
         // A model without a Realtime API has nothing to offer them.
         let (_other, other) = local();
         let other_key = format!("?key={}", self::key(&other));
-        assert_eq!(status(realtime(&other, &other_key, None)), 404);
+        assert_eq!(status(realtime(&other, &other_key, None, None)), 404);
 
-        let mut robot = realtime(&link, &format!("?model=any&key={key}"), None).unwrap();
+        // A program on this computer needs neither the key nor a question.
+        let mut own = realtime(&link, "", None, None).unwrap();
+        assert_eq!(own.read().unwrap().to_text().unwrap(), "created");
+        own.close(None).unwrap();
+        drop(own);
+
+        let mut robot = once_free(|| realtime(&link, &format!("?model=any&key={key}"), None, None));
         assert_eq!(robot.read().unwrap().to_text().unwrap(), "created");
         robot.send("hello".into()).unwrap();
         assert_eq!(robot.read().unwrap().to_text().unwrap(), "hello");
@@ -1447,7 +1504,7 @@ mod tests {
         drop(robot);
 
         // Once it has left, a program that sends the key as its API key takes the seat.
-        let mut program = once_free(|| realtime(&link, "", Some(key)));
+        let mut program = once_free(|| realtime(&link, "", Some(key), None));
         assert_eq!(program.read().unwrap().to_text().unwrap(), "created");
         // Neither took the conversation's audio device.
         let stopped = AtomicBool::new(false);
@@ -1466,13 +1523,18 @@ mod tests {
             fallback: Some("https://192.168.1.20:2682/#key".into()),
             realtime: Some("wss://name:2682/v1/realtime?key=key".into()),
             bare: Some((Ipv4Addr::new(192, 168, 1, 20), 2682)),
+            app: Some(("http://127.0.0.1:2682/v1".into(), "serena".into())),
         };
         // In a log: the same sections, without escape codes or a code to scan.
         let plain = links.guide(&Ink::default(), 80, &[]).join("\n");
         assert!(!plain.contains('\x1b'));
         let at = |title: &str| plain.find(&format!("\n  {title}\n")).expect(title);
-        assert!(at("Phone") < at("Robot or app") && at("Robot or app") < at(progress::HERE));
+        let order = ["Phone", "Robot or app", "App on this Mac", progress::HERE].map(at);
+        assert!(order.is_sorted(), "{plain}");
         assert!(plain.contains("\n     Address   192.168.1.20\n     Port      2682\n"));
+        // An app on this computer gets every value its voice settings ask for, and no question.
+        let app = "\n     API URL   http://127.0.0.1:2682/v1\n     Model     boubou\n     Voice     serena\n     API key   leave it empty\n";
+        assert!(plain.contains(app), "{plain}");
 
         // On a terminal the code sits under Phone, and the two values to type stand out.
         let ink = Ink {
@@ -1489,9 +1551,11 @@ mod tests {
         let page = Links {
             realtime: None,
             bare: None,
+            app: None,
             ..links
         };
-        assert!(!page.guide(&ink, 80, &[]).concat().contains("Robot"));
+        let offered = page.guide(&ink, 80, &[]).concat();
+        assert!(!offered.contains("Robot") && !offered.contains("App on"));
     }
 
     #[test]
@@ -1518,8 +1582,11 @@ mod tests {
             links.bare.unwrap(),
             (Ipv4Addr::LOCALHOST, port.parse().unwrap())
         );
+        // An app on this computer is told the API's address and the voice the list offers first.
+        let api_url = format!("http://127.0.0.1:{port}/v1");
+        assert_eq!(links.app, Some((api_url, "default".into())));
         // Settings that take only an address and a port, with an API key of the robot's own.
-        let robot = || realtime(&link, "", Some("DUMMY"));
+        let robot = || realtime(&link, "", Some("DUMMY"), SITE);
 
         // Unanswered, it is asked about again when it returns.
         let (unanswered, _) = asking(&door, || Ok(None), robot);
@@ -1529,7 +1596,7 @@ mod tests {
         // that stopped waiting does not take the seat from it.
         let (let_in, asked) = thread::scope(|scope| {
             let mut gave_up = TcpStream::connect(address(&link)).unwrap();
-            let request = "GET /v1/realtime HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+            let request = "GET /v1/realtime HTTP/1.1\r\nOrigin: https://page.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
             gave_up.write_all(request.as_bytes()).unwrap();
             let ask = door.asks.recv_timeout(Duration::from_secs(5)).unwrap();
             drop(gave_up);
@@ -1557,7 +1624,7 @@ mod tests {
 
         // A later start lets it in without asking. The page still needs the key.
         let (_later, later) = Door::bind(0, &cache, None, offers(api), None).unwrap();
-        let mut socket = realtime(&later.realtime.unwrap(), "", Some("DUMMY")).unwrap();
+        let mut socket = realtime(&later.realtime.unwrap(), "", Some("DUMMY"), SITE).unwrap();
         assert_eq!(socket.read().unwrap().to_text().unwrap(), "created");
         assert_eq!(status(plain(&later.here, "")), 404);
         fs::remove_dir_all(cache).unwrap();
@@ -1615,12 +1682,19 @@ mod tests {
             program
         };
 
-        // The voices a text can name are listed under the same key.
+        // The voices a text can name are listed under the same key. A page with another is
+        // asked about, and a program on this computer needs none.
         let list = |key: &str| format!("GET /v1/audio/voices?key={key} HTTP/1.1\r\n\r\n");
+        let page = |asked: String| asked.replacen("\r\n", "\r\nOrigin: https://page.test\r\n", 1);
         for wrong in [post("wrong", ""), list("wrong")] {
-            let (unanswered, _) = asking(&door, || Ok(None), || request(link, &wrong));
+            let (unanswered, _) = asking(&door, || Ok(None), || request(link, &page(wrong)));
             assert!(unanswered.starts_with("HTTP/1.1 404 "), "{unanswered}");
         }
+        let own = request(link, "GET /v1/audio/voices HTTP/1.1\r\n\r\n");
+        assert!(
+            own.starts_with("HTTP/1.1 200 OK\r\n") && own.ends_with(VOICES),
+            "{own}"
+        );
         let got = format!("GET /v1/audio/speech?key={key} HTTP/1.1\r\n\r\n");
         assert!(request(link, &got).starts_with("HTTP/1.1 404 "));
         // A model without a voice of its own to ask.
