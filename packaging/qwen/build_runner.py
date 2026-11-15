@@ -30,6 +30,9 @@ TARGETS = {
         "tools": ["build_runner.py", "smoke.py"],
         "imports": "kittenml.kittentts_legacy.onnx_model, mlx.core, omnivoice, pocket_tts, sounddevice, speech_to_speech.cli",
         "device": "mlx.core.default_device()",
+        # Kokoro reads Mandarin with jieba and pypinyin, and Japanese with fugashi and unidic-lite.
+        "check": "entries[0]['read_japanese']()\nfrom misaki import ja, zh\n"
+                 "assert zh.ZHG2P()('你好')[0] and ja.JAG2P()('こんにちは')[0]",
         "host": {"min_macos": "15.0"},
     },
     ("Linux", "x86_64"): {
@@ -164,9 +167,10 @@ def main():
             tar.extractall(stage, filter="data")
         root = stage / "python"
         python = root / "bin/python3"
-        # ChatTTS, EnCodec and SoX publish only pure-Python sdists. The verified interpreter's setuptools builds them.
+        # ChatTTS, EnCodec, SoX, jieba and unidic-lite publish only pure-Python sdists. The verified
+        # interpreter's setuptools builds them.
         subprocess.run([python, "-I", "-B", "-m", "pip", "install", "--isolated", "--only-binary=:all:",
-                        "--no-binary=chattts,encodec,sox", "--no-build-isolation",
+                        "--no-binary=chattts,encodec,sox,jieba,unidic-lite", "--no-build-isolation",
                         "--require-hashes", "--no-deps", "--no-compile", "-r", HERE / target["lock"]], check=True)
         subprocess.run([python, "-I", "-B", "-m", "pip", "check"], check=True)
         for name in [*target["entries"], *target["files"], target["lock"]]:
@@ -198,8 +202,7 @@ from misaki import en, espeak
 from omnivoice import VoiceClonePrompt
 from speech_to_speech.LLM.chat import Chat, make_user_message
 runner = runpy.run_path(sys.argv[1])
-for entry in sys.argv[2:]:
-    runpy.run_path(entry)
+entries = [runpy.run_path(entry) for entry in sys.argv[2:]]
 assert VoiceClonePrompt.load(str(runner["VOICES"] / "omnivoice.prompt")).ref_text
 assert len((runner["VOICES"] / "chattts.txt").read_text().strip()) == 859
 runner["preserve_qwen_user_turns"]()
@@ -212,6 +215,7 @@ runner["read_aloud"]()
 with tempfile.TemporaryDirectory() as work:
     runner["link_espeak_data"](Path(work))
     assert en.G2P(fallback=espeak.EspeakFallback(british=False))("Boubou")[0]
+{target.get("check", "")}
 print({target["device"]})
 """
         subprocess.run([moved / "bin/python3", "-I", "-B", "-c", check, *(moved / name for name in target["entries"])],

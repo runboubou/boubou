@@ -146,7 +146,7 @@ jobs:
             set -- \
               "qwen3-tts:1.7b-customvoice qwen3-tts:1.7b-customvoice-whisper qwen3-tts:0.6b-customvoice-whisper" \
               "qwen3-tts:0.6b-customvoice chattts:en chattts:whisper" \
-              "kokoro:82m phonon:31m-en supertonic:3 pocket-tts:english_2026-10" \
+              "kokoro:82m kokoro:82m-whisper phonon:31m-en supertonic:3 pocket-tts:english_2026-10" \
               "pocket-tts:english_2m_2026-10 pocket-tts:french kitten-tts:mini-0.8 kitten-tts:nano-0.8-int8 kitten-tts:nano-0.1"
           else
             set -- "qwen3-tts:0.6b-customvoice pocket-tts:english_2026-10"

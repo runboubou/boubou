@@ -18,18 +18,22 @@ LFS = re.compile(
     rb"version https://git-lfs.github.com/spec/v1\noid sha256:([0-9a-f]{64})\nsize ([0-9]+)\n?"
 )
 
-# Kokoro-82M's voices in the languages Parakeet hears: American and British English, Spanish, French,
-# Italian and Brazilian Portuguese. The first letter of a name is its language.
+# Kokoro-82M's voices. The first letter of a name is its language. Parakeet hears American and British
+# English, Spanish, French, Italian and Brazilian Portuguese; Whisper, which only the Mac runner has, also
+# hears Hindi, Japanese and Mandarin.
 KOKORO_VOICES = [
     "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova",
     "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
     "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
     "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora", "em_alex", "em_santa", "ff_siwis",
-    "if_sara", "im_nicola", "pf_dora", "pm_alex", "pm_santa",
+    "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola", "jf_alpha",
+    "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex", "pm_santa",
+    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia",
+    "zm_yunyang",
 ]
 
 # The MLX repositories contain one conversion each, including the nested TTS codec.
-# Kokoro ships its card, weights and those voices, not samples or the other voices.
+# Kokoro ships its card, weights and voices, not samples.
 MODELS = [
     ("parakeet-tdt-0.6b-v3", "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15", None, None),
     ("Qwen3.5-4B-4bit", "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", None, None),
@@ -136,7 +140,8 @@ CUDA = [
     ("unsloth/Qwen3.5-4B-GGUF", "e87f176479d0855a907a41277aca2f8ee7a09523",
      {"README.md", "Qwen3.5-4B-Q4_K_M.gguf"}, None),
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987",
-     {"README.md", "config.json", "kokoro-v1_0.pth", *(f"voices/{v}.pt" for v in KOKORO_VOICES)}, "kokoro:82m"),
+     {"README.md", "config.json", "kokoro-v1_0.pth", *(f"voices/{v}.pt" for v in KOKORO_VOICES if v[0] not in "hjz")},
+     "kokoro:82m"),
 ]
 
 
@@ -242,6 +247,7 @@ WHISPER_PROFILES = {
     "qwen3-tts:1.7b-customvoice": "qwen3-tts:1.7b-customvoice-whisper",
     "qwen3-tts:0.6b-customvoice": "qwen3-tts:0.6b-customvoice-whisper",
     "chattts:en": "chattts:whisper",
+    "kokoro:82m": "kokoro:82m-whisper",
 }
 
 

@@ -320,9 +320,9 @@ pub enum Model {
 /// computer, and the language Boubou talks with it in.
 pub type Voice = (String, &'static str);
 
-/// Kokoro-82M's voices in the languages Parakeet hears. The first letter of a name is the
-/// language Kokoro speaks with it, as `KOKORO_LANGUAGES` names them.
-pub const KOKORO_VOICES: [&str; 37] = [
+/// Kokoro-82M's voices. The first letter of a name is the language Kokoro speaks with it, as
+/// `KOKORO_LANGUAGES` names them.
+pub const KOKORO_VOICES: [&str; 54] = [
     "af_heart",
     "af_alloy",
     "af_aoede",
@@ -355,11 +355,28 @@ pub const KOKORO_VOICES: [&str; 37] = [
     "em_alex",
     "em_santa",
     "ff_siwis",
+    "hf_alpha",
+    "hf_beta",
+    "hm_omega",
+    "hm_psi",
     "if_sara",
     "im_nicola",
+    "jf_alpha",
+    "jf_gongitsune",
+    "jf_nezumi",
+    "jf_tebukuro",
+    "jm_kumo",
     "pf_dora",
     "pm_alex",
     "pm_santa",
+    "zf_xiaobei",
+    "zf_xiaoni",
+    "zf_xiaoxiao",
+    "zf_xiaoyi",
+    "zm_yunjian",
+    "zm_yunxi",
+    "zm_yunxia",
+    "zm_yunyang",
 ];
 
 /// KittenTTS's voices, all English: the names 0.8 checkpoints give them, and the IDs every
@@ -375,15 +392,18 @@ pub const KITTEN_VOICES: [(&str, &str); 8] = [
     ("Leo", "expr-voice-5-m"),
 ];
 
-/// Kokoro's language codes: American and British English, Spanish, French, Italian and
-/// Brazilian Portuguese.
-const KOKORO_LANGUAGES: [(char, &str); 6] = [
-    ('a', "English"),
-    ('b', "English"),
-    ('e', "Spanish"),
-    ('f', "French"),
-    ('i', "Italian"),
-    ('p', "Portuguese"),
+/// Kokoro's language codes, and whether Parakeet hears the language: American and British
+/// English, Spanish, French, Hindi, Italian, Japanese, Brazilian Portuguese and Mandarin.
+const KOKORO_LANGUAGES: [(char, &str, bool); 9] = [
+    ('a', "English", true),
+    ('b', "English", true),
+    ('e', "Spanish", true),
+    ('f', "French", true),
+    ('h', "Hindi", false),
+    ('i', "Italian", true),
+    ('j', "Japanese", false),
+    ('p', "Portuguese", true),
+    ('z', "Chinese", false),
 ];
 
 /// Qwen3-TTS CustomVoice's speakers, each with its own language.
@@ -406,6 +426,7 @@ pub const MODULAR_IDS: &[&str] = &[
     "qwen3-tts:1.7b-customvoice-whisper",
     "qwen3-tts:0.6b-customvoice-whisper",
     "kokoro:82m",
+    "kokoro:82m-whisper",
     "phonon:31m-en",
     "supertonic:3",
     "chattts:en",
@@ -498,8 +519,8 @@ impl Model {
 
     /// This model speaking as the voice `--voice` names: on Qwen3-TTS one of `VOICES` or of the
     /// voices cloned in `cache`, on Kokoro one of `KOKORO_VOICES`, on KittenTTS one of
-    /// `KITTEN_VOICES`. A Qwen3-TTS voice of another language than English brings the model's
-    /// Whisper entry, which hears that language.
+    /// `KITTEN_VOICES`. A voice of a language Parakeet does not hear brings the model's Whisper
+    /// entry, which hears that language.
     pub fn voiced(self, voice: Option<&str>, cache: &Path) -> Result<(Self, Option<Voice>)> {
         let Some(voice) = voice else {
             return Ok((self, None));
@@ -514,11 +535,16 @@ impl Model {
                         KOKORO_VOICES.join(", ")
                     )
                 })?;
-            let (_, speaks) = KOKORO_LANGUAGES
+            let (_, speaks, parakeet) = KOKORO_LANGUAGES
                 .into_iter()
-                .find(|(code, _)| name.starts_with(*code))
+                .find(|(code, ..)| name.starts_with(*code))
                 .expect("every Kokoro voice names its language");
-            return Ok((self, Some((name.to_owned(), speaks))));
+            // The Linux runner has no Whisper.
+            ensure!(
+                parakeet || cfg!(not(target_os = "linux")),
+                "{name} speaks {speaks}, which Boubou hears only on a Mac for now."
+            );
+            return self.hearing((name.to_owned(), speaks), parakeet, "kokoro:82m");
         }
         if self.id().starts_with("kitten-tts:") {
             // A 0.8 checkpoint names its voices; earlier ones know only the IDs.
@@ -555,7 +581,23 @@ impl Model {
             .into_iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(voice))
             .with_context(|| format!("No voice is named {voice}. Choose from: {names}."))?;
-        if speaker.1 == "English" || crate::modular::whisper(self.id()) {
+        let parakeet = speaker.1 == "English";
+        self.hearing(
+            speaker,
+            parakeet,
+            "qwen3-tts:0.6b-customvoice or qwen3-tts:1.7b-customvoice",
+        )
+    }
+
+    /// This model with `speaker`, or its Whisper entry when `parakeet` does not hear the
+    /// speaker's language. `entries` names the models that have a Whisper entry.
+    fn hearing(
+        self,
+        speaker: Voice,
+        parakeet: bool,
+        entries: &str,
+    ) -> Result<(Self, Option<Voice>)> {
+        if parakeet || crate::modular::whisper(self.id()) {
             return Ok((self, Some(speaker)));
         }
         let hears = MODULAR_IDS
@@ -563,7 +605,7 @@ impl Model {
             .find(|id| id.strip_suffix("-whisper") == Some(self.id()))
             .with_context(|| {
                 format!(
-                    "{} speaks {}. Use qwen3-tts:0.6b-customvoice or qwen3-tts:1.7b-customvoice, which can hear it.",
+                    "{} speaks {}. Use {entries}, which can hear it.",
                     speaker.0, speaker.1
                 )
             })?;
@@ -682,7 +724,11 @@ mod tests {
         let locked: Vec<_> = locked.split('"').skip(1).step_by(2).collect();
         assert_eq!(locked, KOKORO_VOICES);
         for name in KOKORO_VOICES {
-            assert!(voiced("kokoro:82m", name).is_ok(), "{name}");
+            let hears = voiced("kokoro:82m", name);
+            assert!(
+                hears.is_ok() || cfg!(target_os = "linux") && "hjz".contains(&name[..1]),
+                "{name}"
+            );
         }
         // A KittenTTS voice goes by its name on 0.8 checkpoints, and by its ID on earlier ones.
         for (id, name, expected) in [
@@ -703,11 +749,39 @@ mod tests {
         );
         let error = voiced("kitten-tts:nano-0.1", "alba").unwrap_err();
         assert!(error.ends_with("expr-voice-5-m."), "{error}");
-        for missing in ["ryan", "jf_alpha", "dad"] {
+        // A Kokoro voice of a language Parakeet does not hear brings the Whisper entry, on a Mac.
+        for (name, language) in [
+            ("hf_alpha", "Hindi"),
+            ("jm_kumo", "Japanese"),
+            ("zf_xiaoxiao", "Chinese"),
+        ] {
+            let whisper = "kokoro:82m-whisper";
+            if cfg!(target_os = "linux") {
+                let error = voiced("kokoro:82m", name).unwrap_err();
+                assert!(error.ends_with("only on a Mac for now."), "{error}");
+                continue;
+            }
+            for id in ["kokoro:82m", whisper] {
+                assert_eq!(
+                    voiced(id, name),
+                    voice(name, language).map(|v| (whisper, v))
+                );
+            }
+            let error = voiced("kokoro:82m-9b", name).unwrap_err();
+            assert_eq!(
+                error,
+                format!("{name} speaks {language}. Use kokoro:82m, which can hear it.")
+            );
+        }
+        assert_eq!(
+            voiced("kokoro:82m-whisper", "ef_dora"),
+            voice("ef_dora", "Spanish").map(|v| ("kokoro:82m-whisper", v))
+        );
+        for missing in ["ryan", "jx_alpha", "dad"] {
             let error = voiced("kokoro:82m", missing).unwrap_err();
             assert!(
                 error.starts_with(&format!("No Kokoro voice is named {missing}."))
-                    && error.ends_with("pm_alex, pm_santa."),
+                    && error.ends_with("zm_yunxia, zm_yunyang."),
                 "{error}"
             );
         }
