@@ -316,9 +316,62 @@ pub enum Model {
     Modular(&'static str),
 }
 
-/// Who speaks, a Qwen3-TTS CustomVoice speaker or a voice cloned on this computer, and the
-/// language Boubou talks with it in.
+/// Who speaks, a Qwen3-TTS CustomVoice speaker, a Kokoro voice or a voice cloned on this
+/// computer, and the language Boubou talks with it in.
 pub type Voice = (String, &'static str);
+
+/// Kokoro-82M's voices in the languages Parakeet hears. The first letter of a name is the
+/// language Kokoro speaks with it, as `KOKORO_LANGUAGES` names them.
+pub const KOKORO_VOICES: [&str; 37] = [
+    "af_heart",
+    "af_alloy",
+    "af_aoede",
+    "af_bella",
+    "af_jessica",
+    "af_kore",
+    "af_nicole",
+    "af_nova",
+    "af_river",
+    "af_sarah",
+    "af_sky",
+    "am_adam",
+    "am_echo",
+    "am_eric",
+    "am_fenrir",
+    "am_liam",
+    "am_michael",
+    "am_onyx",
+    "am_puck",
+    "am_santa",
+    "bf_alice",
+    "bf_emma",
+    "bf_isabella",
+    "bf_lily",
+    "bm_daniel",
+    "bm_fable",
+    "bm_george",
+    "bm_lewis",
+    "ef_dora",
+    "em_alex",
+    "em_santa",
+    "ff_siwis",
+    "if_sara",
+    "im_nicola",
+    "pf_dora",
+    "pm_alex",
+    "pm_santa",
+];
+
+/// Kokoro's language codes: American and British English, Spanish, French, Italian and
+/// Brazilian Portuguese.
+const KOKORO_LANGUAGES: [(char, &str); 6] = [
+    ('a', "English"),
+    ('b', "English"),
+    ('e', "Spanish"),
+    ('f', "French"),
+    ('i', "Italian"),
+    ('p', "Portuguese"),
+];
 
 /// Qwen3-TTS CustomVoice's speakers, each with its own language.
 pub const VOICES: [(&str, &str); 9] = [
@@ -430,13 +483,29 @@ impl Model {
         }
     }
 
-    /// This model speaking as the one of `VOICES`, or of the voices cloned in `cache`, that
-    /// `--voice` names. A voice of another language than English brings the model's Whisper
-    /// entry, which hears that language.
+    /// This model speaking as the voice `--voice` names: on Qwen3-TTS one of `VOICES` or of the
+    /// voices cloned in `cache`, on Kokoro one of `KOKORO_VOICES`. A Qwen3-TTS voice of another
+    /// language than English brings the model's Whisper entry, which hears that language.
     pub fn voiced(self, voice: Option<&str>, cache: &Path) -> Result<(Self, Option<Voice>)> {
         let Some(voice) = voice else {
             return Ok((self, None));
         };
+        if self.id().starts_with("kokoro:") {
+            let name = KOKORO_VOICES
+                .into_iter()
+                .find(|name| name.eq_ignore_ascii_case(voice))
+                .with_context(|| {
+                    format!(
+                        "No Kokoro voice is named {voice}. Choose from: {}.",
+                        KOKORO_VOICES.join(", ")
+                    )
+                })?;
+            let (_, speaks) = KOKORO_LANGUAGES
+                .into_iter()
+                .find(|(code, _)| name.starts_with(*code))
+                .expect("every Kokoro voice names its language");
+            return Ok((self, Some((name.to_owned(), speaks))));
+        }
         let voices: Vec<Voice> = VOICES
             .iter()
             .map(|&(name, speaks)| (name.to_owned(), speaks))
@@ -446,7 +515,7 @@ impl Model {
         let names = names.join(", ");
         ensure!(
             self.id().starts_with("qwen3-tts:"),
-            "{} has one voice. Qwen3-TTS models take --voice: {names}.",
+            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro models.",
             self.id()
         );
         let speaker = voices
@@ -552,10 +621,44 @@ mod tests {
         assert!(error.starts_with("Sohee speaks Korean."), "{error}");
         assert!(voiced(small, "nobody").unwrap_err().contains("ono_anna"));
         assert!(
-            voiced("kokoro:82m", "ryan")
+            voiced("phonon:31m-en", "ryan")
                 .unwrap_err()
-                .starts_with("kokoro:82m has one voice.")
+                .starts_with("phonon:31m-en has one voice.")
         );
+        // A Kokoro voice speaks the language its first letter names, and Parakeet hears it.
+        for (id, name, language) in [
+            ("kokoro:82m", "AF_BELLA", ("af_bella", "English")),
+            ("kokoro:82m", "bm_george", ("bm_george", "English")),
+            ("kokoro:82m-27b", "ef_dora", ("ef_dora", "Spanish")),
+            ("kokoro:82m", "ff_siwis", ("ff_siwis", "French")),
+            ("kokoro:82m", "im_nicola", ("im_nicola", "Italian")),
+            ("kokoro:82m-9b", "pf_dora", ("pf_dora", "Portuguese")),
+        ] {
+            assert_eq!(
+                voiced(id, name),
+                voice(language.0, language.1).map(|v| (id, v))
+            );
+        }
+        // Boubou downloads each voice it offers, and each speaks a language Kokoro has.
+        let lock = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/qwen/lock_models.py"),
+        )
+        .unwrap();
+        let (_, locked) = lock.split_once("KOKORO_VOICES = [").unwrap();
+        let (locked, _) = locked.split_once(']').unwrap();
+        let locked: Vec<_> = locked.split('"').skip(1).step_by(2).collect();
+        assert_eq!(locked, KOKORO_VOICES);
+        for name in KOKORO_VOICES {
+            assert!(voiced("kokoro:82m", name).is_ok(), "{name}");
+        }
+        for missing in ["ryan", "jf_alpha", "dad"] {
+            let error = voiced("kokoro:82m", missing).unwrap_err();
+            assert!(
+                error.starts_with(&format!("No Kokoro voice is named {missing}."))
+                    && error.ends_with("pm_alex, pm_santa."),
+                "{error}"
+            );
+        }
         let (model, voice) = Model::Liquid(&DEFAULT).voiced(None, &cache).unwrap();
         assert!(model.id() == DEFAULT.id && voice.is_none());
         assert!(

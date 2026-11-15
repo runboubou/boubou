@@ -405,7 +405,11 @@ fn voices(id: &str, voice: Option<&profiles::Voice>, cloned: &[profiles::Voice])
     } else if whisper(id) {
         vec![named("Default", &["Chinese", "English"])]
     } else {
-        vec![named("Default", &[&language(id)])]
+        // A Kokoro voice that --voice named, or the voice the model starts with.
+        let (name, speaks) = voice.map_or(("Default", language(id)), |(name, speaks)| {
+            (name.as_str(), (*speaks).to_owned())
+        });
+        vec![named(name, &[&speaks])]
     };
     json!({ "voices": voices }).to_string()
 }
@@ -607,6 +611,13 @@ pub fn run(
     // Later options replace earlier ones: the voice replaces the model's own speaker, and
     // pipeline options replace both.
     match voice {
+        // A Kokoro voice's first letter is its language code.
+        Some((name, _)) if id.starts_with("kokoro:") => command.args([
+            "--kokoro_voice",
+            name.as_str(),
+            "--kokoro_lang_code",
+            &name[..1],
+        ]),
         Some((name, _)) if cloned.iter().any(|(clone, _)| clone == name) => {
             command.env("BOUBOU_VOICE", name)
         }
@@ -745,6 +756,15 @@ mod tests {
             r#""languages":[{"code":"zh","title":"Chinese"},{"code":"en","title":"English"}]"#;
         assert!(voices("chattts:whisper", None, &[]).contains(both));
         assert_eq!(ids("kokoro:82m", None, &cloned), ["default"]);
+        // Kokoro lists the voice --voice named, in that voice's language.
+        assert_eq!(
+            voices(
+                "kokoro:82m-9b",
+                Some(&("ef_dora".into(), "Spanish")),
+                &cloned
+            ),
+            r#"{"voices":[{"id":"ef_dora","languages":[{"code":"es","title":"Spanish"}],"name":"ef_dora"}]}"#
+        );
     }
 
     #[test]
