@@ -726,6 +726,22 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         prompt.expect(&[line]);
     }
     assert!(!prompt.finish().success());
+    // A language that is not the speaker's own follows it, for the voice and the language model.
+    let spoken = ["run", id, "--voice", "vivian", "--language", "en"];
+    let mut prompt = Prompt::new(&package, true, &spoken);
+    for line in [
+        "selected: --qwen3_tts_speaker",
+        "selected: Vivian",
+        "selected: --qwen3_tts_language",
+        "selected: english",
+        "selected: --init_chat_prompt",
+        "less than 20 words. Always reply in English.",
+        "selected: --port",
+        "selected: hub offline 1",
+    ] {
+        prompt.expect(&[line]);
+    }
+    assert!(!prompt.finish().success());
 }
 
 #[test]

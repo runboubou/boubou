@@ -82,11 +82,12 @@ PHONON = [
     ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3", {"voices.jsonl"}, "phonon:31m-en"),
 ]
 # supertonic 1.3.1 loads the revision it pins from one directory: the ONNX graphs, their configs and
-# the upstream default voice style, M1. The stub config.json marks the snapshot for voice.py.
+# the voice styles, M1 the upstream default. The stub config.json marks the snapshot for voice.py.
+SUPERTONIC_VOICES = ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"]
 SUPERTONIC = ("Supertone/supertonic-3", "724fb5abbf5502583fb520898d45929e62f02c0b",
               {"LICENSE", "README.md", "config.json", "onnx/tts.json", "onnx/unicode_indexer.json",
                "onnx/duration_predictor.onnx", "onnx/text_encoder.onnx", "onnx/vector_estimator.onnx",
-               "onnx/vocoder.onnx", "voice_styles/M1.json"}, "supertonic:3")
+               "onnx/vocoder.onnx", *(f"voice_styles/{v}.json" for v in SUPERTONIC_VOICES)}, "supertonic:3")
 # The assets ChatTTS 0.2.5 checks against its own hashes and loads; the card states the CC BY-NC 4.0 terms.
 CHATTTS = ("2Noise/ChatTTS", "1a3c04a8b0651689bd9242fbb55b1f4b5a9aef84",
            {"README.md", "asset/Decoder.safetensors", "asset/DVAE.safetensors", "asset/Embed.safetensors",

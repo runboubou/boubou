@@ -316,8 +316,8 @@ pub enum Model {
     Modular(&'static str),
 }
 
-/// Who speaks, a Qwen3-TTS CustomVoice speaker, a Kokoro voice or a voice cloned on this
-/// computer, and the language Boubou talks with it in.
+/// Who speaks, a Qwen3-TTS CustomVoice speaker, a Kokoro, KittenTTS or Supertonic voice or a
+/// voice cloned on this computer, and the language Boubou talks with it in.
 pub type Voice = (String, &'static str);
 
 /// Kokoro-82M's voices. The first letter of a name is the language Kokoro speaks with it, as
@@ -392,6 +392,39 @@ pub const KITTEN_VOICES: [(&str, &str); 8] = [
     ("Leo", "expr-voice-5-m"),
 ];
 
+/// Supertonic 3's voice styles, five male and five female. Each speaks every language.
+pub const SUPERTONIC_VOICES: [&str; 10] =
+    ["M1", "M2", "M3", "M4", "M5", "F1", "F2", "F3", "F4", "F5"];
+
+/// The languages Supertonic 3 speaks and Parakeet hears, by code. Supertonic also speaks Arabic,
+/// Hindi, Indonesian, Japanese, Korean, Turkish and Vietnamese, which Parakeet does not hear.
+pub const SUPERTONIC_LANGUAGES: [(&str, &str); 24] = [
+    ("en", "English"),
+    ("bg", "Bulgarian"),
+    ("hr", "Croatian"),
+    ("cs", "Czech"),
+    ("da", "Danish"),
+    ("nl", "Dutch"),
+    ("et", "Estonian"),
+    ("fi", "Finnish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("el", "Greek"),
+    ("hu", "Hungarian"),
+    ("it", "Italian"),
+    ("lv", "Latvian"),
+    ("lt", "Lithuanian"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ro", "Romanian"),
+    ("ru", "Russian"),
+    ("sk", "Slovak"),
+    ("sl", "Slovenian"),
+    ("es", "Spanish"),
+    ("sv", "Swedish"),
+    ("uk", "Ukrainian"),
+];
+
 /// Kokoro's language codes, and whether Parakeet hears the language: American and British
 /// English, Spanish, French, Hindi, Italian, Japanese, Brazilian Portuguese and Mandarin.
 const KOKORO_LANGUAGES: [(char, &str, bool); 9] = [
@@ -406,7 +439,8 @@ const KOKORO_LANGUAGES: [(char, &str, bool); 9] = [
     ('z', "Chinese", false),
 ];
 
-/// Qwen3-TTS CustomVoice's speakers, each with its own language.
+/// Qwen3-TTS CustomVoice's speakers, each with its own language. Each also speaks the other
+/// languages of Qwen3-TTS, which `--language` names.
 pub const VOICES: [(&str, &str); 9] = [
     ("Aiden", "English"),
     ("Ryan", "English"),
@@ -517,14 +551,65 @@ impl Model {
         }
     }
 
-    /// This model speaking as the voice `--voice` names: on Qwen3-TTS one of `VOICES` or of the
-    /// voices cloned in `cache`, on Kokoro one of `KOKORO_VOICES`, on KittenTTS one of
-    /// `KITTEN_VOICES`. A voice of a language Parakeet does not hear brings the model's Whisper
-    /// entry, which hears that language.
-    pub fn voiced(self, voice: Option<&str>, cache: &Path) -> Result<(Self, Option<Voice>)> {
-        let Some(voice) = voice else {
+    /// This model speaking as the voice `--voice` names, in the language `--language` names: on
+    /// Qwen3-TTS one of `VOICES` or of the voices cloned in `cache`, on Kokoro one of
+    /// `KOKORO_VOICES`, on KittenTTS one of `KITTEN_VOICES`, on Supertonic one of
+    /// `SUPERTONIC_VOICES`. Qwen3-TTS and Supertonic voices speak several languages, their own
+    /// unless one is named. A language Parakeet does not hear brings the model's Whisper entry,
+    /// which hears that language.
+    pub fn voiced(
+        self,
+        voice: Option<&str>,
+        language: Option<&str>,
+        cache: &Path,
+    ) -> Result<(Self, Option<Voice>)> {
+        if voice.is_none() && language.is_none() {
             return Ok((self, None));
+        }
+        let id = self.id();
+        // The language `--language` names among those a model speaks, by its code or its name.
+        let named = |spoken: &[(&str, &'static str)]| {
+            let Some(language) = language else {
+                return Ok(None);
+            };
+            let found = spoken.iter().find(|(code, title)| {
+                code.eq_ignore_ascii_case(language) || title.eq_ignore_ascii_case(language)
+            });
+            let codes: Vec<_> = spoken.iter().map(|(code, _)| *code).collect();
+            let family = id.split(':').next().unwrap_or(id);
+            found.map(|(_, title)| Some(*title)).with_context(|| {
+                format!(
+                    "{family} does not speak {language}. Choose from: {}.",
+                    codes.join(", ")
+                )
+            })
         };
+        if id.starts_with("supertonic:") {
+            // M1 is the voice the runner starts with.
+            let name = voice.map_or(Ok("M1"), |voice| {
+                let found = SUPERTONIC_VOICES
+                    .into_iter()
+                    .find(|name| name.eq_ignore_ascii_case(voice));
+                found.with_context(|| {
+                    format!(
+                        "No Supertonic voice is named {voice}. Choose from: {}.",
+                        SUPERTONIC_VOICES.join(", ").to_lowercase()
+                    )
+                })
+            })?;
+            let speaks = named(&SUPERTONIC_LANGUAGES)?.unwrap_or("English");
+            return Ok((self, Some((name.to_owned(), speaks))));
+        }
+        ensure!(
+            language.is_none() || id.starts_with("qwen3-tts:"),
+            "{id} speaks one language, or its voice's own. Qwen3-TTS and Supertonic models take --language."
+        );
+        // Without --voice, the speaker each Qwen3-TTS entry starts with.
+        let voice = voice.unwrap_or(if crate::modular::whisper(id) {
+            "Vivian"
+        } else {
+            "Aiden"
+        });
         if self.id().starts_with("kokoro:") {
             let name = KOKORO_VOICES
                 .into_iter()
@@ -574,13 +659,17 @@ impl Model {
         let names = names.join(", ");
         ensure!(
             self.id().starts_with("qwen3-tts:"),
-            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro and KittenTTS models.",
+            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro, KittenTTS and Supertonic models.",
             self.id()
         );
-        let speaker = voices
+        let (name, own) = voices
             .into_iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(voice))
             .with_context(|| format!("No voice is named {voice}. Choose from: {names}."))?;
+        let speaker = (
+            name,
+            named(&crate::modular::LANGUAGES[..10])?.unwrap_or(own),
+        );
         let parakeet = speaker.1 == "English";
         self.hearing(
             speaker,
@@ -645,15 +734,16 @@ mod tests {
     #[test]
     fn a_voice_names_its_speaker_and_brings_the_ear_for_its_language() {
         let cache = std::env::temp_dir().join(format!("boubou-voiced-{}", std::process::id()));
-        let voiced = |id, voice| {
+        let spoken = |id, voice, language| {
             Model::Modular(id)
-                .voiced(Some(voice), &cache)
+                .voiced(voice, language, &cache)
                 .map(|(model, voice)| {
                     let (name, language) = voice.unwrap();
                     (model.id(), (name, language))
                 })
                 .map_err(|error| error.to_string())
         };
+        let voiced = |id, voice| spoken(id, Some(voice), None);
         let voice = |name: &str, language| Ok((name.to_owned(), language));
         let small = "qwen3-tts:0.6b-customvoice";
         assert_eq!(
@@ -690,7 +780,88 @@ mod tests {
                 .unwrap_err()
                 .ends_with("eric, dad, mom.")
         );
+        // --language names another of Qwen3-TTS's ten languages, by its code or its name. Any
+        // but English brings the Whisper entry, with the speaker the entry starts with or the
+        // one --voice names.
+        let large = "qwen3-tts:1.7b-customvoice";
+        let large_whisper = "qwen3-tts:1.7b-customvoice-whisper";
+        for (id, name, language, expected) in [
+            (small, Some("ryan"), "de", (whisper, ("Ryan", "German"))),
+            (small, Some("mom"), "FR", (whisper, ("mom", "French"))),
+            (small, None, "Russian", (whisper, ("Aiden", "Russian"))),
+            (whisper, None, "pt", (whisper, ("Vivian", "Portuguese"))),
+            (
+                whisper,
+                Some("sohee"),
+                "es",
+                (whisper, ("Sohee", "Spanish")),
+            ),
+            (
+                small,
+                Some("ono_anna"),
+                "it",
+                (whisper, ("Ono_Anna", "Italian")),
+            ),
+            (small, Some("vivian"), "en", (small, ("Vivian", "English"))),
+            (
+                large,
+                Some("eric"),
+                "es",
+                (large_whisper, ("Eric", "Spanish")),
+            ),
+        ] {
+            let (id_, (name_, language_)) = expected;
+            assert_eq!(
+                spoken(id, name, Some(language)),
+                voice(name_, language_).map(|v| (id_, v))
+            );
+        }
+        for language in ["nl", "hi", "klingon"] {
+            let error = spoken(small, Some("ryan"), Some(language)).unwrap_err();
+            let choices = "Choose from: en, ja, zh, ko, es, fr, de, pt, it, ru.";
+            assert_eq!(
+                error,
+                format!("qwen3-tts does not speak {language}. {choices}")
+            );
+        }
+        let error = spoken("qwen3-tts:1.7b-customvoice-9b", None, Some("de")).unwrap_err();
+        assert!(error.starts_with("Aiden speaks German."), "{error}");
         fs::remove_dir_all(&cache).unwrap();
+        // A Supertonic voice speaks any language Parakeet hears, English unless one is named.
+        for (name, language, expected) in [
+            (Some("f1"), None, ("F1", "English")),
+            (Some("M5"), Some("fr"), ("M5", "French")),
+            (None, Some("ukrainian"), ("M1", "Ukrainian")),
+            (Some("f3"), Some("EL"), ("F3", "Greek")),
+        ] {
+            assert_eq!(
+                spoken("supertonic:3", name, language),
+                voice(expected.0, expected.1).map(|v| ("supertonic:3", v))
+            );
+        }
+        for name in SUPERTONIC_VOICES {
+            for (code, _) in SUPERTONIC_LANGUAGES {
+                assert!(spoken("supertonic:3", Some(name), Some(code)).is_ok());
+            }
+        }
+        let error = voiced("supertonic:3", "ryan").unwrap_err();
+        assert!(
+            error.starts_with("No Supertonic voice is named ryan.") && error.ends_with("f4, f5."),
+            "{error}"
+        );
+        let error = spoken("supertonic:3", Some("f1"), Some("ja")).unwrap_err();
+        assert!(
+            error.starts_with("supertonic does not speak ja. Choose from: en, bg, hr,"),
+            "{error}"
+        );
+        // A model whose voices speak one language each takes no --language.
+        for (id, name) in [("kokoro:82m", Some("ef_dora")), ("phonon:31m-en", None)] {
+            let error = spoken(id, name, Some("es")).unwrap_err();
+            assert!(
+                error.starts_with(&format!("{id} speaks one language")),
+                "{error}"
+            );
+        }
         // A model size without a Whisper entry cannot hear the speaker's language.
         let error = voiced("qwen3-tts:1.7b-customvoice-9b", "sohee").unwrap_err();
         assert!(error.starts_with("Sohee speaks Korean."), "{error}");
@@ -719,10 +890,13 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/qwen/lock_models.py"),
         )
         .unwrap();
-        let (_, locked) = lock.split_once("KOKORO_VOICES = [").unwrap();
-        let (locked, _) = locked.split_once(']').unwrap();
-        let locked: Vec<_> = locked.split('"').skip(1).step_by(2).collect();
-        assert_eq!(locked, KOKORO_VOICES);
+        let locked = |list: &str| {
+            let (_, locked) = lock.split_once(list).unwrap();
+            let (locked, _) = locked.split_once(']').unwrap();
+            locked.split('"').skip(1).step_by(2).collect::<Vec<_>>()
+        };
+        assert_eq!(locked("KOKORO_VOICES = ["), KOKORO_VOICES);
+        assert_eq!(locked("SUPERTONIC_VOICES = ["), SUPERTONIC_VOICES);
         for name in KOKORO_VOICES {
             let hears = voiced("kokoro:82m", name);
             assert!(
@@ -785,12 +959,11 @@ mod tests {
                 "{error}"
             );
         }
-        let (model, voice) = Model::Liquid(&DEFAULT).voiced(None, &cache).unwrap();
+        let (model, voice) = Model::Liquid(&DEFAULT).voiced(None, None, &cache).unwrap();
         assert!(model.id() == DEFAULT.id && voice.is_none());
-        assert!(
-            Model::Liquid(&DEFAULT)
-                .voiced(Some("ryan"), &cache)
-                .is_err()
-        );
+        for (voice, language) in [(Some("ryan"), None), (None, Some("fr"))] {
+            let liquid = Model::Liquid(&DEFAULT);
+            assert!(liquid.voiced(voice, language, &cache).is_err());
+        }
     }
 }

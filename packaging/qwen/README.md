@@ -51,7 +51,7 @@ Whisper language modes and the 2B, 9B and 27B LLM combinations require explicit
 developer selection. Memory groups and budgets are estimates for device
 testing. More parameters do not imply better replies or voice quality.
 
-`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice, or with `--voice` any of Kokoro's 37 voices in American or British English, Spanish, French, Italian or Brazilian Portuguese, the languages Parakeet hears. On a Mac, `kokoro:82m` also takes the 17 Hindi, Japanese and Mandarin voices and starts `kokoro:82m-whisper`, which hears them. A voice's first letter is its language; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU, or with `--voice` any of its eight voices: by name on 0.8 checkpoints, where `expr-voice-3-m` is Bruno, and by ID on earlier ones. `boubou list` shows supported IDs.
+`kokoro:82m` and its larger-LLM variants speak with the American English `af_heart` voice, or with `--voice` any of Kokoro's 37 voices in American or British English, Spanish, French, Italian or Brazilian Portuguese, the languages Parakeet hears. On a Mac, `kokoro:82m` also takes the 17 Hindi, Japanese and Mandarin voices and starts `kokoro:82m-whisper`, which hears them. A voice's first letter is its language; Qwen CustomVoice English entries use `Aiden`. The 2B entry uses Whisper tiny; other curated English entries use Parakeet. `phonon:31m-en` speaks on the CPU, `supertonic:3` uses Supertonic 3's `M1` voice on ONNX Runtime's CPU provider, or with `--voice` any of its ten voice styles, `m1` to `m5` and `f1` to `f5`, and `chattts:en` uses one fixed ChatTTS speaker on the CPU. Each `pocket-tts:<config>` runs one Pocket TTS 4.0.1 stock config with its default voice on the CPU. Each `kitten-tts:<checkpoint>` runs its ONNX checkpoint with `expr-voice-3-m` on the CPU, or with `--voice` any of its eight voices: by name on 0.8 checkpoints, where `expr-voice-3-m` is Bruno, and by ID on earlier ones. `boubou list` shows supported IDs.
 
 Test the tarball from outside the checkout on an idle Mac. Use the same new cache for every command. Grant microphone access and test multi-turn conversation in the profile's language, audible interruption, a new turn, offline restart, and Ctrl+C for each model. Report the machine and measurements in [#5](https://github.com/runboubou/boubou/issues/5).
 
@@ -105,9 +105,18 @@ Choose a Whisper entry explicitly for Chinese or Chinese/English conversations:
 
 Whisper entries detect the input language and reply in that language. Qwen3-TTS
 uses automatic synthesis language and the `Vivian` voice in these entries;
-its default entries keep English with `Aiden`. Both ChatTTS entries use the same
+its default entries keep English with `Aiden`. `--language` names one of
+Qwen3-TTS's ten languages for any speaker: `--voice ryan --language de` starts
+the Whisper entry, reads replies as German and tells the language model to
+reply in German. Both ChatTTS entries use the same
 fixed speaker. Kokoro's Whisper entry starts with the voice `--voice` names and reads
 Mandarin with jieba and pypinyin, and Japanese with fugashi and unidic-lite. The light 2B English runtime uses Whisper tiny; other profiles retain Parakeet.
+
+Supertonic stays with Parakeet. `--language` names one of the 24 languages
+that Supertonic 3 speaks and Parakeet hears: `supertonic:3 --voice f1 --language fr`.
+Upstream reads each reply in the language it detects in what Parakeet heard, and
+in the named language when it cannot tell; Boubou also tells the language model
+to reply in that language.
 
 A profile downloads only its selected recognizer. Paired entries share TTS
 weights and the same 4-bit Qwen3.5-4B language model. Whisper adds recognition

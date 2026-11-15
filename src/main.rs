@@ -77,9 +77,15 @@ enum Action {
         /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
         /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora,
         /// jf_alpha and 51 more, each speaking the language its first letter names; KittenTTS
-        /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo.
+        /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo; Supertonic has m1 to m5
+        /// and f1 to f5.
         #[arg(long)]
         voice: Option<String>,
+        /// The language to talk in, as a code such as fr, for a model whose voices speak
+        /// several: Supertonic, in 24 European languages, and Qwen3-TTS, in zh, en, ja, ko, de,
+        /// fr, ru, pt, es and it.
+        #[arg(long)]
+        language: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as
         /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -97,9 +103,15 @@ enum Action {
         /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
         /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora,
         /// jf_alpha and 51 more, each speaking the language its first letter names; KittenTTS
-        /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo.
+        /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo; Supertonic has m1 to m5
+        /// and f1 to f5.
         #[arg(long)]
         voice: Option<String>,
+        /// The language to talk in, as a code such as fr, for a model whose voices speak
+        /// several: Supertonic, in 24 European languages, and Qwen3-TTS, in zh, en, ja, ko, de,
+        /// fr, ru, pt, es and it.
+        #[arg(long)]
+        language: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as
         /// `--stt mlx-audio-whisper`. Put them after Boubou's options.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -250,6 +262,7 @@ fn run() -> Result<()> {
                         input: Vec::new(),
                         output: None,
                         voice: selected.voice,
+                        language: selected.language,
                         pipeline: Vec::new(),
                     }
                 }
@@ -383,15 +396,16 @@ fn run() -> Result<()> {
             input,
             output,
             voice,
+            language,
             pipeline,
         } => {
             let command = format!(
                 "{program} run {}{}{}",
                 model.id(),
-                voice_option(&voice),
+                voice_options(&voice, &language),
                 if offline { " --offline" } else { "" }
             );
-            let (model, voice) = model.voiced(voice.as_deref(), &cache)?;
+            let (model, voice) = model.voiced(voice.as_deref(), language.as_deref(), &cache)?;
             let _checklist = checklist(command, check.take(), model, &cache, true);
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
@@ -428,12 +442,17 @@ fn run() -> Result<()> {
             offline,
             door,
             voice,
+            language,
             pipeline,
         } => {
             ensure!(io::stdin().is_terminal(), "boubou serve needs a terminal.");
             let door = if offline { door.offline() } else { door };
-            let command = format!("{program} serve {}{}", model.id(), voice_option(&voice));
-            let (model, voice) = model.voiced(voice.as_deref(), &cache)?;
+            let command = format!(
+                "{program} serve {}{}",
+                model.id(),
+                voice_options(&voice, &language)
+            );
+            let (model, voice) = model.voiced(voice.as_deref(), language.as_deref(), &cache)?;
             let _checklist = checklist(command, check.take(), model, &cache, true);
             match model {
                 profiles::Model::Liquid(profile) => {
@@ -483,12 +502,11 @@ fn with_liquid(
     result
 }
 
-/// How a command names the voice it was given.
-fn voice_option(voice: &Option<String>) -> String {
-    voice
-        .iter()
-        .map(|voice| format!(" --voice {voice}"))
-        .collect()
+/// How a command names the voice and the language it was given.
+fn voice_options(voice: &Option<String>, language: &Option<String>) -> String {
+    let voice = voice.iter().map(|voice| format!(" --voice {voice}"));
+    let language = language.iter().map(|code| format!(" --language {code}"));
+    voice.chain(language).collect()
 }
 
 /// The startup checklist for `run`, `serve` and `pull` on a terminal. A command typed by hand
@@ -1242,6 +1260,18 @@ mod tests {
             assert_eq!(voice(&line).as_deref(), Some("ono_anna"));
             assert_eq!(parse(&line), (false, "--stt whisper".into()));
             assert_eq!(voice(&format!("boubou {command} {id}")), None);
+        }
+        // Boubou's own --language comes before the pipeline's options; a later one is theirs.
+        let language = |line: &str| match Cli::try_parse_from(line.split(' ')).unwrap().command {
+            Some(Action::Run { language, .. } | Action::Serve { language, .. }) => language,
+            _ => unreachable!(),
+        };
+        for command in ["run", "serve"] {
+            let line = format!("boubou {command} {id} --voice ryan --language de");
+            assert_eq!(language(&line).as_deref(), Some("de"));
+            assert_eq!(parse(&line), (false, String::new()));
+            let line = format!("boubou {command} {id} --stt whisper --language auto");
+            assert_eq!(language(&line), None);
         }
         // The first pipeline option ends Boubou's own: a later --port goes to the pipeline.
         assert_eq!(
