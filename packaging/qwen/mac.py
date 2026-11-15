@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -70,10 +71,20 @@ def local_kokoro_voices(model):
     KokoroPipeline.load_single_voice = local
 
 
+def read_japanese():
+    """Let misaki 0.9.4 read Japanese for Kokoro without pyopenjtalk.
+
+    misaki.ja imports pyopenjtalk for a reading Kokoro never asks for: Kokoro's reads with fugashi
+    and unidic-lite. pyopenjtalk publishes no wheel, and the fork that does needs a 77 MB dictionary.
+    """
+    sys.modules.setdefault("pyopenjtalk", types.ModuleType("pyopenjtalk"))
+
+
 def arguments(model_id, cache, manifest, work):
     options = pinned(model_id, cache, manifest, work)
     if "--kokoro_model_name" in options:
         local_kokoro_voices(Path(options[options.index("--kokoro_model_name") + 1]))
+        read_japanese()
     os.environ.update(HUB)
     if CLONER:
         (base,) = (path for name, path in snapshots(manifest, CLONER).items() if name.startswith("Qwen3-TTS"))

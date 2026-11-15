@@ -296,7 +296,7 @@ pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
     Ok(parts)
 }
 
-/// Whisper entries recognize Chinese and English; the others use Parakeet.
+/// Whisper entries hear languages Parakeet does not, such as Chinese; the others use Parakeet.
 pub fn whisper(id: &str) -> bool {
     id.ends_with("-whisper") || id == "chattts:whisper"
 }
@@ -304,7 +304,14 @@ pub fn whisper(id: &str) -> bool {
 /// Language modes are explicit; Pocket profiles name their stock language.
 fn language(id: &str) -> String {
     if whisper(id) {
-        return "Chinese / English (Whisper)".into();
+        // Kokoro's Whisper entry speaks any of its languages; the others were tested in these two.
+        let kokoro = id.starts_with("kokoro:");
+        return if kokoro {
+            "Multilingual (Whisper)"
+        } else {
+            "Chinese / English (Whisper)"
+        }
+        .into();
     }
     let Some(config) = id.strip_prefix("pocket-tts:") else {
         return "English".into();
@@ -316,7 +323,7 @@ fn language(id: &str) -> String {
 }
 
 /// The languages of every voice, by the codes a voice list gives them. Other voices speak English.
-const LANGUAGES: [(&str, &str); 11] = [
+const LANGUAGES: [(&str, &str); 12] = [
     ("en", "English"),
     ("ja", "Japanese"),
     ("zh", "Chinese"),
@@ -328,6 +335,7 @@ const LANGUAGES: [(&str, &str); 11] = [
     ("it", "Italian"),
     ("ru", "Russian"),
     ("nl", "Dutch"),
+    ("hi", "Hindi"),
 ];
 
 /// The voices `boubou clone` kept in `cache`, by name, each with the language it speaks.
@@ -402,14 +410,19 @@ fn voices(id: &str, voice: Option<&profiles::Voice>, cloned: &[profiles::Voice])
             .iter()
             .map(|(name, speaks)| named(name, &[speaks]))
             .collect()
-    } else if whisper(id) {
+    } else if let Some((name, speaks)) = voice {
+        // The Kokoro or KittenTTS voice that --voice named.
+        vec![named(name, &[speaks])]
+    } else if id == "chattts:whisper" {
         vec![named("Default", &["Chinese", "English"])]
     } else {
-        // A Kokoro voice that --voice named, or the voice the model starts with.
-        let (name, speaks) = voice.map_or(("Default", language(id)), |(name, speaks)| {
-            (name.as_str(), (*speaks).to_owned())
-        });
-        vec![named(name, &[&speaks])]
+        // Kokoro's Whisper entry starts as its Parakeet entry does, in English.
+        let speaks = if whisper(id) {
+            "English".into()
+        } else {
+            language(id)
+        };
+        vec![named("Default", &[&speaks])]
     };
     json!({ "voices": voices }).to_string()
 }
@@ -757,6 +770,18 @@ mod tests {
             r#""languages":[{"code":"zh","title":"Chinese"},{"code":"en","title":"English"}]"#;
         assert!(voices("chattts:whisper", None, &[]).contains(both));
         assert_eq!(ids("kokoro:82m", None, &cloned), ["default"]);
+        assert_eq!(
+            voices("kokoro:82m-whisper", None, &cloned),
+            voices("kokoro:82m", None, &cloned)
+        );
+        assert_eq!(
+            voices(
+                "kokoro:82m-whisper",
+                Some(&("hf_alpha".into(), "Hindi")),
+                &cloned
+            ),
+            r#"{"voices":[{"id":"hf_alpha","languages":[{"code":"hi","title":"Hindi"}],"name":"hf_alpha"}]}"#
+        );
         // Kokoro lists the voice --voice named, in that voice's language.
         assert_eq!(
             voices(

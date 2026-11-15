@@ -752,6 +752,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
         ("supertonic:3", "English"),
         ("chattts:en", "English"),
         ("chattts:whisper", "Chinese / English (Whisper)"),
+        ("kokoro:82m-whisper", "Multilingual (Whisper)"),
         (
             "qwen3-tts:1.7b-customvoice-whisper",
             "Chinese / English (Whisper)",
@@ -1551,7 +1552,8 @@ arguments = runpy.run_path(sys.argv[1])["arguments"]
 snapshot = "hub/models--{}/snapshots/pinned".format
 pairs = [("qwen3-tts:0.6b-customvoice", "qwen3-tts:0.6b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit"),
          ("qwen3-tts:1.7b-customvoice", "qwen3-tts:1.7b-customvoice-whisper", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit"),
-         ("chattts:en", "chattts:whisper", "2Noise--ChatTTS")]
+         ("chattts:en", "chattts:whisper", "2Noise--ChatTTS"),
+         ("kokoro:82m", "kokoro:82m-whisper", "mlx-community--Kokoro-82M-bf16")]
 defaults = [p[0] for p in pairs]
 optional = [p[1] for p in pairs]
 files = [{"path": snapshot("mlx-community--Qwen3.5-4B-4bit") + "/config.json"},
@@ -1582,6 +1584,8 @@ with TemporaryDirectory() as folder:
                 assert sorted(p.name for p in (work / "whisper").iterdir()) == ["config.json", "preprocessor_config.json", "tokenizer.json", "weights.safetensors"]
             if repo == "2Noise--ChatTTS":
                 targets.append(os.readlink(work / "asset"))
+            elif repo.endswith("Kokoro-82M-bf16"):
+                targets.append(os.readlink(argv[argv.index("--kokoro_model_name") + 1]))
             else:
                 targets.append(os.readlink(argv[argv.index("--qwen3_tts_model_name") + 1]))
                 assert argv[argv.index("--qwen3_tts_language") + 1] == ("auto" if model == whisper else "english"), argv
