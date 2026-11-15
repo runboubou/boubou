@@ -197,7 +197,12 @@ fn tree_matches(installed: &Path, tree: &str) -> Result<bool> {
     Ok(integrity::tree_digest(installed)?.as_deref() == Some(tree))
 }
 
-pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
+pub fn prepare(
+    id: &str,
+    voice: Option<&profiles::Voice>,
+    cache: &Path,
+    offline: bool,
+) -> Result<PathBuf> {
     let dir = release_dir()?;
     let runner = runner(&dir)?;
     check_host(&runner)?;
@@ -216,7 +221,7 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     if !current && runner.url.is_some() {
         assets::prefetch(&runner.archive(), &engine, offline)?;
     }
-    for f in needed(id, cache, &dir)? {
+    for f in needed(id, voice, cache, &dir)? {
         integrity::safe_destination(&root, &f.path)?;
         let path = root.join(&f.path);
         assets::prefetch(
@@ -231,8 +236,8 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
     } else {
         Some(archive(&runner, &dir, &engine, offline)?)
     };
-    for id in [id].into_iter().chain(cloner(id, cache)) {
-        model_assets(id, &root, &dir, Some(offline))?;
+    for id in owners(id, voice, cache) {
+        model_assets(&id, &root, &dir, Some(offline))?;
     }
     progress::step(Step::Start);
     let Some(archive) = archive else {
@@ -248,7 +253,11 @@ pub fn prepare(id: &str, cache: &Path, offline: bool) -> Result<PathBuf> {
 }
 
 /// The checklist's download chips: speech-to-text, language model, voice and runner.
-pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
+pub fn parts(
+    id: &str,
+    voice: Option<&profiles::Voice>,
+    cache: &Path,
+) -> Result<Vec<progress::Part>> {
     let dir = release_dir()?;
     let runner = runner(&dir)?;
     let root = cache.join("qwen");
@@ -281,7 +290,7 @@ pub fn parts(id: &str, cache: &Path) -> Result<Vec<progress::Part>> {
         let size = incremental::estimate(&runner, &root, &engine.join("installed"));
         parts[3].files.push((archive, size.unwrap_or(runner.size)));
     }
-    for f in needed(id, cache, &dir)? {
+    for f in needed(id, voice, cache, &dir)? {
         let path = f.path.to_string_lossy().to_lowercase();
         let part = if path.contains("parakeet") || path.contains("whisper") {
             0
@@ -493,9 +502,30 @@ impl ModelFile {
     }
 }
 
-/// The files `id` reads: its own, and the Base weights that read voices cloned in `cache`.
-fn needed(id: &str, cache: &Path, dir: &Path) -> Result<Vec<ModelFile>> {
-    let ids: Vec<_> = [id].into_iter().chain(cloner(id, cache)).collect();
+/// The profiles whose files `id` reads with `voice`: its own, the Base weights that read voices
+/// cloned in `cache`, and the voice state of a Pocket TTS preset it does not start with. The
+/// runner reads one voice state per Pocket TTS profile, so each other preset has a profile of
+/// its own, `<id>/<voice>`, and only the voice chosen is downloaded.
+fn owners(id: &str, voice: Option<&profiles::Voice>, cache: &Path) -> Vec<String> {
+    let preset = profiles::pocket(id)
+        .zip(voice)
+        .filter(|((_, own), (name, _))| own != name)
+        .map(|(_, (name, _))| format!("{id}/{name}"));
+    [id.to_owned()]
+        .into_iter()
+        .chain(cloner(id, cache).map(str::to_owned))
+        .chain(preset)
+        .collect()
+}
+
+/// The files `id` reads with `voice`.
+fn needed(
+    id: &str,
+    voice: Option<&profiles::Voice>,
+    cache: &Path,
+    dir: &Path,
+) -> Result<Vec<ModelFile>> {
+    let ids = owners(id, voice, cache);
     let mut files = model_files(id, dir)?;
     files.retain(|f| ids.iter().any(|id| f.applies_to(id)));
     Ok(files)
@@ -530,7 +560,7 @@ fn estimate(id: &str, cache: &Path, dir: &Path) -> Result<Requirements> {
     };
     let root = cache.join("qwen");
     let mut download = 0;
-    for file in needed(id, cache, dir)? {
+    for file in needed(id, None, cache, dir)? {
         integrity::safe_destination(&root, &file.path)?;
         if !root
             .join(&file.path)
@@ -606,7 +636,7 @@ pub fn run(
         atomic::{AtomicBool, Ordering},
     };
 
-    let installed = prepare(id, cache, offline)?;
+    let installed = prepare(id, voice, cache, offline)?;
     let entry = runner(&release_dir()?)?.host.entry();
     // Pipeline options may name any model, so only they let the runner reach the Hub.
     let hub = !(offline || pipeline.is_empty());
@@ -688,6 +718,14 @@ fn speech(id: &str, voice: &profiles::Voice, cloned: &[profiles::Voice]) -> Vec<
     } else if id.starts_with("kitten-tts:") {
         told = false;
         vec!["--kitten_voice", name]
+    } else if id.starts_with("pocket-tts:") {
+        // The SDK finds a preset's voice state for the profile's config in the pinned snapshot.
+        // The profile's own prompt already names the config's language.
+        told = false;
+        vec!["--pocket_tts_voice", name]
+    } else if id.starts_with("phonon:") {
+        told = false;
+        vec!["--phonon_tts_voice", name]
     } else if id.starts_with("supertonic:") {
         let code = profiles::SUPERTONIC_LANGUAGES
             .iter()
@@ -737,7 +775,7 @@ pub fn clone(cache: &Path, run: &str) -> Result<()> {
         },
     };
 
-    let installed = prepare(CLONE, cache, false)?;
+    let installed = prepare(CLONE, None, cache, false)?;
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
     ctrlc::set_handler(move || flag.store(true, Ordering::SeqCst))?;
@@ -867,6 +905,15 @@ mod tests {
             speech("kitten-tts:mini-0.8", "Luna", "English"),
             ["--kitten_voice", "Luna"]
         );
+        // The profile's own prompt names a Pocket TTS config's language.
+        assert_eq!(
+            speech("pocket-tts:french_24l", "lola", "French"),
+            ["--pocket_tts_voice", "lola"]
+        );
+        assert_eq!(
+            speech("phonon:31m-en", "Old Mortlake", "English"),
+            ["--phonon_tts_voice", "Old Mortlake"]
+        );
         // Supertonic is told the language, and so is the language model unless it is English.
         let english = [
             "--supertonic_tts_voice",
@@ -980,6 +1027,47 @@ mod tests {
         assert!(grouped.applies_to("chattts:whisper"));
         assert!(grouped.applies_to("qwen3-tts:0.6b-customvoice-whisper"));
         assert!(!grouped.applies_to("chattts:en"));
+    }
+
+    #[test]
+    fn a_pocket_preset_downloads_only_its_own_voice_state() -> Result<()> {
+        let root = env::temp_dir().join(format!("boubou-pocket-voice-{}", std::process::id()));
+        let cache = root.join("cache");
+        fs::create_dir_all(&root)?;
+        let id = "pocket-tts:french_24l";
+        let file = |path: &str, profile: &str| {
+            let url = format!("https://example.invalid/{path}");
+            serde_json::json!({"path": path, "url": url, "size": 1, "sha256": "a".repeat(64), "profiles": [profile]})
+        };
+        let files = serde_json::json!([
+            file("model", id),
+            file("estelle", id),
+            file("lola", "pocket-tts:french_24l/lola"),
+            file("jean", "pocket-tts:french_24l/jean"),
+            file("other", "pocket-tts:german/lola"),
+        ]);
+        fs::write(root.join("models.json"), files.to_string())?;
+        let paths = |voice: Option<&str>| -> Result<Vec<String>> {
+            let voice = voice.map(|name| (name.to_owned(), "French"));
+            let files = needed(id, voice.as_ref(), &cache, &root)?;
+            Ok(files
+                .into_iter()
+                .map(|f| f.path.display().to_string())
+                .collect())
+        };
+        let result = (|| -> Result<()> {
+            assert_eq!(paths(None)?, ["model", "estelle"]);
+            assert_eq!(paths(Some("estelle"))?, ["model", "estelle"]);
+            assert_eq!(paths(Some("lola"))?, ["model", "estelle", "lola"]);
+            let phonon = ("Zoey".to_owned(), "English");
+            assert_eq!(
+                owners("phonon:31m-en", Some(&phonon), &cache),
+                ["phonon:31m-en"]
+            );
+            Ok(())
+        })();
+        fs::remove_dir_all(root)?;
+        result
     }
 
     #[test]

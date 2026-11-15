@@ -78,7 +78,8 @@ enum Action {
         /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora,
         /// jf_alpha and 51 more, each speaking the language its first letter names; KittenTTS
         /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo; Supertonic has m1 to m5
-        /// and f1 to f5.
+        /// and f1 to f5; Pocket TTS has alba, marius, lola and 24 more, each speaking the
+        /// config's language; Phonon has zoey, miles, old-mortlake and 34 more.
         #[arg(long)]
         voice: Option<String>,
         /// The language to talk in, as a code such as fr, for a model whose voices speak
@@ -104,7 +105,8 @@ enum Action {
         /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora,
         /// jf_alpha and 51 more, each speaking the language its first letter names; KittenTTS
         /// has bella, jasper, luna, bruno, rosie, hugo, kiki and leo; Supertonic has m1 to m5
-        /// and f1 to f5.
+        /// and f1 to f5; Pocket TTS has alba, marius, lola and 24 more, each speaking the
+        /// config's language; Phonon has zoey, miles, old-mortlake and 34 more.
         #[arg(long)]
         voice: Option<String>,
         /// The language to talk in, as a code such as fr, for a model whose voices speak
@@ -345,6 +347,7 @@ fn run() -> Result<()> {
                 format!("{program} clone"),
                 check.take(),
                 clone,
+                None,
                 &cache,
                 true,
             );
@@ -355,6 +358,7 @@ fn run() -> Result<()> {
                 format!("{program} pull {}", model.id()),
                 check.take(),
                 model,
+                None,
                 &cache,
                 false,
             );
@@ -363,7 +367,7 @@ fn run() -> Result<()> {
                     assets::prepare(profile, &cache, offline)?;
                 }
                 profiles::Model::Modular(id) => {
-                    modular::prepare(id, &cache, offline)?;
+                    modular::prepare(id, None, &cache, offline)?;
                 }
             }
             let ready = format!("{0} is ready. Run: {program} run {0} --offline", model.id());
@@ -406,7 +410,7 @@ fn run() -> Result<()> {
                 if offline { " --offline" } else { "" }
             );
             let (model, voice) = model.voiced(voice.as_deref(), language.as_deref(), &cache)?;
-            let _checklist = checklist(command, check.take(), model, &cache, true);
+            let _checklist = checklist(command, check.take(), model, voice.as_ref(), &cache, true);
             let model = match model {
                 profiles::Model::Liquid(profile) => profile,
                 profiles::Model::Modular(id) => {
@@ -453,7 +457,7 @@ fn run() -> Result<()> {
                 voice_options(&voice, &language)
             );
             let (model, voice) = model.voiced(voice.as_deref(), language.as_deref(), &cache)?;
-            let _checklist = checklist(command, check.take(), model, &cache, true);
+            let _checklist = checklist(command, check.take(), model, voice.as_ref(), &cache, true);
             match model {
                 profiles::Model::Liquid(profile) => {
                     with_liquid(profile, &cache, offline, |chat, stopped| {
@@ -515,12 +519,13 @@ fn checklist(
     command: String,
     check: Option<String>,
     model: profiles::Model,
+    voice: Option<&profiles::Voice>,
     cache: &Path,
     start: bool,
 ) -> Option<progress::Checklist> {
     let parts = match model {
         profiles::Model::Liquid(profile) => assets::parts(profile, cache),
-        profiles::Model::Modular(id) => modular::parts(id, cache),
+        profiles::Model::Modular(id) => modular::parts(id, voice, cache),
     }
     .unwrap_or_default();
     #[cfg(target_os = "macos")]

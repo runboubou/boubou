@@ -76,10 +76,29 @@ BASE = [
 # ptts 0.4.0 defaults: its checkpoint, read locally (q8 weights, tokenizer, default voice), and its
 # voice catalog, which the upstream handler lists at startup. The Hub client ptts uses ignores
 # HF_HUB_OFFLINE, but returns a file cached at an exact commit without connecting.
+# The catalog's English voices, by name and voice ID, the ones the English checkpoint speaks with.
+PHONON_VOICES = [
+    ("Zoey", "NbpkqMVS3CJeq2j8"), ("Juniper", "NIWIOv5vTi5eRMj8"), ("Everly", "vjFyp2BcCyTlUmYb"),
+    ("Harper", "4SZHfMpw-p46Ywgs"), ("Hadley", "bXwrkHhURL1VFJdG"), ("Delia", "nGzMHMPAWGaJFHOo"),
+    ("Easton", "LMDIYE0Oa377Qh6Z"), ("Micah", "40QrMVgAxFiUnP9f"), ("Trevor", "0zLApsZfVLLNaEGl"),
+    ("Russell", "_6Aslh2DxfmnRLmP"), ("Preston", "qIxlZ7Ei8KvWlyQH"), ("Miles", "d9XCyhjo4JhkHF1d"),
+    ("Maeve", "6PWnV0Nq4wu7RVBT"), ("Freya", "GgfEkEJtxZR7gnpy"), ("Pippa", "uem82D50GRv2Dwma"),
+    ("Elodie-Rose", "y9bQqIDnyxwqK01t"), ("Imogen", "gDT1nz7Ie36ZhL-C"), ("Lottie", "m9MxpY6IUGXtWp76"),
+    ("Alfie", "X6NceqF285Gr04gb"), ("Hugh", "YyKcxPG7iIgS3jsK"), ("Edwin", "zUCxzrOrugTSis03"),
+    ("Spencer", "JOW0vchyswkQUMDS"), ("Toby", "dME3IWyZBvmh1n1q"), ("Teddy", "Zn7g6NxLqXlJb7Qi"),
+    ("Bryony", "gfP44RlHwr2kEwk7"), ("Captain Silas Blackwater", "xPDpsV3F592srkjA"),
+    ("Morwenna of the Deep", "nOykTmcH9ydsGGIc"), ("Old Mortlake", "lX3LavMNdlIbgEHH"),
+    ("Azgorath", "dGyGDKo2osj7h3s7"), ("Fennick the Young Elf", "cXoIXJ2llS8S0WOW"),
+    ("The Thing Under the Stairs", "GXaSqMEmOg12OIYb"), ("Vyrmathrax the Ancient", "xO8xQo3BrB8FuI6J"),
+    ("Grub the Ogre", "cYtsRSxV5q9IMehn"), ("Master Aldric", "gSgG5Tor0GPEnqzC"),
+    ("The Snow Queen", "NIWoEurJHMJjyUTe"), ("Sir Bramwell", "y2eiKxtQo2B67deU"),
+    ("Fairy Godmother", "QXNr0SvkukLB4wPq"),
+]
 PHONON = [
     ("gradium/phonon-31m-en", "8c64b55ec301728e2d1695bfea87a08a267d0c2d",
      {"README.md", "config.json", "default-voice.safetensors", "model.q8.gguf", "tokenizer.json"}, "phonon:31m-en"),
-    ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3", {"voices.jsonl"}, "phonon:31m-en"),
+    ("gradium/phonon-voices", "da6c9ec0d47be8df5c87c730a3aa97187f3229c3",
+     {"voices.jsonl", *(f"voices/{voice_id}.safetensors" for _, voice_id in PHONON_VOICES)}, "phonon:31m-en"),
 ]
 # supertonic 1.3.1 loads the revision it pins from one directory: the ONNX graphs, their configs and
 # the voice styles, M1 the upstream default. The stub config.json marks the snapshot for voice.py.
@@ -118,6 +137,12 @@ POCKET_CONFIGS = [
 POCKET_VOICES = {"english": "alba", "dutch": "daan", "french": "estelle", "german": "juergen",
                  "italian": "giovanni", "portuguese": "rafael", "spanish": "lola"}
 POCKET_VOICE_REVISION = "a7056f505a4a8ca72d8b5fb1440071d6f1a35739"
+# The SDK's preset voices. Every config has a voice state for each, which speaks the config's language.
+POCKET_PRESETS = [
+    "alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma", "anna", "vera",
+    "charles", "paul", "george", "mary", "jane", "michael", "eve", "bill_boerst", "peter_yearsley",
+    "stuart_bell", "caro_davy", "giovanni", "lola", "juergen", "rafael", "daan", "estelle",
+]
 # KittenTTS ONNX checkpoints: every file but .gitattributes. The config names the weights and voices.
 KITTEN = [
     (f"KittenML/kitten-tts-{name}", revision, {"README.md", "config.json", weights, "voices.npz"}, f"kitten-tts:{name}")
@@ -224,15 +249,20 @@ def pocket():
     for config, text in pocket_configs().items():
         profile = f"pocket-tts:{config}"
         voice = POCKET_VOICES[config.split("_")[0]]
-        files = [(f"languages/{config}/embeddings/{voice}.safetensors", POCKET_VOICE_REVISION)]
+        embeddings = f"languages/{config}/embeddings"
+        files = [(f"{embeddings}/{voice}.safetensors", POCKET_VOICE_REVISION, profile)]
+        # voice.py reads one voice state per profile, so each other preset has a profile of its own,
+        # pocket-tts:<config>/<voice>, which Boubou downloads only when --voice names that voice.
+        files += [(f"{embeddings}/{other}.safetensors", POCKET_VOICE_REVISION, f"{profile}/{other}")
+                  for other in POCKET_PRESETS if other != voice]
         for key, ref in re.findall(r"^\s*(\w+): hf://(\S+)$", text, re.M):
             if key == "weights_path" and ref.startswith("kyutai/pocket-tts/"):
                 continue  # Gated voice-cloning weights. Offline, the SDK loads the public ones.
             if not ref.startswith(f"{POCKET}/"):
                 raise ValueError(f"Unexpected Pocket TTS asset in {config}: {key}")
-            files.append(tuple(ref.removeprefix(f"{POCKET}/").split("@")))
-        for name, revision in files:
-            needed.setdefault(revision, {}).setdefault(name, []).append(profile)
+            files.append((*ref.removeprefix(f"{POCKET}/").split("@"), profile))
+        for name, revision, owner in files:
+            needed.setdefault(revision, {}).setdefault(name, []).append(owner)
     for revision, names in needed.items():
         directory = f"hub/models--{POCKET.replace('/', '--')}/snapshots/{revision}"
         for file in snapshot(POCKET, revision, directory, None, set(names)):
@@ -252,8 +282,13 @@ WHISPER_PROFILES = {
 }
 
 
+def runnable(profile):
+    """Whether Boubou runs `profile`. A Pocket TTS voice profile only adds a voice state to its config's."""
+    return "/" not in profile
+
+
 def with_whisper_profiles(files):
-    english = sorted({file["profile"] for file in files if "profile" in file})
+    english = sorted({file["profile"] for file in files if "profile" in file and runnable(file["profile"])})
     result = []
     for file in files:
         profile = file.get("profile")
@@ -279,7 +314,8 @@ def with_whisper_profiles(files):
 def with_runtime_profiles(files):
     presets = json.loads((Path(__file__).parent / "runtimes.json").read_text())
     legacy = {profile for file in files
-              for profile in file.get("profiles", [file["profile"]] if "profile" in file else [])}
+              for profile in file.get("profiles", [file["profile"]] if "profile" in file else [])
+              if runnable(profile)}
     tiny_profiles = [preset["id"] for preset in presets if preset["stt"] == "whisper-tiny"]
     repo, revision = "openai/whisper-tiny", "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
     names = {"README.md", "added_tokens.json", "config.json", "generation_config.json",
@@ -359,7 +395,7 @@ def cuda():
             files.extend(snapshot(repo, revision, f"licenses/{repo}/{revision}", profile, only))
     # ChatTTS takes about 9 s for its first sentence on CUDA, so it stays on the Mac.
     files.extend(file for file in shared() if file.get("profile") != CHATTTS[3])
-    everyone = sorted({file["profile"] for file in files if "profile" in file})
+    everyone = sorted({file["profile"] for file in files if "profile" in file and runnable(file["profile"])})
     return [{**{key: value for key, value in file.items() if key != "profile"},
              "profiles": [file["profile"]] if "profile" in file else everyone} for file in files]
 

@@ -425,6 +425,100 @@ pub const SUPERTONIC_LANGUAGES: [(&str, &str); 24] = [
     ("uk", "Ukrainian"),
 ];
 
+/// Pocket TTS's preset voices. Every stock config has a voice state for each, which speaks the
+/// config's language.
+pub const POCKET_VOICES: [&str; 27] = [
+    "alba",
+    "marius",
+    "javert",
+    "jean",
+    "fantine",
+    "cosette",
+    "eponine",
+    "azelma",
+    "anna",
+    "vera",
+    "charles",
+    "paul",
+    "george",
+    "mary",
+    "jane",
+    "michael",
+    "eve",
+    "bill_boerst",
+    "peter_yearsley",
+    "stuart_bell",
+    "caro_davy",
+    "giovanni",
+    "lola",
+    "juergen",
+    "rafael",
+    "daan",
+    "estelle",
+];
+
+/// The language of each Pocket TTS stock config, by the word its name starts with, and the preset
+/// voice the config starts with.
+const POCKET_LANGUAGES: [(&str, &str, &str); 7] = [
+    ("english", "English", "alba"),
+    ("dutch", "Dutch", "daan"),
+    ("french", "French", "estelle"),
+    ("german", "German", "juergen"),
+    ("italian", "Italian", "giovanni"),
+    ("portuguese", "Portuguese", "rafael"),
+    ("spanish", "Spanish", "lola"),
+];
+
+/// The language a Pocket TTS profile speaks, and the voice it starts with.
+pub fn pocket(id: &str) -> Option<(&'static str, &'static str)> {
+    let config = id.strip_prefix("pocket-tts:")?;
+    let (_, speaks, voice) = POCKET_LANGUAGES
+        .into_iter()
+        .find(|(word, ..)| config.split('_').next() == Some(*word))?;
+    Some((speaks, voice))
+}
+
+/// The English voices of Phonon's voice catalog, which its English checkpoint speaks with.
+pub const PHONON_VOICES: [&str; 37] = [
+    "Zoey",
+    "Juniper",
+    "Everly",
+    "Harper",
+    "Hadley",
+    "Delia",
+    "Easton",
+    "Micah",
+    "Trevor",
+    "Russell",
+    "Preston",
+    "Miles",
+    "Maeve",
+    "Freya",
+    "Pippa",
+    "Elodie-Rose",
+    "Imogen",
+    "Lottie",
+    "Alfie",
+    "Hugh",
+    "Edwin",
+    "Spencer",
+    "Toby",
+    "Teddy",
+    "Bryony",
+    "Captain Silas Blackwater",
+    "Morwenna of the Deep",
+    "Old Mortlake",
+    "Azgorath",
+    "Fennick the Young Elf",
+    "The Thing Under the Stairs",
+    "Vyrmathrax the Ancient",
+    "Grub the Ogre",
+    "Master Aldric",
+    "The Snow Queen",
+    "Sir Bramwell",
+    "Fairy Godmother",
+];
+
 /// Kokoro's language codes, and whether Parakeet hears the language: American and British
 /// English, Spanish, French, Hindi, Italian, Japanese, Brazilian Portuguese and Mandarin.
 const KOKORO_LANGUAGES: [(char, &str, bool); 9] = [
@@ -554,7 +648,8 @@ impl Model {
     /// This model speaking as the voice `--voice` names, in the language `--language` names: on
     /// Qwen3-TTS one of `VOICES` or of the voices cloned in `cache`, on Kokoro one of
     /// `KOKORO_VOICES`, on KittenTTS one of `KITTEN_VOICES`, on Supertonic one of
-    /// `SUPERTONIC_VOICES`. Qwen3-TTS and Supertonic voices speak several languages, their own
+    /// `SUPERTONIC_VOICES`, on Pocket TTS one of `POCKET_VOICES`, which speaks the config's
+    /// language, and on Phonon one of `PHONON_VOICES`. Qwen3-TTS and Supertonic voices speak several languages, their own
     /// unless one is named. A language Parakeet does not hear brings the model's Whisper entry,
     /// which hears that language.
     pub fn voiced(
@@ -610,6 +705,34 @@ impl Model {
         } else {
             "Aiden"
         });
+        if id.starts_with("pocket-tts:") {
+            let name = POCKET_VOICES
+                .into_iter()
+                .find(|name| name.eq_ignore_ascii_case(voice))
+                .with_context(|| {
+                    format!(
+                        "No Pocket TTS voice is named {voice}. Choose from: {}.",
+                        POCKET_VOICES.join(", ")
+                    )
+                })?;
+            let (speaks, _) = pocket(id).context("Unknown Pocket TTS language")?;
+            return Ok((self, Some((name.to_owned(), speaks))));
+        }
+        if id.starts_with("phonon:") {
+            // Some catalog names have spaces. A command can name them with dashes instead.
+            let slug = |name: &str| name.to_lowercase().replace([' ', '_'], "-");
+            let wanted = slug(voice);
+            let name = PHONON_VOICES
+                .into_iter()
+                .find(|name| slug(name) == wanted)
+                .with_context(|| {
+                    format!(
+                        "No Phonon voice is named {voice}. Choose from: {}.",
+                        PHONON_VOICES.map(slug).join(", ")
+                    )
+                })?;
+            return Ok((self, Some((name.to_owned(), "English"))));
+        }
         if self.id().starts_with("kokoro:") {
             let name = KOKORO_VOICES
                 .into_iter()
@@ -659,7 +782,7 @@ impl Model {
         let names = names.join(", ");
         ensure!(
             self.id().starts_with("qwen3-tts:"),
-            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro, KittenTTS and Supertonic models.",
+            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro, KittenTTS, Supertonic, Pocket TTS and Phonon models.",
             self.id()
         );
         let (name, own) = voices
@@ -867,9 +990,59 @@ mod tests {
         assert!(error.starts_with("Sohee speaks Korean."), "{error}");
         assert!(voiced(small, "nobody").unwrap_err().contains("ono_anna"));
         assert!(
-            voiced("phonon:31m-en", "ryan")
+            voiced("mms-tts:eng", "ryan")
                 .unwrap_err()
-                .starts_with("phonon:31m-en has one voice.")
+                .starts_with("mms-tts:eng has one voice.")
+        );
+        // A Pocket TTS preset speaks the language of the profile's config.
+        for (id, name, expected) in [
+            (
+                "pocket-tts:english_2026-10",
+                "Marius",
+                ("marius", "English"),
+            ),
+            ("pocket-tts:french_24l", "LOLA", ("lola", "French")),
+            (
+                "pocket-tts:english_2m_refl_2026-10",
+                "bill_boerst",
+                ("bill_boerst", "English"),
+            ),
+            ("pocket-tts:portuguese", "alba", ("alba", "Portuguese")),
+        ] {
+            assert_eq!(
+                voiced(id, name),
+                voice(expected.0, expected.1).map(|v| (id, v))
+            );
+        }
+        for id in MODULAR_IDS
+            .iter()
+            .filter(|id| id.starts_with("pocket-tts:"))
+        {
+            assert!(pocket(id).is_some(), "{id}");
+        }
+        let error = voiced("pocket-tts:german", "ryan").unwrap_err();
+        assert!(
+            error.starts_with("No Pocket TTS voice is named ryan. Choose from: alba, marius,")
+                && error.ends_with("daan, estelle."),
+            "{error}"
+        );
+        // A Phonon voice goes by its catalog name, or with dashes for its spaces.
+        for (name, expected) in [
+            ("zoey", "Zoey"),
+            ("Old Mortlake", "Old Mortlake"),
+            ("captain-silas-blackwater", "Captain Silas Blackwater"),
+            ("elodie-rose", "Elodie-Rose"),
+        ] {
+            assert_eq!(
+                voiced("phonon:31m-en", name),
+                voice(expected, "English").map(|v| ("phonon:31m-en", v))
+            );
+        }
+        let error = voiced("phonon:31m-en", "ryan").unwrap_err();
+        assert!(
+            error.starts_with("No Phonon voice is named ryan. Choose from: zoey, juniper,")
+                && error.ends_with("sir-bramwell, fairy-godmother."),
+            "{error}"
         );
         // A Kokoro voice speaks the language its first letter names, and Parakeet hears it.
         for (id, name, language) in [
@@ -897,6 +1070,18 @@ mod tests {
         };
         assert_eq!(locked("KOKORO_VOICES = ["), KOKORO_VOICES);
         assert_eq!(locked("SUPERTONIC_VOICES = ["), SUPERTONIC_VOICES);
+        assert_eq!(locked("POCKET_PRESETS = ["), POCKET_VOICES);
+        let phonon: Vec<_> = locked("PHONON_VOICES = [").into_iter().step_by(2).collect();
+        assert_eq!(phonon, PHONON_VOICES);
+        // Each Pocket TTS profile starts with the voice the lock gives its language.
+        let (_, starts) = lock.split_once("POCKET_VOICES = {").unwrap();
+        let (starts, _) = starts.split_once('}').unwrap();
+        let starts: Vec<_> = starts.split('"').skip(1).step_by(2).collect();
+        let languages: Vec<_> = POCKET_LANGUAGES
+            .iter()
+            .flat_map(|(word, _, voice)| [*word, *voice])
+            .collect();
+        assert_eq!(starts, languages);
         for name in KOKORO_VOICES {
             let hears = voiced("kokoro:82m", name);
             assert!(
