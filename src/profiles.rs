@@ -362,6 +362,19 @@ pub const KOKORO_VOICES: [&str; 37] = [
     "pm_santa",
 ];
 
+/// KittenTTS's voices, all English: the names 0.8 checkpoints give them, and the IDs every
+/// checkpoint has.
+pub const KITTEN_VOICES: [(&str, &str); 8] = [
+    ("Bella", "expr-voice-2-f"),
+    ("Jasper", "expr-voice-2-m"),
+    ("Luna", "expr-voice-3-f"),
+    ("Bruno", "expr-voice-3-m"),
+    ("Rosie", "expr-voice-4-f"),
+    ("Hugo", "expr-voice-4-m"),
+    ("Kiki", "expr-voice-5-f"),
+    ("Leo", "expr-voice-5-m"),
+];
+
 /// Kokoro's language codes: American and British English, Spanish, French, Italian and
 /// Brazilian Portuguese.
 const KOKORO_LANGUAGES: [(char, &str); 6] = [
@@ -484,8 +497,9 @@ impl Model {
     }
 
     /// This model speaking as the voice `--voice` names: on Qwen3-TTS one of `VOICES` or of the
-    /// voices cloned in `cache`, on Kokoro one of `KOKORO_VOICES`. A Qwen3-TTS voice of another
-    /// language than English brings the model's Whisper entry, which hears that language.
+    /// voices cloned in `cache`, on Kokoro one of `KOKORO_VOICES`, on KittenTTS one of
+    /// `KITTEN_VOICES`. A Qwen3-TTS voice of another language than English brings the model's
+    /// Whisper entry, which hears that language.
     pub fn voiced(self, voice: Option<&str>, cache: &Path) -> Result<(Self, Option<Voice>)> {
         let Some(voice) = voice else {
             return Ok((self, None));
@@ -506,6 +520,25 @@ impl Model {
                 .expect("every Kokoro voice names its language");
             return Ok((self, Some((name.to_owned(), speaks))));
         }
+        if self.id().starts_with("kitten-tts:") {
+            // A 0.8 checkpoint names its voices; earlier ones know only the IDs.
+            let named = self.id().contains("-0.8");
+            let pick = |(name, id): (&'static str, &'static str)| if named { name } else { id };
+            let names: Vec<_> = KITTEN_VOICES.map(pick).map(str::to_lowercase).into();
+            let name = KITTEN_VOICES
+                .into_iter()
+                .find(|(name, id)| {
+                    name.eq_ignore_ascii_case(voice) || id.eq_ignore_ascii_case(voice)
+                })
+                .map(pick)
+                .with_context(|| {
+                    format!(
+                        "No KittenTTS voice is named {voice}. Choose from: {}.",
+                        names.join(", ")
+                    )
+                })?;
+            return Ok((self, Some((name.to_owned(), "English"))));
+        }
         let voices: Vec<Voice> = VOICES
             .iter()
             .map(|&(name, speaks)| (name.to_owned(), speaks))
@@ -515,7 +548,7 @@ impl Model {
         let names = names.join(", ");
         ensure!(
             self.id().starts_with("qwen3-tts:"),
-            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro models.",
+            "{} has one voice. Qwen3-TTS models take --voice: {names}. So do Kokoro and KittenTTS models.",
             self.id()
         );
         let speaker = voices
@@ -651,6 +684,25 @@ mod tests {
         for name in KOKORO_VOICES {
             assert!(voiced("kokoro:82m", name).is_ok(), "{name}");
         }
+        // A KittenTTS voice goes by its name on 0.8 checkpoints, and by its ID on earlier ones.
+        for (id, name, expected) in [
+            ("kitten-tts:mini-0.8", "LUNA", "Luna"),
+            ("kitten-tts:nano-0.8-int8", "expr-voice-5-m", "Leo"),
+            ("kitten-tts:nano-0.2", "kiki", "expr-voice-5-f"),
+            ("kitten-tts:mini-0.1", "expr-voice-2-m", "expr-voice-2-m"),
+        ] {
+            assert_eq!(
+                voiced(id, name),
+                voice(expected, "English").map(|v| (id, v))
+            );
+        }
+        let error = voiced("kitten-tts:micro-0.8", "alba").unwrap_err();
+        assert!(
+            error.starts_with("No KittenTTS voice is named alba.") && error.ends_with("kiki, leo."),
+            "{error}"
+        );
+        let error = voiced("kitten-tts:nano-0.1", "alba").unwrap_err();
+        assert!(error.ends_with("expr-voice-5-m."), "{error}");
         for missing in ["ryan", "jf_alpha", "dad"] {
             let error = voiced("kokoro:82m", missing).unwrap_err();
             assert!(

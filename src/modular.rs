@@ -618,6 +618,7 @@ pub fn run(
             "--kokoro_lang_code",
             &name[..1],
         ]),
+        Some((name, _)) if id.starts_with("kitten-tts:") => command.args(["--kitten_voice", name]),
         Some((name, _)) if cloned.iter().any(|(clone, _)| clone == name) => {
             command.env("BOUBOU_VOICE", name)
         }
