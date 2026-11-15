@@ -50,6 +50,8 @@ pub struct Selection {
     pub offline: bool,
     /// Who speaks, when a pasted command names a voice.
     pub voice: Option<String>,
+    /// The language to talk in, when a pasted command names one.
+    pub language: Option<String>,
     /// What the device check found, for the startup checklist.
     pub check: Option<String>,
 }
@@ -494,24 +496,30 @@ fn parse_selection(text: &str, cache: &Path) -> Result<Selection> {
         );
         args = &args[2..];
     }
-    const USAGE: &str = "Use a model name or boubou run MODEL [--voice NAME] [--offline].";
+    const USAGE: &str =
+        "Use a model name or boubou run MODEL [--voice NAME] [--language CODE] [--offline].";
     let (id, options) = args.split_first().context(USAGE)?;
-    let (mut offline, mut voice) = (false, None);
+    let (mut offline, mut voice, mut language) = (false, None, None);
     let mut options = options.iter();
     while let Some(option) = options.next() {
         match option.as_str() {
             "--offline" if !offline => offline = true,
             "--voice" if voice.is_none() => voice = Some(options.next().context(USAGE)?.clone()),
+            "--language" if language.is_none() => {
+                language = Some(options.next().context(USAGE)?.clone());
+            }
             _ => bail!(USAGE),
         }
     }
     let model = Model::find(id).context("Model not supported. Check the name or update Boubou.")?;
-    // A voice the model does not have is named here, where the command can be typed again.
-    model.voiced(voice.as_deref(), cache)?;
+    // A voice or a language the model does not have is named here, where the command can be
+    // typed again.
+    model.voiced(voice.as_deref(), language.as_deref(), cache)?;
     Ok(Selection {
         model,
         offline,
         voice,
+        language,
         check: None,
     })
 }
@@ -648,6 +656,7 @@ pub fn start(cache: &Path) -> Result<Choice> {
             model: setup.model,
             offline: false,
             voice: None,
+            language: None,
             check: Some(device.fit(setup.memory)),
         }));
     }
@@ -1320,10 +1329,17 @@ mod tests {
         for command in [
             "LFM3-Audio-2B --voice",
             "LFM3-Audio-2B --voice ryan --voice aiden",
+            "LFM3-Audio-2B --language",
+            "LFM3-Audio-2B --language fr --language de",
             "LFM3-Audio-2B --offline --offline",
         ] {
-            assert!(error(command).contains("[--voice NAME] [--offline]"));
+            assert!(error(command).contains("[--voice NAME] [--language CODE] [--offline]"));
         }
+        let error = error("npx boubou@beta run LFM3-Audio-2B --language fr");
+        assert!(
+            error.starts_with("LFM3-Audio-2B speaks one language"),
+            "{error}"
+        );
     }
 
     #[test]

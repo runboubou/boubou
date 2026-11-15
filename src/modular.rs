@@ -322,8 +322,9 @@ fn language(id: &str) -> String {
     })
 }
 
-/// The languages of every voice, by the codes a voice list gives them. Other voices speak English.
-const LANGUAGES: [(&str, &str); 12] = [
+/// The languages of the voices a voice list names, by the codes it gives them: the ten Qwen3-TTS
+/// speaks, then Dutch and Hindi. Supertonic's are `profiles::SUPERTONIC_LANGUAGES`.
+pub const LANGUAGES: [(&str, &str); 12] = [
     ("en", "English"),
     ("ja", "Japanese"),
     ("zh", "Chinese"),
@@ -388,7 +389,8 @@ fn voices(id: &str, voice: Option<&profiles::Voice>, cloned: &[profiles::Voice])
         let languages: Vec<_> = speaks
             .iter()
             .map(|&title| {
-                let code = LANGUAGES.iter().find(|(_, speaks)| *speaks == title);
+                let mut codes = LANGUAGES.iter().chain(&profiles::SUPERTONIC_LANGUAGES);
+                let code = codes.find(|(_, speaks)| *speaks == title);
                 json!({"code": code.map_or("en", |(code, _)| *code), "title": title})
             })
             .collect();
@@ -408,10 +410,14 @@ fn voices(id: &str, voice: Option<&profiles::Voice>, cloned: &[profiles::Voice])
         speakers.sort_by_key(|(name, _)| *name != own);
         speakers
             .iter()
-            .map(|(name, speaks)| named(name, &[speaks]))
+            .map(|(name, speaks)| match voice {
+                // The speaker that speaks first does so in the language --language named.
+                Some((first, language)) if first == name => named(name, &[language]),
+                _ => named(name, &[speaks]),
+            })
             .collect()
     } else if let Some((name, speaks)) = voice {
-        // The Kokoro or KittenTTS voice that --voice named.
+        // The Kokoro, KittenTTS or Supertonic voice that --voice named.
         vec![named(name, &[speaks])]
     } else if id == "chattts:whisper" {
         vec![named("Default", &["Chinese", "English"])]
@@ -623,23 +629,15 @@ pub fn run(
     }
     // Later options replace earlier ones: the voice replaces the model's own speaker, and
     // pipeline options replace both.
-    match voice {
-        // A Kokoro voice's first letter is its language code.
-        Some((name, _)) if id.starts_with("kokoro:") => command.args([
-            "--kokoro_voice",
-            name.as_str(),
-            "--kokoro_lang_code",
-            &name[..1],
-        ]),
-        Some((name, _)) if id.starts_with("kitten-tts:") => command.args(["--kitten_voice", name]),
-        Some((name, _)) if cloned.iter().any(|(clone, _)| clone == name) => {
-            command.env("BOUBOU_VOICE", name)
+    if let Some(voice) = voice {
+        if id.starts_with("qwen3-tts:") && cloned.iter().any(|(clone, _)| *clone == voice.0) {
+            command.env("BOUBOU_VOICE", &voice.0);
         }
-        Some((speaker, _)) => command.args(["--qwen3_tts_speaker", speaker]),
-        None => &mut command,
+        command.args(speech(id, voice, &cloned));
     }
-    .args(pipeline)
-    .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
+    command
+        .args(pipeline)
+        .env("HF_HUB_OFFLINE", if hub { "0" } else { "1" });
     let (mut server, mut session) = {
         // A model that the Hub client fetches first can take long to arrive.
         chat::Server::start(
@@ -670,6 +668,58 @@ pub fn run(
     };
     crate::check_cancel(&stopped)?;
     result
+}
+
+/// The system prompt of upstream v1.1.0, which the runner's `voice.py` extends the same way.
+const PROMPT: &str = "You are a helpful and friendly AI assistant. You are polite, respectful, \
+                      and aim to provide concise responses of less than 20 words.";
+
+/// The pipeline options that make `voice` speak for `id` in its language. The runner finds a
+/// cloned voice by its name instead of a speaker option.
+fn speech(id: &str, voice: &profiles::Voice, cloned: &[profiles::Voice]) -> Vec<String> {
+    let (name, language) = (voice.0.as_str(), voice.1);
+    let lowercase = language.to_lowercase();
+    // Whether the language model is told the language, for a voice that speaks several.
+    let told;
+    let mut options = if id.starts_with("kokoro:") {
+        told = false;
+        // A Kokoro voice's first letter is its language code.
+        vec!["--kokoro_voice", name, "--kokoro_lang_code", &name[..1]]
+    } else if id.starts_with("kitten-tts:") {
+        told = false;
+        vec!["--kitten_voice", name]
+    } else if id.starts_with("supertonic:") {
+        let code = profiles::SUPERTONIC_LANGUAGES
+            .iter()
+            .find(|(_, speaks)| *speaks == language)
+            .map_or("en", |(code, _)| *code);
+        // Upstream reads each reply in the language Parakeet heard, and in this one when it
+        // could not tell.
+        told = code != "en";
+        vec![
+            "--supertonic_tts_voice",
+            name,
+            "--supertonic_tts_lang",
+            code,
+        ]
+    } else {
+        // In its own language a speaker keeps its entry's way with languages; --language named
+        // any other.
+        told = !(profiles::VOICES.contains(&(name, language)) || cloned.contains(voice));
+        let mut options = Vec::new();
+        if !cloned.iter().any(|(clone, _)| clone == name) {
+            options.extend(["--qwen3_tts_speaker", name]);
+        }
+        if told {
+            options.extend(["--qwen3_tts_language", &lowercase]);
+        }
+        options
+    };
+    let prompt = format!("{PROMPT} Always reply in {language}.");
+    if told {
+        options.extend(["--init_chat_prompt", &prompt]);
+    }
+    options.into_iter().map(String::from).collect()
 }
 
 /// What `boubou clone` prepares: Qwen3-TTS 0.6B Base weights, which clone, and Whisper, which
@@ -782,6 +832,17 @@ mod tests {
             ),
             r#"{"voices":[{"id":"hf_alpha","languages":[{"code":"hi","title":"Hindi"}],"name":"hf_alpha"}]}"#
         );
+        // The speaker that speaks first is listed in the language --language named.
+        assert!(
+            voices(whisper, Some(&("Ryan".into(), "German")), &[]).starts_with(
+                r#"{"voices":[{"id":"ryan","languages":[{"code":"de","title":"German"}],"name":"Ryan"},{"id":"aiden","languages":[{"code":"en","title":"English"}]"#
+            )
+        );
+        // Supertonic lists the voice --voice named, in the language --language named.
+        assert_eq!(
+            voices("supertonic:3", Some(&("F1".into(), "Swedish")), &cloned),
+            r#"{"voices":[{"id":"f1","languages":[{"code":"sv","title":"Swedish"}],"name":"F1"}]}"#
+        );
         // Kokoro lists the voice --voice named, in that voice's language.
         assert_eq!(
             voices(
@@ -791,6 +852,61 @@ mod tests {
             ),
             r#"{"voices":[{"id":"ef_dora","languages":[{"code":"es","title":"Spanish"}],"name":"ef_dora"}]}"#
         );
+    }
+
+    #[test]
+    fn a_voice_reaches_the_pipeline_with_its_language() {
+        let cloned = [("mom".to_owned(), "Chinese")];
+        let speech = |id, name: &str, language| speech(id, &(name.to_owned(), language), &cloned);
+        let reply = |language| format!("{PROMPT} Always reply in {language}.");
+        assert_eq!(
+            speech("kokoro:82m-whisper", "jf_alpha", "Japanese"),
+            ["--kokoro_voice", "jf_alpha", "--kokoro_lang_code", "j"]
+        );
+        assert_eq!(
+            speech("kitten-tts:mini-0.8", "Luna", "English"),
+            ["--kitten_voice", "Luna"]
+        );
+        // Supertonic is told the language, and so is the language model unless it is English.
+        let english = [
+            "--supertonic_tts_voice",
+            "F1",
+            "--supertonic_tts_lang",
+            "en",
+        ];
+        assert_eq!(speech("supertonic:3", "F1", "English"), english);
+        let options = [
+            "--supertonic_tts_voice",
+            "M2",
+            "--supertonic_tts_lang",
+            "sv",
+        ];
+        assert_eq!(
+            speech("supertonic:3", "M2", "Swedish"),
+            [&options[..], &["--init_chat_prompt", &reply("Swedish")]].concat()
+        );
+        // A Qwen3-TTS speaker in its own language keeps its entry's way with languages.
+        let whisper = "qwen3-tts:0.6b-customvoice-whisper";
+        let anna = ["--qwen3_tts_speaker", "Ono_Anna"];
+        assert_eq!(speech(whisper, "Ono_Anna", "Japanese"), anna);
+        assert!(speech(whisper, "mom", "Chinese").is_empty());
+        // In another, Qwen3-TTS and the language model are told which.
+        let german = ["--qwen3_tts_language", "german", "--init_chat_prompt"];
+        assert_eq!(
+            speech(whisper, "Ono_Anna", "German"),
+            [&anna[..], &german, &[&reply("German")]].concat()
+        );
+        assert_eq!(
+            speech(whisper, "mom", "German"),
+            [&german[..], &[&reply("German")]].concat()
+        );
+        // The prompt Boubou extends is the one the runner extends.
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/qwen/voice.py");
+        let runner = fs::read_to_string(runner).unwrap();
+        let (_, prompt) = runner.split_once("PROMPT = (").unwrap();
+        let (prompt, _) = prompt.split_once(')').unwrap();
+        let prompt: String = prompt.split('"').skip(1).step_by(2).collect();
+        assert_eq!(prompt, PROMPT);
     }
 
     #[test]
