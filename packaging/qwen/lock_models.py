@@ -18,8 +18,18 @@ LFS = re.compile(
     rb"version https://git-lfs.github.com/spec/v1\noid sha256:([0-9a-f]{64})\nsize ([0-9]+)\n?"
 )
 
+# Kokoro-82M's voices in the languages Parakeet hears: American and British English, Spanish, French,
+# Italian and Brazilian Portuguese. The first letter of a name is its language.
+KOKORO_VOICES = [
+    "af_heart", "af_alloy", "af_aoede", "af_bella", "af_jessica", "af_kore", "af_nicole", "af_nova",
+    "af_river", "af_sarah", "af_sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
+    "am_michael", "am_onyx", "am_puck", "am_santa", "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "ef_dora", "em_alex", "em_santa", "ff_siwis",
+    "if_sara", "im_nicola", "pf_dora", "pm_alex", "pm_santa",
+]
+
 # The MLX repositories contain one conversion each, including the nested TTS codec.
-# Kokoro ships its card, weights and the selected voice, not samples or other voices.
+# Kokoro ships its card, weights and those voices, not samples or the other voices.
 MODELS = [
     ("parakeet-tdt-0.6b-v3", "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15", None, None),
     ("Qwen3.5-4B-4bit", "0e7ffd5c629ef7719d4cbc04069232580bfa9d9c", None, None),
@@ -38,7 +48,7 @@ MODELS = [
     ("Qwen3-TTS-12Hz-0.6B-CustomVoice-6bit", "7dc92af14613355896fcab13b268c19ede233139", "qwen3-tts:0.6b-customvoice", None),
     ("Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit", "1c6c0ff58c43afa8df571facde2efa077efd85e2", "qwen3-tts:1.7b-customvoice", None),
     ("Kokoro-82M-bf16", "a71e4d38b236d968966a2002c4c895dbd12b1c3c", "kokoro:82m",
-     {"README.md", "config.json", "kokoro-v1_0.safetensors", "voices/af_heart.safetensors"}),
+     {"README.md", "config.json", "kokoro-v1_0.safetensors", *(f"voices/{v}.safetensors" for v in KOKORO_VOICES)}),
 ]
 # Retain original attribution alongside the MLX model cards.
 ORIGINALS = [
@@ -126,7 +136,7 @@ CUDA = [
     ("unsloth/Qwen3.5-4B-GGUF", "e87f176479d0855a907a41277aca2f8ee7a09523",
      {"README.md", "Qwen3.5-4B-Q4_K_M.gguf"}, None),
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987",
-     {"README.md", "config.json", "kokoro-v1_0.pth", "voices/af_heart.pt"}, "kokoro:82m"),
+     {"README.md", "config.json", "kokoro-v1_0.pth", *(f"voices/{v}.pt" for v in KOKORO_VOICES)}, "kokoro:82m"),
 ]
 
 

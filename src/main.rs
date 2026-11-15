@@ -75,7 +75,8 @@ enum Action {
         #[arg(long, requires = "input")]
         output: Option<PathBuf>,
         /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
-        /// sohee, vivian, serena, uncle_fu, dylan and eric.
+        /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora and
+        /// 35 more, each speaking the language its first letter names.
         #[arg(long)]
         voice: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as
@@ -93,7 +94,8 @@ enum Action {
         #[command(flatten)]
         door: serve::Options,
         /// Who speaks, for a model with several voices. Qwen3-TTS has aiden, ryan, ono_anna,
-        /// sohee, vivian, serena, uncle_fu, dylan and eric.
+        /// sohee, vivian, serena, uncle_fu, dylan and eric; Kokoro has af_heart, ef_dora and
+        /// 35 more, each speaking the language its first letter names.
         #[arg(long)]
         voice: Option<String>,
         /// Speech-to-speech options that replace a modular model's own, such as

@@ -1263,9 +1263,18 @@ fn runner_speaks_with_the_model_each_profile_owns() {
     let output = Command::new("python3")
         .args(["-I", "-B", "-c"])
         .arg(
-            r#"import json, os, runpy, sys
+            r#"import json, os, runpy, sys, types
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+# MLX Audio's Kokoro pipeline, which looks for a voice it is named on the Hub.
+class KokoroPipeline:
+    def load_single_voice(self, voice):
+        return voice
+
+pipeline = types.ModuleType("mlx_audio.tts.models.kokoro.pipeline")
+pipeline.KokoroPipeline = KokoroPipeline
+sys.modules[pipeline.__name__] = pipeline
 
 arguments = runpy.run_path(sys.argv[1])["arguments"]
 owned = {
@@ -1294,7 +1303,15 @@ with TemporaryDirectory() as folder:
         assert os.readlink(argv[at + 3]) == str(root / "cache" / snapshot(repo)), argv
         assert argv[at + 4:at + 4 + len(options)] == options, argv
         if tts == "kokoro":
-            assert argv[-1] == str(work / "Kokoro-82M-bf16/voices/af_heart.safetensors"), argv
+            model = work / "Kokoro-82M-bf16"
+            assert argv[-1] == str(model / "voices/af_heart.safetensors"), argv
+            # A voice upstream names loads from the verified snapshot; one Boubou did not
+            # download is left to upstream.
+            voices = root / "cache" / snapshot(repo) / "voices"
+            voices.mkdir(parents=True)
+            (voices / "ef_dora.safetensors").touch()
+            assert KokoroPipeline().load_single_voice("ef_dora") == str(model / "voices/ef_dora.safetensors")
+            assert KokoroPipeline().load_single_voice("jf_alpha") == "jf_alpha"
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
         assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("1", str(root / "cache/hub"))

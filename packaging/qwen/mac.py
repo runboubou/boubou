@@ -53,8 +53,27 @@ def snapshots(manifest, profile):
     return found
 
 
+def local_kokoro_voices(model):
+    """Find each Kokoro voice upstream names among the verified files in `model`, not on the Hub.
+
+    Upstream names the voice --voice chooses, and the voice it switches to for a reply in another
+    language. MLX Audio would look for either in a Hub repository that Boubou does not download.
+    """
+    from mlx_audio.tts.models.kokoro.pipeline import KokoroPipeline
+
+    load = KokoroPipeline.load_single_voice
+
+    def local(self, voice):
+        path = model / "voices" / f"{voice}.safetensors"
+        return load(self, str(path) if path.is_file() else voice)
+
+    KokoroPipeline.load_single_voice = local
+
+
 def arguments(model_id, cache, manifest, work):
     options = pinned(model_id, cache, manifest, work)
+    if "--kokoro_model_name" in options:
+        local_kokoro_voices(Path(options[options.index("--kokoro_model_name") + 1]))
     os.environ.update(HUB)
     if CLONER:
         (base,) = (path for name, path in snapshots(manifest, CLONER).items() if name.startswith("Qwen3-TTS"))
