@@ -1293,6 +1293,17 @@ pipeline = types.ModuleType("mlx_audio.tts.models.kokoro.pipeline")
 pipeline.KokoroPipeline = KokoroPipeline
 sys.modules[pipeline.__name__] = pipeline
 
+# The pinned speech-to-speech's filter for what a reply may speak, as it stands upstream.
+import re
+utils = types.ModuleType("speech_to_speech.LLM.utils")
+utils.SPEECHABLE_PATTERN = re.compile(
+    r"[^\w\s.,!?;:'\"\-()\/\\@#%&*+=$€£¥₹₽¢\[\]{}<>~`^|…—–，。！？；：、\n\r\t]", flags=re.UNICODE)
+llm = types.ModuleType("speech_to_speech.LLM")
+llm.utils = utils
+sys.modules.update({"speech_to_speech": types.ModuleType("speech_to_speech"), llm.__name__: llm, utils.__name__: utils})
+speakable = lambda text: utils.SPEECHABLE_PATTERN.sub("", text)
+assert speakable("फ्रांस की राजधानी पेरिस है। 🙂") == "फरस क रजधन परस ह "
+
 arguments = runpy.run_path(sys.argv[1])["arguments"]
 owned = {
     "qwen3-tts:1.7b-customvoice": ("qwen3", "mlx-community--Qwen3-TTS-12Hz-1.7B-CustomVoice-6bit",
@@ -1332,6 +1343,9 @@ with TemporaryDirectory() as folder:
         # Shared speech recognition and language models, plus only this profile's speech model.
         assert len(list(work.iterdir())) == 3, argv
         assert (os.environ["HF_HUB_OFFLINE"], os.environ["HF_HUB_CACHE"]) == ("1", str(root / "cache/hub"))
+        # A reply keeps Hindi's vowel signs, and still loses what no voice speaks.
+        assert speakable("फ्रांस की राजधानी पेरिस है। 🙂") == "फ्रांस की राजधानी पेरिस है ", argv
+        assert speakable("Café, naïve 東京") == "Café, naïve 東京", argv
     # Pipeline options open the Hub, whose client keeps their models in the person's own cache.
     for name in ("HF_HOME", "HF_HUB_CACHE"):
         os.environ.pop(name, None)

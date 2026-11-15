@@ -80,7 +80,30 @@ def read_japanese():
     sys.modules.setdefault("pyopenjtalk", types.ModuleType("pyopenjtalk"))
 
 
+def keep_marks():
+    """Keep the vowel signs of Hindi, and every other combining mark, in the replies a voice speaks.
+
+    Upstream drops what its pattern calls unspeakable, one character at a time, keeping `\\w`. Python's
+    `\\w` has no combining marks, so "फ्रांस की राजधानी" reached Kokoro as "फरस क रजधन".
+    """
+    import unicodedata
+
+    from speech_to_speech.LLM import utils
+
+    unspeakable = utils.SPEECHABLE_PATTERN
+    if not isinstance(unspeakable, re.Pattern):
+        return
+
+    class Speakable:
+        def sub(self, replacement, text):
+            return unspeakable.sub(
+                lambda match: match[0] if unicodedata.category(match[0]).startswith("M") else replacement, text)
+
+    utils.SPEECHABLE_PATTERN = Speakable()
+
+
 def arguments(model_id, cache, manifest, work):
+    keep_marks()
     options = pinned(model_id, cache, manifest, work)
     if "--kokoro_model_name" in options:
         local_kokoro_voices(Path(options[options.index("--kokoro_model_name") + 1]))
