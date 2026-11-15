@@ -122,6 +122,9 @@ def read_aloud():
         speakers = {name.lower(): name for name in reader._supported_speakers() or (CLONER and SPEAKERS) or ()}
         speaker = OWN if cloned(OWN) else reader._initial_speaker
         own, process, turn = (speaker, reader.language), reader.process, threading.Lock()
+        # A named speaker reads a text in the text's language, as the Whisper entries speak, unless
+        # --language named one other than English: Qwen3-TTS's own guess garbles German, for one.
+        reading = "auto" if str(reader.language).lower() in ("english", "auto") else reader.language
         weights[reader._model_type()] = reader.model
         asked = None
         route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/audio/speech")
@@ -139,9 +142,8 @@ def read_aloud():
                     asked = None
 
         def named(sentence):
-            # Upstream keeps a speaker until a conversation ends, and a reading is none. A named
-            # speaker reads a text in the text's language, as the Whisper entries speak.
-            reader.speaker, reader.language = (asked, "auto") if asked else own
+            # Upstream keeps a speaker until a conversation ends, and a reading is none.
+            reader.speaker, reader.language = (asked, reading) if asked else own
             clone = cloned(reader.speaker)
             if CLONER:
                 kind = "base" if clone else "custom_voice"
