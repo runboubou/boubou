@@ -124,4 +124,4 @@ Built in the open. Thanks to everyone helping Boubou find its voice.
 
 ---
 
-[MIT](LICENSE).
+[MIT](LICENSE), except the character on `serve`'s phone page ([`src/serve/character.webp`](src/serve/character.webp)): © 2026 bella chai, all rights reserved. It may be used only as part of Boubou.

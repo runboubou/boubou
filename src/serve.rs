@@ -43,6 +43,8 @@ use tungstenite::{
 mod names;
 
 const PAGE: &str = include_str!("serve.html");
+/// The layers of the character the page animates, drawn for Boubou, packed into one picture.
+const CHARACTER: &[u8] = include_bytes!("serve/character.webp");
 /// The pictured steps for connecting a robot or an app.
 const GUIDE: &str = "https://runboubou.com/connect/robots/";
 /// The steps for any app on the same computer that has an OpenAI-compatible voice setting.
@@ -942,6 +944,16 @@ fn answer(
         ("GET", "/", None, _) if trusted => {
             return respond(&mut stream, "200 OK", "text/html", PAGE);
         }
+        ("GET", "/character.webp", None, _) if trusted => {
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                CHARACTER.len()
+            )?;
+            stream.write_all(CHARACTER)?;
+            stream.flush()?;
+            return Ok(None);
+        }
         // A page from another site asks before it sends its API key. The question carries no
         // key, and answering it lets nothing in.
         ("OPTIONS", path, None, Some(_)) if path.starts_with("/v1/") => {
@@ -1317,6 +1329,19 @@ mod tests {
         assert!(page.contains("Cache-Control: no-store"));
         assert!(page.ends_with(PAGE));
         assert!(!page.contains(key(&link)), "The key stays in the link");
+        let mut picture = TcpStream::connect(address(&link)).unwrap();
+        picture
+            .write_all(b"GET /character.webp HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .unwrap();
+        let mut answer = Vec::new();
+        picture.read_to_end(&mut answer).unwrap();
+        let (head, body) = answer.split_at(answer.len() - CHARACTER.len());
+        let head = String::from_utf8_lossy(head);
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+        assert!(head.contains("Content-Type: image/webp\r\n"), "{head}");
+        assert_eq!(body, CHARACTER);
+        assert!(CHARACTER.starts_with(b"RIFF") && &CHARACTER[8..12] == b"WEBP");
+        assert!(PAGE.contains("'/character.webp'"));
         for other in [
             "GET /talk HTTP/1.1\r\n\r\n",
             "POST / HTTP/1.1\r\n\r\n",
