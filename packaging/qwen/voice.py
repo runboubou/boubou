@@ -179,26 +179,42 @@ def preserve_qwen_user_turns():
 
 
 def read_aloud():
-    """Add OpenAI's request for speech from text, POST /v1/audio/speech, to the pipeline's server.
+    """Add OpenAI's requests for speech from text, POST /v1/audio/speech, and for text from
+    speech, POST /v1/audio/transcriptions, to the pipeline's server.
 
-    The pipeline only speaks inside a conversation. Between conversations, this hands the text to
-    the pipeline's voice as the language model would and collects what the voice says.
+    The pipeline only speaks and listens inside a conversation. Between conversations, this hands
+    a text to the pipeline's voice as the language model would and collects what the voice says,
+    and hands a recording to the pipeline's speech recognition as the voice detector would.
     """
     import io
+    import math
     import queue
     import threading
     import time
     import wave
 
     import numpy as np
-    from fastapi import HTTPException, Response
+    import soundfile
+    from fastapi import File, Form, HTTPException, Response, UploadFile
+    from fastapi.responses import PlainTextResponse
     from nltk import sent_tokenize
     from scipy.signal import resample_poly
     from speech_to_speech.api.openai_realtime import server
-    from speech_to_speech.pipeline.messages import AUDIO_RESPONSE_DONE, EndOfResponse, TTSInput
+    from speech_to_speech.pipeline.messages import (
+        AUDIO_RESPONSE_DONE, EndOfResponse, Transcription, TTSInput, VADAudio,
+    )
+    from speech_to_speech.STT.base_stt_handler import BaseSTTHandler
 
     create_app = server.create_app
     turn = threading.Lock()
+
+    def take_turn(unit):
+        # A conversation that just ended holds the pipeline for a moment longer.
+        patience = time.monotonic() + 10
+        while unit.session is not None and time.monotonic() < patience:
+            time.sleep(0.05)
+        if unit.session is not None or not turn.acquire(blocking=False):
+            raise HTTPException(409, "The voice is busy with a conversation or another request.")
 
     def with_speech(pool, **options):
         app = create_app(pool=pool, **options)
@@ -206,6 +222,7 @@ def read_aloud():
         # The voice is the handler that fills the queue of audio for the client.
         voice = next(handler for handler in unit.handlers
                      if getattr(handler, "queue_out", None) is unit.output_queue)
+        ears = next(handler for handler in unit.handlers if isinstance(handler, BaseSTTHandler))
 
         class Mouth:
             """Where the voice puts what it says: the client's queue, or a reading's until its end."""
@@ -228,12 +245,7 @@ def read_aloud():
                 raise HTTPException(400, "Put the text to read in `input`.")
             if wanted not in ("wav", "pcm"):
                 raise HTTPException(400, "Set `response_format` to `wav` or `pcm`.")
-            # A conversation that just ended holds the pipeline for a moment longer.
-            patience = time.monotonic() + 10
-            while unit.session is not None and time.monotonic() < patience:
-                time.sleep(0.05)
-            if unit.session is not None or not turn.acquire(blocking=False):
-                raise HTTPException(409, "The voice is busy with a conversation or another text.")
+            take_turn(unit)
             mouth.reading = spoken = queue.Queue()
             try:
                 # Sentence by sentence, as the language model's reply arrives, and in the pipeline's
@@ -264,6 +276,37 @@ def read_aloud():
                 wav.setparams((1, 2, 24000, 0, "NONE", "NONE"))
                 wav.writeframes(pcm)
             return Response(file.getvalue(), media_type="audio/wav")
+
+        @app.post("/v1/audio/transcriptions")
+        def transcriptions(file: UploadFile = File(...), response_format: str = Form("json")):
+            if response_format not in ("json", "text", "verbose_json"):
+                raise HTTPException(400, "Set `response_format` to `json`, `text` or `verbose_json`.")
+            try:
+                samples, rate = soundfile.read(file.file, dtype="float32", always_2d=True)
+            except Exception:
+                raise HTTPException(400, "Send the recording as WAV, FLAC, Ogg or MP3.") from None
+            if not len(samples):
+                raise HTTPException(400, "The recording is empty.")
+            # The pipeline hears one channel at 16 kHz.
+            samples = samples.mean(axis=1)
+            if rate != 16000:
+                common = math.gcd(16000, rate)
+                samples = resample_poly(samples, 16000 // common, rate // common).astype(np.float32)
+            take_turn(unit)
+            try:
+                heard = [said for said in ears.process(VADAudio(audio=samples, mode="final"))
+                         if isinstance(said, Transcription)]
+            finally:
+                turn.release()
+            text = heard[-1].text.strip() if heard else ""
+            if response_format == "text":
+                return PlainTextResponse(text)
+            if response_format == "json":
+                return {"text": text}
+            # Without segments: a client that filters them by confidence would drop the text.
+            language = (heard[-1].language_code or "").removesuffix("-auto") if heard else ""
+            return {"task": "transcribe", "language": language,
+                    "duration": round(len(samples) / 16000, 3), "text": text}
 
         return app
 

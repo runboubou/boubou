@@ -914,7 +914,11 @@ fn answer(
     let robot = matches!(
         (method.as_str(), path, accept.is_some()),
         ("GET", "/v1/realtime", true)
-            | ("POST", "/v1/audio/speech", false)
+            | (
+                "POST",
+                "/v1/audio/speech" | "/v1/audio/transcriptions",
+                false
+            )
             | ("GET", "/v1/audio/voices", false)
             | ("GET", "/v1/models", false)
     );
@@ -963,8 +967,8 @@ fn answer(
         }
         ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
         ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api.address)),
-        // A text to read aloud, which opens no socket.
-        ("POST", "/v1/audio/speech", None, Some(api)) if allowed => {
+        // A text to read aloud, or a recording to write down, which opens no socket.
+        ("POST", "/v1/audio/speech" | "/v1/audio/transcriptions", None, Some(api)) if allowed => {
             (String::new(), Some(api.address))
         }
         // Answered here, so a program can ask while someone talks.
@@ -1908,19 +1912,36 @@ mod tests {
 
     #[test]
     fn a_web_app_from_another_site_asks_first_then_reads_what_it_is_answered() {
-        // A stand-in for the model server's voice: it answers every text with the same sound.
+        // A stand-in for the model server: it answers every text with the same sound, and every
+        // recording with the same words.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let api = listener.local_addr().unwrap();
         thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
                 let mut sent = Vec::new();
-                while !sent.ends_with(b"}") {
+                let whole = |sent: &[u8]| {
+                    let text = String::from_utf8_lossy(sent);
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        return false;
+                    };
+                    let length = head.lines().find_map(|line| {
+                        line.strip_prefix("Content-Length: ")?.parse::<usize>().ok()
+                    });
+                    body.len() >= length.unwrap_or(0)
+                };
+                while !whole(&sent) {
                     let mut chunk = [0; 4096];
                     let read = stream.read(&mut chunk).unwrap();
                     sent.extend_from_slice(&chunk[..read]);
                 }
-                let answer =
-                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: 4\r\n\r\nRIFF";
+                let answer = match sent.starts_with(b"POST /v1/audio/transcriptions ") {
+                    true => {
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"text\":\"Hi.\"}"
+                    }
+                    false => {
+                        "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: 4\r\n\r\nRIFF"
+                    }
+                };
                 stream.write_all(answer.as_bytes()).unwrap();
             }
         });
@@ -1970,6 +1991,24 @@ mod tests {
         assert!(
             read.starts_with(&stamped) && read.ends_with("RIFF"),
             "{read}"
+        );
+
+        // A recording is written down the same way, however much of it there is.
+        let recording = "x".repeat(200_000);
+        let form = format!(
+            "--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n\r\n{recording}\r\n--b--\r\n"
+        );
+        let length = form.len();
+        let heard = request(
+            link,
+            &format!(
+                "POST /v1/audio/transcriptions HTTP/1.1\r\n{site}Authorization: Bearer {key}\r\nContent-Type: multipart/form-data; boundary=b\r\nContent-Length: {length}\r\n\r\n{form}"
+            ),
+        );
+        let written = format!("HTTP/1.1 200 OK\r\n{ANY_SITE}Content-Type: application/json\r\n");
+        assert!(
+            heard.starts_with(&written) && heard.ends_with(r#"{"text":"Hi."}"#),
+            "{heard}"
         );
 
         // A program is answered as before, and so is a page whose key is wrong, readably.

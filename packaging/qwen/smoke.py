@@ -73,6 +73,21 @@ def check(model, cache, manifest):
                 if wav.getparams()[:3] != (1, 2, 24000) or not any(speech):
                     raise RuntimeError(f"{model} read nothing aloud")
         print(f"{model}: read {len(speech) / 48000:.2f}s of speech aloud in {time.monotonic()-start:.2f}s", flush=True)
+        # The same recording, written down again by the pipeline's speech recognition.
+        file = io.BytesIO()
+        with wave.open(file, "wb") as wav:
+            wav.setparams((1, 2, 24000, 0, "NONE", "NONE"))
+            wav.writeframes(speech)
+        form = (b'--b\r\nContent-Disposition: form-data; name="file"; filename="speech.wav"\r\n'
+                b"Content-Type: audio/wav\r\n\r\n" + file.getvalue() + b"\r\n--b--\r\n")
+        request = Request(f"http://127.0.0.1:{port}/v1/audio/transcriptions", form,
+                          {"Content-Type": "multipart/form-data; boundary=b"})
+        start = time.monotonic()
+        with build_opener(ProxyHandler({})).open(request, timeout=180) as response:
+            text = json.load(response)["text"]
+        if "dinner" not in text.lower():
+            raise RuntimeError(f"{model} wrote down {text!r}")
+        print(f"{model}: wrote it down as {text!r} in {time.monotonic()-start:.2f}s", flush=True)
     finally:
         child.terminate()
         try:

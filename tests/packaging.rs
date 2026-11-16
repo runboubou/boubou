@@ -1173,8 +1173,10 @@ with HTTPServer(("127.0.0.1", 0), Handler) as server:
         realtime = MagicMock()
         sys.modules["speech_to_speech.api.openai_realtime"] = realtime
         # What that request needs once the server runs, which this stand-in never does.
-        for name in ("fastapi", "nltk", "numpy", "scipy", "scipy.signal", "speech_to_speech.api",
-                     "speech_to_speech.pipeline", "speech_to_speech.pipeline.messages"):
+        for name in ("fastapi", "fastapi.responses", "nltk", "numpy", "scipy", "scipy.signal",
+                     "soundfile", "speech_to_speech.api", "speech_to_speech.pipeline",
+                     "speech_to_speech.pipeline.messages", "speech_to_speech.STT",
+                     "speech_to_speech.STT.base_stt_handler"):
             sys.modules[name] = MagicMock()
         with TemporaryDirectory() as folder:
             cache = Path(folder)
