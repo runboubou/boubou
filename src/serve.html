@@ -2,33 +2,40 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <title>Boubou</title>
 <style>
-  :root { --accent: #f2c21b; --level: 0; }
+  :root { --accent: #e8b20f; --ink: #26211d; --paper: #f8f3ec; --level: 0; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; min-height: 100dvh; display: grid; place-items: center;
-    padding: 32px 24px; background: #000; color: #f4f4f6;
+    margin: 0; min-height: 100dvh; overflow: hidden; color: var(--ink);
+    background: radial-gradient(120% 80% at 50% 30%, #fffdf9, var(--paper) 60%, #efe6da);
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center;
   }
-  main { display: grid; justify-items: center; gap: 28px; max-width: 30ch; }
-  h1 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: .08em; }
-  button {
-    width: 168px; aspect-ratio: 1; border-radius: 50%; cursor: pointer;
-    border: 2px solid var(--accent); background: none; color: var(--accent); font: inherit;
-    font-weight: 600; transform: scale(calc(1 + var(--level) * .12));
-    box-shadow: 0 0 calc(var(--level) * 64px) color-mix(in srgb, var(--accent) 55%, transparent);
-    transition: transform .08s linear, box-shadow .08s linear, background-color .2s, color .2s;
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  h1 {
+    position: fixed; top: max(14px, env(safe-area-inset-top)); left: 0; right: 0; margin: 0;
+    font-size: .8rem; font-weight: 600; letter-spacing: .3em; color: #8a7f74;
   }
-  button:focus-visible { outline: 2px solid #f4f4f6; outline-offset: 6px; }
-  [data-state="you"] button { --accent: #f4f4f6; }
-  [data-state="boubou"] button { background: var(--accent); color: #000; }
-  p { margin: 0; min-height: 3em; color: #9a9aa2; text-wrap: balance; }
-  @media (prefers-reduced-motion: reduce) { button { transition: none; transform: none; } }
+  main {
+    position: fixed; left: 0; right: 0; bottom: 0; display: grid; justify-items: center; gap: 10px;
+    padding: 56px 24px max(24px, env(safe-area-inset-bottom));
+    background: linear-gradient(transparent, color-mix(in srgb, var(--paper) 92%, transparent) 45%);
+  }
+  button {
+    min-width: 176px; padding: 14px 28px; border-radius: 999px; cursor: pointer; font: inherit; font-weight: 600;
+    border: 2px solid var(--accent); background: var(--accent); color: var(--ink);
+    box-shadow: 0 6px 18px rgb(120 90 20 / 18%), 0 0 0 calc(var(--level) * 10px) color-mix(in srgb, var(--accent) 30%, transparent);
+    transition: box-shadow .08s linear, background-color .2s;
+  }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
+  [data-state="you"] button, [data-state="boubou"] button { background: #fffdf9; }
+  p { margin: 0; max-width: 34ch; min-height: 3em; color: #6f655c; font-size: .9rem; text-wrap: balance; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 </style>
+<canvas aria-hidden="true"></canvas>
+<h1>BOUBOU</h1>
 <main>
-  <h1>BOUBOU</h1>
   <button type="button">Start talking</button>
   <p role="status">Your voice goes to the computer running Boubou and nowhere else.</p>
 </main>
@@ -36,6 +43,486 @@
   const button = document.querySelector('button');
   const status = document.querySelector('p');
   const privacy = status.textContent;
+
+  // The character: drawn layers cut from one picture, moved like a 2.5D puppet. Coordinates are
+  // pixels of the original drawing; each layer names its place there and in /character.webp.
+  const RIG = {"size":[1122,1402],"atlas":[2048,2304],"layers":[["back hair",0,0,1122,1402,4,4],["handwear-l",745,631,376,771,384,1410],["handwear-r",0,629,376,773,4,1410],["neck",460,326,218,306,1681,1410],["ears-l",669,302,80,113,4,2187],["ears-r",372,302,83,115,1903,1410],["topwear",253,361,612,1041,1130,4],["face",380,70,369,439,1308,1410],["nose",561,382,11,18,1985,2187],["earwear-r",427,406,31,107,88,2187],["earwear-l",677,406,29,105,123,2187],["mouth_closed",521,399,100,78,518,2187],["mouth_a",521,399,100,78,622,2187],["mouth_i",521,399,100,78,726,2187],["mouth_u",521,399,100,78,830,2187],["mouth_e",521,399,100,78,934,2187],["mouth_o",521,399,100,78,1038,2187],["eyebrow-r",420,269,115,19,1752,2187],["eyewhite-r",434,310,97,45,1554,2187],["eyewhite-l",603,309,93,45,1655,2187],["irides-r",458,309,58,47,1430,2187],["eyebrow-l",594,269,110,19,1871,2187],["irides-l",616,309,58,47,1492,2187],["eyelash-r",392,295,145,65,1142,2187],["eyelash-l",597,295,135,65,1291,2187],["blink",387,286,358,92,156,2187],["front hair",292,40,540,741,764,1410]],"neck":[568,585],"neckSpan":[329,630],"face":[565,272],"eyes":{"close":345},"mouth":[570,418,433],"earrings":{"earwear-r":[442,409],"earwear-l":[691,409]},"strands":{"front hair":[[343,393,768],[447,79,564],[557,54,320],[616,50,300],[676,89,409],[789,402,761]],"back hair":[[33,905,1160],[195,674,1239],[374,97,1333],[607,4,1324],[816,334,1294],[1088,912,1174]]}};
+
+  const character = (() => {
+    const canvas = document.querySelector('canvas');
+    const gl = canvas.getContext('webgl', { antialias: true });
+    const [W, H] = RIG.size, [AW, AH] = RIG.atlas, [NX, NY] = RIG.neck, [, FY] = RIG.face;
+    const [NT, NB] = RIG.neckSpan, [, MT, MY] = RIG.mouth, CLOSE = RIG.eyes.close, FS = 1.1;
+    const VOWELS = ['a', 'i', 'u', 'e', 'o'];
+    const DEPTH = {
+      'back hair': .55, ears: .85, earwear: .95, nose: 1.12, mouth: 1.06, eyebrow: 1.05,
+      eyewhite: 1.04, irides: 1.04, eyelash: 1.04, blink: 1.04, 'front hair': 1.25, topwear: .9, neck: .95,
+    };
+    const BODY = ['topwear', 'handwear', 'neck'];
+    const calm = matchMedia('(prefers-reduced-motion: reduce)');
+    const smooth = (t) => (t = Math.min(1, Math.max(0, t)), t * t * (3 - 2 * t));
+    const random = () => Math.random() * 2 - 1;
+
+    const layers = RIG.layers.map(([name, x, y, w, h, u, v]) => {
+      const kind = name.replace(/[-_].*$/, '');
+      const cell = kind.endsWith('hair') || kind === 'earwear' ? 28 : 56;
+      const nx = Math.max(1, Math.round(w / cell)), ny = Math.max(1, Math.round(h / cell));
+      const base = [], uv = [], index = [];
+      for (let j = 0; j <= ny; j++) {
+        for (let i = 0; i <= nx; i++) {
+          base.push(x + w * i / nx, y + h * j / ny);
+          uv.push((u + w * i / nx) / AW, (v + h * j / ny) / AH);
+        }
+      }
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const a = j * (nx + 1) + i;
+          index.push(a, a + 1, a + nx + 1, a + 1, a + nx + 2, a + nx + 1);
+        }
+      }
+      const layer = {
+        name, kind, side: name.slice(-1), depth: DEPTH[kind] ?? 1, head: !BODY.includes(kind),
+        base: new Float32Array(base), uv: new Float32Array(uv), index: new Uint16Array(index), alpha: 1,
+      };
+      layer.at = new Float32Array(layer.base);
+      layer.pivot = RIG.earrings[name];
+      if (layer.pivot) layer.spring = { x: 0, v: 0, swing: 0 };
+      const strands = RIG.strands[name];
+      if (strands) hair(layer, strands, kind === 'front hair');
+      return layer;
+    });
+
+    // Each strand hangs from a pair of springs, a stiff one at the root and a soft one at the tip.
+    function hair(layer, strands, front) {
+      const n = strands.length, count = layer.base.length / 2;
+      const gaps = strands.slice(1).map(([x], i) => x - strands[i][0]).sort((a, b) => a - b);
+      const sigma = gaps[gaps.length >> 1] * .6;
+      layer.weights = new Float32Array(count * n);
+      layer.amount = new Float32Array(count);
+      layer.loose = new Float32Array(count);
+      layer.springs = strands.map((_, i) => ({ stiff: { x: 0, v: 0 }, soft: { x: 0, v: 0 }, phase: i * 1.37 + (front ? 0 : 2) }));
+      for (let v = 0; v < count; v++) {
+        const x = layer.base[v * 2], y = layer.base[v * 2 + 1];
+        let total = 0, root = 0, tip = 0;
+        for (let s = 0; s < n; s++) total += layer.weights[v * n + s] = Math.exp(-(((x - strands[s][0]) / sigma) ** 2));
+        for (let s = 0; s < n; s++) {
+          const w = layer.weights[v * n + s] /= total;
+          root += w * strands[s][1];
+          tip += w * strands[s][2];
+        }
+        let u = Math.min(1, Math.max(0, (y - root) / Math.max(1, tip - root)));
+        if (front) u = Math.min(1, u * 1.6);
+        layer.amount[v] = u ** (front ? 1.8 : 2.1) * 2;
+        layer.loose[v] = Math.min(1, u ** 1.2 * (front ? .4 : 2));
+      }
+    }
+
+    // ---- motion ----
+    const cur = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0, brow: 0, nod: 0 };
+    const goal = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0 };
+    const mouth = { open: 0, shape: 0, weights: [0, 0, 0, 0, 0], loud: 0, slow: 0 };
+    let nextLook = 0, nextBlink = 1.2, blinkAt = -1, heard = 0;
+
+    function spring(s, target, k, damping, dt) {
+      const steps = Math.ceil(dt * 120), h = dt / steps;
+      for (let i = 0; i < steps; i++) {
+        s.v += (k * (target - s.x) - damping * s.v) * h;
+        s.x += s.v * h;
+      }
+    }
+
+    function pose(t, dt) {
+      const mood = document.body.dataset.state, still = calm.matches ? .3 : 1;
+      if (t > nextLook) {
+        // A new glance every few seconds; the head follows it, slower than the eyes.
+        nextLook = t + 1.4 + Math.random() * 2.6;
+        const span = mood ? .55 : 1;
+        goal.ax = random() * .55 * span;
+        goal.ay = random() * .35 * span;
+        goal.az = random() * .3 * span + (mood === 'you' ? .25 : 0);
+        goal.body = random() * .3 * span;
+        goal.ex = random() * (mood ? .25 : .6);
+        goal.ey = random() * (mood ? .15 : .35);
+        if (Math.random() < .3 && blinkAt < 0) nextBlink = t;
+      }
+      const voice = speech(), level = voice ? voice.level : 0;
+      mouth.loud += (level - mouth.loud) * (1 - Math.exp(-dt * 18));
+      mouth.slow += (level - mouth.slow) * (1 - Math.exp(-dt * 2.5));
+      const stress = Math.max(0, mouth.loud - mouth.slow - .08);
+      heard *= Math.exp(-dt * 3);
+
+      const head = 1 - Math.exp(-dt * 4), eyes = 1 - Math.exp(-dt * 18);
+      const drift = {
+        ax: .13 * Math.sin(t * .42) + .05 * Math.sin(t * 1.13),
+        ay: .08 * Math.sin(t * .31 + 1.7),
+        az: .07 * Math.sin(t * .23 + .5),
+        body: .1 * Math.sin(t * .19 + 2.1),
+      };
+      for (const key of ['ax', 'ay', 'az', 'body']) cur[key] += ((goal[key] + drift[key]) * still - cur[key]) * head;
+      cur.ex += (goal.ex - cur.ex) * eyes;
+      cur.ey += (goal.ey - cur.ey) * eyes;
+      // Stressed syllables nod the head and lift the brows; so does the listener's own voice.
+      cur.nod += (stress * 1.4 + heard * .25 - cur.nod) * (1 - Math.exp(-dt * 10));
+      cur.brow += (Math.min(1, stress * 2.5) - cur.brow) * (1 - Math.exp(-dt * 8));
+
+      let open = 1;
+      if (blinkAt < 0 && t > nextBlink) blinkAt = t;
+      if (blinkAt >= 0) {
+        const d = t - blinkAt;
+        open = d < .07 ? 1 - d / .07 : d < .12 ? 0 : smooth((d - .12) / .16);
+        if (d >= .28) {
+          blinkAt = -1;
+          nextBlink = t + (Math.random() < .15 ? .1 : 1.6 + Math.random() * 3.8);
+        }
+      }
+
+      // The drawn vowel shapes cross-fade; within one, the mouth opens with the voice.
+      const shape = voice && voice.shape ? voice.shape : 0;
+      const fade = 1 - Math.exp(-dt * 30);
+      mouth.weights.forEach((w, i) => (mouth.weights[i] += ((shape === i + 1 ? 1 : 0) - w) * fade));
+      mouth.open += (level - mouth.open) * fade;
+
+      const wind = calm.matches ? 0 : 1;
+      const shift = (cur.ax * 14 + cur.az * .07 * (NY - FY)) * FS;
+      for (const layer of layers) {
+        if (layer.springs) {
+          for (const s of layer.springs) {
+            const gust = (1.2 * Math.sin(t * .8 + s.phase) + .7 * Math.sin(t * 1.9 + s.phase * 2.3)) * wind * FS;
+            spring(s.stiff, shift + gust * .5, 70, 9, dt);
+            spring(s.soft, shift + gust, 16, 1.3, dt);
+          }
+          layer.shift = shift;
+        }
+        if (layer.spring) {
+          const s = layer.spring, gust = .6 * Math.sin(t * 1.3 + layer.pivot[0]) * wind;
+          spring(s, shift + gust, 22, 1.4, dt);
+          s.swing = Math.max(-.35, Math.min(.35, -(s.x - shift) * .03));
+        }
+      }
+      return {
+        ...cur, ay: cur.ay - cur.nod * .5, open,
+        breath: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4),
+        lag: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4 - .6),
+      };
+    }
+
+    function alpha(layer, p) {
+      const eyes = smooth((p.open - .235) / .15);
+      if (['eyewhite', 'irides', 'eyelash'].includes(layer.kind)) return eyes;
+      if (layer.kind === 'blink') return 1 - eyes;
+      if (layer.kind === 'mouth' && layer.name !== 'mouth_closed') {
+        return mouth.weights[VOWELS.indexOf(layer.name.slice(6))];
+      }
+      return 1;
+    }
+
+    function deform(layer, p) {
+      const b = layer.base, o = layer.at, k = layer.kind, d = layer.depth;
+      const az = p.az * .07, cz = Math.cos(az), sz = Math.sin(az);
+      const swing = layer.spring?.swing ?? 0, cs = Math.cos(swing), ss = Math.sin(swing);
+      const n = layer.springs?.length ?? 0;
+      for (let i = 0, v = 0; i < b.length; i += 2, v++) {
+        let x = b[i], y = b[i + 1];
+        if (k === 'eyewhite' || k === 'eyelash') y = CLOSE + (y - CLOSE) * (1 - .85 * (1 - p.open));
+        else if (k === 'irides') {
+          x += p.ex * 7;
+          y += p.ey * 4;
+          y = CLOSE + (y - CLOSE) * (1 - .8 * smooth((.32 - p.open) / .32));
+        } else if (k === 'eyebrow') y += (-p.brow * 4 + (1 - p.open) * 3) * FS;
+        else if (k === 'blink') y -= p.open * 3;
+        else if (k === 'mouth' && layer.name !== 'mouth_closed') y = MT + (y - MT) * (.82 + .18 * mouth.open);
+        else if (k === 'face' && y > MY) y += mouth.open * 4 * FS * smooth((y - MY) / 80);
+        if (n) {
+          let dx = 0;
+          const loose = layer.loose[v];
+          for (let s = 0; s < n; s++) {
+            const w = layer.weights[v * n + s];
+            if (w < .001) continue;
+            const sp = layer.springs[s];
+            dx += w * ((sp.stiff.x - layer.shift) * (1 - loose) + (sp.soft.x - layer.shift) * loose);
+          }
+          x += dx * layer.amount[v];
+          y += Math.abs(dx) * layer.amount[v] * .12;
+        }
+        if (layer.pivot) {
+          const [px, py] = layer.pivot, rx = x - px, ry = y - py;
+          x = px + rx * cs - ry * ss;
+          y = py + rx * ss + ry * cs;
+        }
+        let follow = layer.head ? 1 : k === 'neck' ? .55 * smooth((NB - y) / (NB - NT)) : .16;
+        if (k === 'back hair') follow *= 1 - .5 * smooth((y - NY) / 700);
+        if (follow > 0) {
+          const rx = x - NX, ry = y - NY;
+          x += (rx * cz - ry * sz - rx) * follow;
+          y += (rx * sz + ry * cz - ry) * follow;
+          x += follow * FS * (p.ax * (14 + 40 * (d - 1)) + p.ax * (NY - y) * .028);
+          y += follow * FS * (-p.ay * (9 + 30 * (d - 1)) - p.ay * (d - 1) * (y - FY) * .05);
+        }
+        y -= (layer.head ? p.lag * 1.6 : p.breath * 2) * FS;
+        if (k === 'topwear') {
+          if (y < 700) y -= p.breath * 2.2 * FS * smooth((700 - y) / 300);
+          x = NX + (x - NX) * (1 + p.breath * .003);
+        }
+        o[i] = x;
+        o[i + 1] = y;
+      }
+      const lean = p.body * .028;
+      if (Math.abs(lean) > 1e-4) {
+        const c = Math.cos(lean), s = Math.sin(lean);
+        for (let i = 0; i < o.length; i += 2) {
+          const rx = o[i] - NX, ry = o[i + 1] - H;
+          o[i] = NX + rx * c - ry * s;
+          o[i + 1] = H + rx * s + ry * c;
+        }
+      }
+    }
+
+    // ---- lip-sync: the reply is analysed when it arrives, before it plays ----
+    // Frames of 20 ms, each looked at through a window of 256 samples at half the rate.
+    const RATE = 24000, HOP = 480, SIZE = 256;
+    const hann = Float32Array.from({ length: SIZE }, (_, i) => .5 - .5 * Math.cos(2 * Math.PI * i / SIZE));
+    // Formants (F1, F2 in Hz) of the five vowels the mouth is drawn for: a, i, u, e, o.
+    const FORMANTS = [[950, 1750], [380, 3000], [450, 1850], [570, 2450], [570, 1000]];
+    const queue = [];
+    let clock = null;
+
+    // Linear prediction models the vocal tract; the peaks of its envelope are the formants.
+    function vowel(x) {
+      const order = 14, r = new Float64Array(order + 1), a = new Float64Array(order + 1);
+      for (let k = 0; k <= order; k++) {
+        for (let i = k; i < x.length; i++) r[k] += x[i] * x[i - k];
+      }
+      if (!(r[0] > 0)) return 0;
+      r[0] *= 1.0001;
+      a[0] = 1;
+      for (let i = 1, error = r[0]; i <= order; i++) {
+        let sum = r[i];
+        for (let j = 1; j < i; j++) sum += a[j] * r[i - j];
+        const k = -sum / error, previous = a.slice();
+        for (let j = 1; j < i; j++) a[j] = previous[j] + k * previous[i - j];
+        a[i] = k;
+        error *= 1 - k * k;
+      }
+      const gain = [];
+      for (let f = 150; f <= 4000; f += 25) {
+        let re = 0, im = 0;
+        for (let j = 0; j <= order; j++) {
+          re += a[j] * Math.cos(2 * Math.PI * f * j / (RATE / 2));
+          im -= a[j] * Math.sin(2 * Math.PI * f * j / (RATE / 2));
+        }
+        gain.push([f, 1 / (re * re + im * im)]);
+      }
+      const peaks = gain.filter(([, g], i) => i && i < gain.length - 1 && g > gain[i - 1][1] && g >= gain[i + 1][1]).map(([f]) => f);
+      const f1 = peaks.find((f) => f >= 250 && f <= 1100);
+      let f2 = f1 && peaks.find((f) => f >= f1 + 250 && f <= 3500);
+      if (!f2) return 0;
+      // In o, F2 sits so close to F1 that the two merge: no valley above F1, and F3 looks like F2.
+      const at = (hz) => gain[Math.round((hz - 150) / 25)]?.[1] ?? 0;
+      if (f2 > 2800 && at(f1 + 400) > at(f1) * .06) f2 = f1 + 450;
+      let best = 0, distance = Infinity;
+      FORMANTS.forEach(([a, b], i) => {
+        const dist = Math.log(f1 / a) ** 2 + Math.log(f2 / b) ** 2;
+        if (dist < distance) [best, distance] = [i + 1, dist];
+      });
+      return best;
+    }
+
+    function analyse(pcm) {
+      const count = Math.ceil(pcm.length / HOP), level = new Float32Array(count), shape = new Uint8Array(count);
+      const x = new Float64Array(SIZE);
+      for (let f = 0; f < count; f++) {
+        const start = f * HOP - SIZE + HOP / 2;
+        let energy = 0, crossings = 0, before = 0;
+        for (let i = 0; i < SIZE; i++) {
+          // Averaged pairs: 12 kHz is plenty for formants. Pre-emphasis lifts the higher ones.
+          const sample = ((pcm[start + 2 * i] ?? 0) + (pcm[start + 2 * i + 1] ?? 0)) / 65536;
+          x[i] = (sample - .9 * before) * hann[i];
+          if (i && (sample > 0) !== (before > 0)) crossings++;
+          before = sample;
+          energy += sample * sample;
+        }
+        const db = 10 * Math.log10(energy / SIZE + 1e-10);
+        level[f] = Math.min(1, Math.max(0, (db + 48) / 28));
+        if (level[f] < .12) continue;
+        // Hiss without a voiced vowel (s, sh, f) crosses zero often and shows the teeth.
+        let s = crossings / SIZE > .3 ? 2 : vowel(x);
+        if (level[f] < .4) s = s === 1 ? 4 : s === 5 ? 3 : s;
+        shape[f] = s;
+      }
+      // A shape held for a single frame flickers; keep the one before it.
+      for (let f = 1; f < count - 1; f++) {
+        if (shape[f] !== shape[f - 1] && shape[f] !== shape[f + 1]) shape[f] = shape[f - 1];
+      }
+      return { level, shape };
+    }
+
+    function speech() {
+      if (!clock || !queue.length) return null;
+      const now = clock.currentTime - (clock.outputLatency || clock.baseLatency || 0) + .03;
+      while (queue.length && queue[0].at + queue[0].level.length * HOP / RATE < now) queue.shift();
+      const part = queue[0], f = part && Math.floor((now - part.at) * RATE / HOP);
+      if (!part || !(f >= 0 && f < part.level.length)) return null;
+      return { level: part.level[f], shape: part.shape[f] };
+    }
+
+    // ---- drawing ----
+    const VERTEX = `attribute vec2 aPos; attribute vec2 aUV; uniform vec4 uView; varying vec2 vUV;
+      void main() { vUV = aUV; gl_Position = vec4(aPos * uView.xy + uView.zw, 0.0, 1.0); }`;
+    const FRAGMENT = `precision mediump float; varying vec2 vUV;
+      uniform sampler2D uTex; uniform sampler2D uMask; uniform float uAlpha; uniform vec3 uClip; uniform vec2 uSize;
+      void main() {
+        vec4 c = texture2D(uTex, vUV);
+        if (uClip.z > 1.5) { gl_FragColor = vec4(c.a); return; }
+        if (uClip.z > 0.5) c *= dot(texture2D(uMask, gl_FragCoord.xy / uSize).rg, uClip.xy);
+        gl_FragColor = c * uAlpha;
+      }`;
+    const picture = new Image();
+    let program, at, texture, mask, frame, maskSize = '', last = performance.now();
+
+    function setup() {
+      program = gl.createProgram();
+      for (const [type, source] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, FRAGMENT]]) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        gl.attachShader(program, shader);
+      }
+      gl.linkProgram(program);
+      gl.useProgram(program);
+      at = {};
+      for (const name of ['aPos', 'aUV']) at[name] = gl.getAttribLocation(program, name);
+      for (const name of ['uView', 'uTex', 'uMask', 'uAlpha', 'uClip', 'uSize']) at[name] = gl.getUniformLocation(program, name);
+      gl.enableVertexAttribArray(at.aPos);
+      gl.enableVertexAttribArray(at.aUV);
+      gl.uniform1i(at.uTex, 0);
+      gl.uniform1i(at.uMask, 1);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      texture = image(picture);
+      for (const layer of layers) {
+        layer.position = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, layer.position);
+        gl.bufferData(gl.ARRAY_BUFFER, layer.at, gl.DYNAMIC_DRAW);
+        layer.coords = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, layer.coords);
+        gl.bufferData(gl.ARRAY_BUFFER, layer.uv, gl.STATIC_DRAW);
+        layer.triangles = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, layer.triangles);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, layer.index, gl.STATIC_DRAW);
+      }
+      maskSize = '';
+    }
+
+    function image(source, width, height) {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      if (source) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+      else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, key, value);
+      return t;
+    }
+
+    // Shows her from head to waist and as large as the screen allows, never past the drawing's own pixels.
+    function view() {
+      const width = innerWidth, height = innerHeight;
+      const scale = Math.min(height / H, width / 720);
+      const ratio = Math.max(1, Math.min(devicePixelRatio || 1, 1 / scale));
+      const cw = Math.round(width * ratio), ch = Math.round(height * ratio);
+      if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height] = [cw, ch];
+      const k = scale * ratio, left = cw / 2 - RIG.face[0] * k, top = Math.max(44 * ratio, (ch - H * k) * .3);
+      return { cw, ch, view: [2 * k / cw, -2 * k / ch, 2 * left / cw - 1, 1 - 2 * top / ch] };
+    }
+
+    function draw(layer, a, clip) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, layer.position);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, layer.at);
+      gl.vertexAttribPointer(at.aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, layer.coords);
+      gl.vertexAttribPointer(at.aUV, 2, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, layer.triangles);
+      gl.uniform1f(at.uAlpha, a);
+      gl.uniform3fv(at.uClip, clip);
+      gl.drawElements(gl.TRIANGLES, layer.index.length, gl.UNSIGNED_SHORT, 0);
+    }
+
+    function tick(now) {
+      requestAnimationFrame(tick);
+      const dt = Math.min(.05, (now - last) / 1000);
+      last = now;
+      if (!program || gl.isContextLost()) return;
+      const p = pose(now / 1000, dt), { cw, ch, view: v } = view();
+      if (!cw || !ch) return;
+      gl.useProgram(program);
+      gl.uniform4fv(at.uView, v);
+      gl.uniform2f(at.uSize, cw, ch);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      for (const layer of layers) {
+        layer.alpha = alpha(layer, p);
+        if (layer.alpha > .003 || layer.kind === 'eyewhite') deform(layer, p);
+      }
+      // The eye whites, drawn into a mask first, clip the irises as they look around.
+      if (maskSize !== `${cw}x${ch}`) {
+        maskSize = `${cw}x${ch}`;
+        gl.activeTexture(gl.TEXTURE1);
+        mask = image(null, cw, ch);
+        frame = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, frame);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, mask, 0);
+        gl.activeTexture(gl.TEXTURE0);
+      }
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, frame);
+      gl.viewport(0, 0, cw, ch);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      for (const layer of layers) {
+        if (layer.kind !== 'eyewhite') continue;
+        gl.colorMask(layer.side === 'r', layer.side === 'l', false, false);
+        draw(layer, 1, [0, 0, 2]);
+      }
+      gl.colorMask(true, true, true, true);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, mask);
+      gl.activeTexture(gl.TEXTURE0);
+      for (const layer of layers) {
+        if (layer.alpha <= .003) continue;
+        draw(layer, layer.alpha, layer.kind === 'irides' ? [+(layer.side === 'r'), +(layer.side === 'l'), 1] : [0, 0, 0]);
+      }
+    }
+
+    if (gl) {
+      picture.onload = () => {
+        setup();
+        requestAnimationFrame(tick);
+      };
+      picture.src = '/character.webp';
+      canvas.addEventListener('webglcontextlost', (event) => event.preventDefault());
+      canvas.addEventListener('webglcontextrestored', setup);
+    }
+
+    return {
+      // Speech queued to play at `at` on `context`'s clock.
+      speak(pcm, at, context) {
+        clock = context;
+        queue.push({ at, ...analyse(pcm) });
+      },
+      hush() {
+        queue.length = 0;
+      },
+      // The listener's voice, 0..1.
+      hear(level) {
+        heard = Math.max(heard, level);
+      },
+    };
+  })();
+
   // Runs on the audio thread: packs the microphone into 20 ms frames of PCM16.
   const frames = `registerProcessor('frames', class extends AudioWorkletProcessor {
     frame = new Int16Array(320);
@@ -81,6 +568,7 @@
     }
     if (session !== talk) return;
     session = null;
+    character.hush();
     show('', 'Start talking', note);
   }
 
@@ -125,6 +613,7 @@
         if (!talk.playing.size) {
           document.body.dataset.state = 'you';
           document.body.style.setProperty('--level', level(data));
+          character.hear(level(data));
         }
       };
       microphone.createMediaStreamSource(talk.stream).connect(capture).connect(microphone.destination);
@@ -147,6 +636,7 @@
     source.start(at);
     talk.next = at + buffer.duration;
     playing.add(source);
+    character.speak(pcm, at, speaker);
     setTimeout(() => {
       if (!playing.has(source)) return;
       document.body.dataset.state = 'boubou';
@@ -163,6 +653,7 @@
   function clear(talk, epoch) {
     for (const source of talk.playing) source.stop();
     talk.playing.clear();
+    character.hush();
     talk.epoch = epoch;
     talk.next = 0;
   }
