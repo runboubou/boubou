@@ -52,6 +52,12 @@ const APP_HERE: &str = if cfg!(target_os = "macos") {
 } else {
     "App on this computer"
 };
+const APP_ELSEWHERE: &str = "Web app or another device";
+/// The one model `GET /v1/models` lists. The model server reads with the model it started with,
+/// whatever a text names.
+const MODEL: &str = "boubou";
+/// Lets a web page from any site read an answer. The key, or the person, decides who is answered.
+const ANY_SITE: &str = "Access-Control-Allow-Origin: *\r\n";
 /// Far above a 20 ms frame or a playback report.
 const MAX_MESSAGE: usize = 1 << 16;
 /// Requests answered at once; a flood beyond this is turned away.
@@ -232,9 +238,20 @@ struct Links {
     realtime: Option<String>,
     /// Where robots and programs that take only an address and a port connect, in the clear.
     bare: Option<(Ipv4Addr, u16)>,
-    /// For an app on this computer with an OpenAI-compatible voice setting: the API's address
-    /// and the voice a text reads in when it names none.
-    app: Option<(String, String)>,
+    /// For an app with an OpenAI-compatible voice setting.
+    app: Option<App>,
+}
+
+/// What an app with an OpenAI-compatible voice setting types.
+#[derive(Debug, PartialEq)]
+struct App {
+    /// The API's address for a program on this computer, which needs no key.
+    here: String,
+    /// Its address for a web app or another device, by name where there is one, with the key.
+    elsewhere: String,
+    key: String,
+    /// The voice a text reads in when it names none.
+    voice: String,
 }
 
 impl Links {
@@ -305,18 +322,28 @@ impl Links {
                 ],
             );
         }
-        if let Some((url, voice)) = &self.app {
+        if let Some(app) = &self.app {
             section(
                 APP_HERE,
                 vec![
                     "In its voice settings, choose OpenAI-compatible, then type:".into(),
                     String::new(),
-                    format!("   API URL   {bold}{accent}{url}"),
-                    format!("   Model     {bold}{accent}boubou"),
-                    format!("   Voice     {bold}{accent}{voice}"),
+                    format!("   API URL   {bold}{accent}{}", app.here),
+                    format!("   Model     {bold}{accent}{MODEL}"),
+                    format!("   Voice     {bold}{accent}{}", app.voice),
                     "   API key   leave it empty".into(),
                     String::new(),
                     format!("{dim}Step by step: {APPS}"),
+                ],
+            );
+            // A web page is not the person's own program, even on this computer.
+            section(
+                APP_ELSEWHERE,
+                vec![
+                    "Type the same, with this address and the key:".into(),
+                    String::new(),
+                    format!("   API URL   {bold}{accent}{}", app.elsewhere),
+                    format!("   API key   {bold}{accent}{}", app.key),
                 ],
             );
         }
@@ -483,10 +510,19 @@ impl Door {
                 let voice = voices
                     .ok()
                     .and_then(|list| Some(list["voices"][0]["id"].as_str()?.into()));
-                (
-                    format!("http://127.0.0.1:{port}/v1"),
-                    voice.unwrap_or("default".into()),
-                )
+                let here = format!("http://127.0.0.1:{port}/v1");
+                // A page served over HTTPS may only ask an HTTPS address.
+                let elsewhere = match (&named, network) {
+                    (Some(name), _) => format!("https://{name}:{port}/v1"),
+                    (None, Some(address)) => format!("https://{address}:{port}/v1"),
+                    (None, None) => here.clone(),
+                };
+                App {
+                    here,
+                    elsewhere,
+                    key: key.clone(),
+                    voice: voice.unwrap_or("default".into()),
+                }
             }),
         };
         let allowed = Arc::new(Allowed::load(cache)?);
@@ -833,7 +869,7 @@ fn answer(
 ) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
-    let (method, target, accept, bearer, page, head) = loop {
+    let (method, target, accept, bearer, page, wants, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
@@ -855,9 +891,17 @@ fn answer(
                 .map(|key| String::from_utf8_lossy(key).into_owned());
             // Browsers say which site a page comes from; programs do not.
             let page = header("Origin").is_some();
+            // The headers a page from another site asks to send, such as its API key.
+            let wants = header("Access-Control-Request-Headers").map(|asked| {
+                let asked = String::from_utf8_lossy(asked.value);
+                asked.replace(
+                    |c: char| !c.is_ascii_alphanumeric() && !"-_, ".contains(c),
+                    "",
+                )
+            });
             let method = parsed.method.unwrap_or_default().to_owned();
             let target = parsed.path.unwrap_or_default().to_owned();
-            break (method, target, accept, bearer, page, head);
+            break (method, target, accept, bearer, page, wants, head);
         }
     };
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -872,15 +916,19 @@ fn answer(
         ("GET", "/v1/realtime", true)
             | ("POST", "/v1/audio/speech", false)
             | ("GET", "/v1/audio/voices", false)
+            | ("GET", "/v1/models", false)
     );
     // A program on this computer is the person's own; a web page, even one opened here, is not.
     let own = peer.is_loopback() && !page;
     let allowed =
         keyed || (robot && desk.api.is_some() && (own || desk.lets_in(peer)) && !closed(socket));
+    // A page reads what it was answered, refusals too, so a wrong key does not look like a
+    // missing server.
+    let cors = if page { ANY_SITE } else { "" };
     let respond = |stream: &mut dyn Write, status: &str, kind: &str, body: &str| {
         write!(
             stream,
-            "HTTP/1.1 {status}\r\nContent-Type: {kind}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\nContent-Type: {kind}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{cors}Connection: close\r\n\r\n{body}",
             body.len()
         )?;
         stream.flush()?;
@@ -889,6 +937,29 @@ fn answer(
     let (accept, api) = match (method.as_str(), path, accept, &desk.api) {
         ("GET", "/", None, _) if trusted => {
             return respond(&mut stream, "200 OK", "text/html", PAGE);
+        }
+        // A page from another site asks before it sends its API key. The question carries no
+        // key, and answering it lets nothing in.
+        ("OPTIONS", path, None, Some(_)) if path.starts_with("/v1/") => {
+            let headers = wants.as_deref().unwrap_or("Authorization, Content-Type");
+            write!(
+                stream,
+                "HTTP/1.1 204 No Content\r\n{ANY_SITE}Access-Control-Allow-Methods: GET, POST\r\nAccess-Control-Allow-Headers: {headers}\r\nAccess-Control-Allow-Private-Network: true\r\nAccess-Control-Max-Age: 600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )?;
+            stream.flush()?;
+            return Ok(None);
+        }
+        ("GET", "/v1/models", None, Some(_)) if allowed => {
+            let models = serde_json::json!({
+                "object": "list",
+                "data": [{"id": MODEL, "object": "model", "created": 0, "owned_by": "boubou"}],
+            });
+            return respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &models.to_string(),
+            );
         }
         ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
         ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api.address)),
@@ -916,7 +987,12 @@ fn answer(
     // the next text is called.
     let seat = Seat(Arc::clone(desk));
     if let Some(api) = api {
-        return relay(stream, socket, api, request, method == "POST").map(|()| None);
+        let once = method == "POST";
+        // The model server's answer to a page names the sites that may read it, as the
+        // door's own answers do.
+        let stamp = (once && page).then_some(ANY_SITE.as_bytes());
+        let visitor = Stamped::new(stream, stamp);
+        return relay(visitor, socket, api, request, once).map(|()| None);
     }
     write!(
         stream,
@@ -991,6 +1067,61 @@ fn pass(from: &mut impl Read, to: &mut impl Write, buffer: &mut [u8]) -> io::Res
             Ok(true)
         }
         Err(error) => Err(error),
+    }
+}
+
+/// A visitor's connection that adds `header` after the status line of what it is sent.
+struct Stamped<S: Write> {
+    stream: S,
+    header: Option<&'static [u8]>,
+    /// The start of the answer, until its status line is whole.
+    head: Vec<u8>,
+}
+
+impl<S: Write> Stamped<S> {
+    fn new(stream: S, header: Option<&'static [u8]>) -> Self {
+        let head = Vec::new();
+        Self {
+            stream,
+            header,
+            head,
+        }
+    }
+}
+
+impl<S: Read + Write> Read for Stamped<S> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.stream.read(buffer)
+    }
+}
+
+impl<S: Write> Write for Stamped<S> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(header) = self.header else {
+            return self.stream.write(bytes);
+        };
+        self.head.extend_from_slice(bytes);
+        if let Some(end) = self.head.windows(2).position(|pair| pair == b"\r\n") {
+            let rest = self.head.split_off(end + 2);
+            self.header = None;
+            self.stream
+                .write_all(&[&self.head, header, &rest].concat())?;
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+impl<S: Write> Drop for Stamped<S> {
+    /// An answer that ended inside its status line still reaches the visitor as it was.
+    fn drop(&mut self) {
+        if self.header.is_some() && !self.head.is_empty() {
+            let _ = self.stream.write_all(&self.head);
+            let _ = self.stream.flush();
+        }
     }
 }
 
@@ -1528,18 +1659,32 @@ mod tests {
             fallback: Some("https://192.168.1.20:2682/#key".into()),
             realtime: Some("wss://name:2682/v1/realtime?key=key".into()),
             bare: Some((Ipv4Addr::new(192, 168, 1, 20), 2682)),
-            app: Some(("http://127.0.0.1:2682/v1".into(), "serena".into())),
+            app: Some(App {
+                here: "http://127.0.0.1:2682/v1".into(),
+                elsewhere: "https://name:2682/v1".into(),
+                key: "key".into(),
+                voice: "serena".into(),
+            }),
         };
         // In a log: the same sections, without escape codes or a code to scan.
         let plain = links.guide(&Ink::default(), 80, &[]).join("\n");
         assert!(!plain.contains('\x1b'));
         let at = |title: &str| plain.find(&format!("\n  {title}\n")).expect(title);
-        let order = ["Phone", "Robot or app", APP_HERE, progress::HERE].map(at);
-        assert!(order.is_sorted(), "{plain}");
+        let order = [
+            "Phone",
+            "Robot or app",
+            APP_HERE,
+            APP_ELSEWHERE,
+            progress::HERE,
+        ];
+        assert!(order.map(at).is_sorted(), "{plain}");
         assert!(plain.contains("\n     Address   192.168.1.20\n     Port      2682\n"));
         // An app on this computer gets every value its voice settings ask for, and no question.
         let app = "\n     API URL   http://127.0.0.1:2682/v1\n     Model     boubou\n     Voice     serena\n     API key   leave it empty\n";
         assert!(plain.contains(app), "{plain}");
+        // A web app, or one on another device, gets the address by name and the key.
+        let elsewhere = "\n     API URL   https://name:2682/v1\n     API key   key\n";
+        assert!(plain.contains(elsewhere), "{plain}");
 
         // On a terminal the code sits under Phone, and the two values to type stand out.
         let ink = Ink {
@@ -1561,6 +1706,7 @@ mod tests {
         };
         let offered = page.guide(&ink, 80, &[]).concat();
         assert!(!offered.contains("Robot") && !offered.contains("App on"));
+        assert!(!offered.contains(APP_ELSEWHERE));
     }
 
     #[test]
@@ -1588,8 +1734,15 @@ mod tests {
             (Ipv4Addr::LOCALHOST, port.parse().unwrap())
         );
         // An app on this computer is told the API's address and the voice the list offers first.
-        let api_url = format!("http://127.0.0.1:{port}/v1");
-        assert_eq!(links.app, Some((api_url, "default".into())));
+        // Without the network, a web app uses the same address, with the key.
+        let here = format!("http://127.0.0.1:{port}/v1");
+        let app = App {
+            elsewhere: here.clone(),
+            here,
+            key: key(&links.here).into(),
+            voice: "default".into(),
+        };
+        assert_eq!(links.app, Some(app));
         // Settings that take only an address and a port, with an API key of the robot's own.
         let robot = || realtime(&link, "", Some("DUMMY"), SITE);
 
@@ -1751,6 +1904,101 @@ mod tests {
         // The answer freed the seat for the next program, which frees it by leaving early.
         drop(ask());
         once_free(|| plain(link, key));
+    }
+
+    #[test]
+    fn a_web_app_from_another_site_asks_first_then_reads_what_it_is_answered() {
+        // A stand-in for the model server's voice: it answers every text with the same sound.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut sent = Vec::new();
+                while !sent.ends_with(b"}") {
+                    let mut chunk = [0; 4096];
+                    let read = stream.read(&mut chunk).unwrap();
+                    sent.extend_from_slice(&chunk[..read]);
+                }
+                let answer =
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: 4\r\n\r\nRIFF";
+                stream.write_all(answer.as_bytes()).unwrap();
+            }
+        });
+        let cache = cache();
+        let (door, links) = Door::bind(0, &cache, None, offers(api), None).unwrap();
+        fs::remove_dir_all(cache).unwrap();
+        let (link, key) = (links.here.as_str(), key(&links.here));
+        let site = "Origin: https://app.test\r\n";
+
+        // The question before the text carries no key. It is answered without asking the
+        // person, and only with the headers it named.
+        let preflight = format!(
+            "OPTIONS /v1/audio/speech HTTP/1.1\r\n{site}Access-Control-Request-Method: POST\r\nAccess-Control-Request-Headers: authorization, content-type, x-a:b\r\n\r\n"
+        );
+        let answer = request(link, &preflight);
+        assert!(
+            answer.starts_with("HTTP/1.1 204 No Content\r\n"),
+            "{answer}"
+        );
+        assert!(answer.contains(ANY_SITE));
+        let allowed = "Access-Control-Allow-Headers: authorization, content-type, x-ab\r\n";
+        assert!(answer.contains(allowed), "{answer}");
+        assert!(answer.contains("Access-Control-Allow-Private-Network: true\r\n"));
+        assert!(door.asks.try_recv().is_err(), "The person was asked");
+        // A model without an API answers no such question.
+        let (_other, other) = local();
+        assert!(request(&other, &preflight).starts_with("HTTP/1.1 404 "));
+
+        // With the key, the page reads the model it may name, and the sound read for its text.
+        let models =
+            format!("GET /v1/models HTTP/1.1\r\n{site}Authorization: Bearer {key}\r\n\r\n");
+        let listed = request(link, &models);
+        assert!(listed.starts_with("HTTP/1.1 200 OK\r\n"), "{listed}");
+        assert!(listed.contains(ANY_SITE));
+        let body = listed.split("\r\n\r\n").nth(1).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(body["data"][0]["id"], MODEL);
+        let text = r#"{"model":"tts-1","voice":"alloy","input":"Hello"}"#;
+        let post = |extra: &str| {
+            let length = text.len();
+            format!(
+                "POST /v1/audio/speech HTTP/1.1\r\n{extra}Authorization: Bearer {key}\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n{text}"
+            )
+        };
+        let read = request(link, &post(site));
+        let stamped = format!("HTTP/1.1 200 OK\r\n{ANY_SITE}Content-Type: audio/wav\r\n");
+        assert!(
+            read.starts_with(&stamped) && read.ends_with("RIFF"),
+            "{read}"
+        );
+
+        // A program is answered as before, and so is a page whose key is wrong, readably.
+        let own = request(link, &post(""));
+        assert!(
+            own.starts_with("HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\n"),
+            "{own}"
+        );
+        let own = request(link, "GET /v1/models HTTP/1.1\r\n\r\n");
+        assert!(own.starts_with("HTTP/1.1 200 OK\r\n") && !own.contains(ANY_SITE));
+        let wrong = models.replace(key, "wrong");
+        let (refused, _) = asking(&door, || Ok(None), || request(link, &wrong));
+        assert!(refused.starts_with("HTTP/1.1 404 ") && refused.contains(ANY_SITE));
+    }
+
+    #[test]
+    fn the_header_follows_the_status_line_however_the_answer_arrives() {
+        let mut visitor = Stamped::new(Vec::new(), Some(ANY_SITE.as_bytes()));
+        for part in ["HTTP/1.1 2", "00 OK\r", "\nContent-Length: 2\r\n\r\n", "ok"] {
+            visitor.write_all(part.as_bytes()).unwrap();
+        }
+        let expected = format!("HTTP/1.1 200 OK\r\n{ANY_SITE}Content-Length: 2\r\n\r\nok");
+        assert_eq!(String::from_utf8(visitor.stream.clone()).unwrap(), expected);
+        // An answer cut off inside its status line still reaches the visitor.
+        let mut cut = Vec::new();
+        let mut visitor = Stamped::new(&mut cut, Some(ANY_SITE.as_bytes()));
+        visitor.write_all(b"HTTP/1.1 5").unwrap();
+        drop(visitor);
+        assert_eq!(cut, b"HTTP/1.1 5");
     }
 
     #[test]
