@@ -27,8 +27,7 @@ Boubou copies matching files from an installed runner and downloads only changed
 files with HTTP Range requests. It verifies the complete assembled tree before
 activation, leaving older runners and model caches intact. A cold install, a
 legacy manifest without this index, or a server without Range support uses the
-full archive. The currently pinned Linux runner is a legacy archive; its next
-rebuild enables incremental updates. Savings depend on which files change,
+full archive. Savings depend on which files change,
 not a fixed byte or percentage guarantee.
 
 A release builds a runner only when its sources changed. `runtime.json` records
