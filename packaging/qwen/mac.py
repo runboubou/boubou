@@ -521,8 +521,9 @@ def clone(profile, cache, manifest, *extra):
             if which not in other:
                 profile, repo, wrap = READERS[which]
                 (path,) = (path for name, path in snapshots(manifest, profile).items() if name.startswith(repo))
-                if not (cache / path / "model.safetensors").is_file():
-                    boubou("voices", "--prepare", profile, failure="Boubou could not get the voice model.")
+                # Boubou fetches what is missing and verifies every file before the first load: a fetch
+                # cut short may have left only some of them.
+                boubou("voices", "--prepare", profile, failure="Boubou could not get the voice model.")
                 other[which] = wrap(mouth(str(cache / path)))
             return other[which]
 
