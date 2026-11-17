@@ -443,12 +443,13 @@ def clone(profile, cache, manifest, *extra):
                 return speak
             if "voxcpm" not in other:
                 (path,) = (path for repo, path in snapshots(manifest, VOXCPM).items() if repo.startswith("VoxCPM2"))
-                if not (cache / path / "model.safetensors").is_file():
-                    done = subprocess.run([os.environ["BOUBOU_BIN"], "--cache-dir", str(cache.parent),
-                                           "--voices-dir", CLONES, "voices", "--prepare"], capture_output=True, text=True)
-                    if done.returncode:
-                        said = [line for line in done.stderr.splitlines() if line.strip()] or ["Boubou could not get the voice model."]
-                        raise HTTPException(503, said[-1].removeprefix("boubou: "))
+                # Boubou fetches what is missing and verifies every file before the first load: a fetch
+                # cut short may have left only some of them.
+                done = subprocess.run([os.environ["BOUBOU_BIN"], "--cache-dir", str(cache.parent),
+                                       "--voices-dir", CLONES, "voices", "--prepare"], capture_output=True, text=True)
+                if done.returncode:
+                    said = [line for line in done.stderr.splitlines() if line.strip()] or ["Boubou could not get the voice model."]
+                    raise HTTPException(503, said[-1].removeprefix("boubou: "))
                 other["voxcpm"] = VoxCPMReader(mouth(str(cache / path)))
             return other["voxcpm"]
 
