@@ -84,7 +84,9 @@ fn settle(cache: &Path, data: &Path) -> PathBuf {
                     folder.display()
                 );
             }
-            // Gone once empty, so the move is not tried again.
+            // Launchers of voices that moved go, and the folder once empty, so the move is not
+            // tried again.
+            let _ = prune(&old, &scan(&old).voices);
             let _ = fs::remove_dir(&old);
         }
         Err(error) => eprintln!(
@@ -202,6 +204,7 @@ fn choose_in(data: &Path, from: &Path, to: &Path) -> Result<(PathBuf, Moved)> {
     fs::create_dir_all(to).with_context(|| format!("Cannot make the folder {}", to.display()))?;
     let to = fs::canonicalize(to)?;
     let moved = gather(from, &to)?;
+    prune(from, &scan(from).voices)?;
     fs::create_dir_all(data)?;
     if fs::canonicalize(data.join("voices")).ok().as_ref() == Some(&to) {
         match fs::remove_file(data.join(SETTING)) {
@@ -410,7 +413,7 @@ pub fn scan(folder: &Path) -> Scan {
 /// Gives each voice the digest of its recording, and the words of a renamed recording back to it
 /// by that digest.
 pub fn tidy(folder: &Path) -> Result<()> {
-    let scan = scan(folder);
+    let found = scan(folder);
     let path = |name: &str, extension| folder.join(format!("{name}.{extension}"));
     // Words left behind when their recording was renamed, by the digest they keep.
     let mut orphans = BTreeMap::new();
@@ -425,19 +428,85 @@ pub fn tidy(folder: &Path) -> Result<()> {
             orphans.insert(sum.to_owned(), entry.path());
         }
     }
-    for name in &scan.unheard {
+    for name in &found.unheard {
         if let Some(words) = orphans.remove(&digest(&fs::read(path(name, "wav"))?)) {
             move_file(&words, &path(name, "json"))?;
         }
     }
-    for voice in &scan.voices {
+    for voice in &found.voices {
         let mut words: Value = serde_json::from_slice(&fs::read(path(&voice.name, "json"))?)?;
         if words.get("sha256").is_none() {
             words["sha256"] = digest(&fs::read(path(&voice.name, "wav"))?).into();
             write(&path(&voice.name, "json"), words.to_string().as_bytes())?;
         }
     }
+    if cfg!(target_os = "macos") {
+        launchers(folder, &scan(folder).voices)?;
+    }
     Ok(())
+}
+
+/// The first lines of each launcher Boubou writes, by which it knows its own.
+const MADE: &str = "#!/bin/sh\n# Made by Boubou for the voice";
+
+/// What `<name>.command` holds: double-clicked in Finder, Terminal talks with the voice. The
+/// person's own login shell starts Boubou, so it finds npx as their terminal does.
+fn launcher(name: &str) -> String {
+    let program = crate::update::program();
+    // npx would first ask whether to install Boubou, in a window opened for talking.
+    let program = match program.strip_prefix("npx ") {
+        Some(package) => format!("npx --yes {package}"),
+        None => program.to_owned(),
+    };
+    format!(
+        "{MADE} {name}. Double-click it to talk with {name}; close the window to stop.\n\
+         exec \"${{SHELL:-/bin/zsh}}\" -lic '{program} run {MODEL} --voice {name}'\n"
+    )
+}
+
+/// Gives each voice a launcher beside its recording, and removes the launchers Boubou wrote for
+/// voices that are gone. A person's own `.command` files stay as they are.
+fn launchers(folder: &Path, voices: &[Voice]) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    for voice in voices {
+        let path = folder.join(format!("{}.command", voice.name));
+        let wanted = launcher(&voice.name);
+        let here = fs::read_to_string(&path);
+        if here
+            .as_deref()
+            .is_ok_and(|here| here == wanted || !here.starts_with(MADE))
+            || here
+                .as_ref()
+                .is_err_and(|error| error.kind() != io::ErrorKind::NotFound)
+        {
+            continue;
+        }
+        let partial = hidden(&path);
+        fs::write(&partial, wanted)?;
+        fs::set_permissions(&partial, fs::Permissions::from_mode(0o755))?;
+        fs::rename(&partial, &path)?;
+    }
+    prune(folder, voices)
+}
+
+/// Removes the launchers Boubou wrote in `folder` for voices other than `voices`.
+fn prune(folder: &Path, voices: &[Voice]) -> Result<()> {
+    for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+        if let Some((stem, extension)) = parts(&entry.path())
+            && extension == "command"
+            && !voices.iter().any(|voice| voice.name == stem)
+            && fs::read_to_string(entry.path()).is_ok_and(|text| text.starts_with(MADE))
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+/// The launcher of the voice `name` in `folder`, once there is one.
+fn launcher_of(folder: &Path, name: &str) -> Option<PathBuf> {
+    Some(folder.join(format!("{name}.command"))).filter(|path| path.is_file())
 }
 
 /// Writes the voices `names` names, or all of them, to the zip file `zip`.
@@ -597,6 +666,7 @@ pub fn listing(folder: &Path) -> Value {
                 "language": voice.language,
                 "text": voice.text,
                 "commands": commands,
+                "launcher": launcher_of(folder, &voice.name),
             })
         })
         .collect();
@@ -634,6 +704,9 @@ pub fn print(folder: &Path) {
         println!("\n{} · {}", voice.name, voice.speaks());
         for (title, command) in commands(&voice.name) {
             println!("  {title:<6} {command}");
+        }
+        if let Some(launcher) = launcher_of(folder, &voice.name) {
+            println!("  Or double-click {} in Finder.", launcher.display());
         }
     }
     if !scan.unheard.is_empty() {
@@ -1022,6 +1095,56 @@ mod tests {
         let found = scan(folder);
         assert_eq!(found.voices[0].name, "robert");
         assert_eq!(found.unheard, ["alice", "carol"]);
+    }
+
+    #[test]
+    fn each_voice_gets_a_launcher_to_double_click() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TestDir::new("launchers");
+        let folder = &dir.0;
+        keep(folder, "mom", "zh");
+        keep(folder, "dad", "en");
+        // A person's own launcher keeps its content, even under a voice's name.
+        fs::write(folder.join("dad.command"), "#!/bin/sh\necho mine\n").unwrap();
+        launchers(folder, &scan(folder).voices).unwrap();
+        let mom = fs::read_to_string(folder.join("mom.command")).unwrap();
+        assert!(mom.starts_with(MADE));
+        assert!(mom.ends_with(&format!("-lic 'boubou run {MODEL} --voice mom'\n")));
+        let mode = fs::metadata(folder.join("mom.command"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111);
+        assert_eq!(
+            fs::read_to_string(folder.join("dad.command")).unwrap(),
+            "#!/bin/sh\necho mine\n"
+        );
+        assert_eq!(launcher_of(folder, "mom"), Some(folder.join("mom.command")));
+        assert_eq!(launcher_of(folder, "kid"), None);
+
+        // A renamed voice's launcher follows it; a person's own stays when its voice is gone.
+        fs::rename(folder.join("mom.wav"), folder.join("mother.wav")).unwrap();
+        fs::rename(folder.join("mom.json"), folder.join("mother.json")).unwrap();
+        fs::remove_file(folder.join("dad.wav")).unwrap();
+        launchers(folder, &scan(folder).voices).unwrap();
+        assert!(!folder.join("mom.command").exists());
+        assert!(folder.join("mother.command").is_file());
+        assert!(folder.join("dad.command").is_file());
+
+        // The launcher runs the command it names in the person's own login shell.
+        let shell = folder.join("shell");
+        fs::write(&shell, "#!/bin/sh\nprintf '%s|' \"$@\" > \"$0.args\"\n").unwrap();
+        fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+        let ran = std::process::Command::new(folder.join("mother.command"))
+            .env("SHELL", &shell)
+            .status()
+            .unwrap();
+        assert!(ran.success());
+        assert_eq!(
+            fs::read_to_string(folder.join("shell.args")).unwrap(),
+            format!("-lic|boubou run {MODEL} --voice mother|")
+        );
     }
 
     #[test]

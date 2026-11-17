@@ -324,8 +324,13 @@ def clone(profile, cache, manifest, *extra):
             return listed
 
         @app.post("/folder/open")
-        def show():
-            subprocess.run(["open", CLONES], check=False)
+        def show(name: str = ""):
+            # Finder opens the folder, with a voice's launcher selected when one is named.
+            launcher = Path(CLONES, f"{name}.command")
+            if NAME.fullmatch(name) and launcher.is_file():
+                subprocess.run(["open", "-R", str(launcher)], check=False)
+            else:
+                subprocess.run(["open", CLONES], check=False)
             return Response(status_code=204)
 
         @app.get("/export")

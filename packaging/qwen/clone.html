@@ -112,6 +112,11 @@
 
   <section id="use" hidden>
     <h2>Use <span class="named"></span></h2>
+    <div class="row" id="launcher" hidden>
+      <p style="flex: 1">Double-click <b id="launcher-file"></b> in your voices folder to talk with it. No typing needed.</p>
+      <button type="button" id="reveal">Show in Finder</button>
+    </div>
+    <p class="muted">Or type a command:</p>
     <div id="commands" style="display: grid; gap: 10px"></div>
     <p class="muted">In an app's voice setting, while it is shared, type <b class="named"></b>.</p>
   </section>
@@ -364,6 +369,9 @@
     const chosen = listed.voices.find((kept) => kept.name === name);
     if (!chosen) return;
     for (const named of document.querySelectorAll('.named')) named.textContent = name;
+    $('launcher').hidden = !chosen.launcher;
+    $('launcher-file').textContent = `${name}.command`;
+    $('reveal').onclick = () => api(`/folder/open?name=${encodeURIComponent(name)}`, { method: 'POST' }).catch((error) => say(error.message, 'bad'));
     $('commands').replaceChildren(...chosen.commands.flatMap(({ title, command }) => {
       const purpose = document.createElement('p');
       purpose.className = 'muted';
