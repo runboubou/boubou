@@ -5,7 +5,7 @@ mod incremental;
 mod integrity;
 
 use crate::{
-    assets,
+    assets, library,
     profiles::{self, Download},
     progress::{self, Step},
 };
@@ -348,34 +348,17 @@ pub const LANGUAGES: [(&str, &str); 12] = [
     ("hi", "Hindi"),
 ];
 
-/// The voices `boubou clone` kept in `cache`, by name, each with the language it speaks.
+/// The voices cloned on this computer, by name, each with the language it speaks. A recording
+/// renamed in the folder is found by its new name.
 pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
-    let Ok(folder) = fs::read_dir(cache.join("voices")) else {
-        return Vec::new();
-    };
-    let mut found: Vec<_> = folder
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            let name = path.file_stem()?.to_str()?;
-            // The page names a voice in lowercase letters, digits, - and _.
-            let named = name.len() <= 32
-                && name.starts_with(|c: char| c.is_ascii_alphanumeric())
-                && name
-                    .bytes()
-                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'));
-            if !named || path.extension()? != "json" {
-                return None;
-            }
-            let words: serde_json::Value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-            let (_, speaks) = LANGUAGES
-                .iter()
-                .find(|(code, _)| words["language"] == *code)?;
-            Some((name.to_owned(), *speaks))
-        })
-        .collect();
-    found.sort();
-    found
+    let folder = library::folder(cache);
+    // A folder Boubou cannot write to still lists the voices it holds.
+    let _ = library::tidy(&folder);
+    let voices = library::scan(&folder).voices;
+    voices
+        .iter()
+        .map(|voice| (voice.name.clone(), voice.speaks()))
+        .collect()
 }
 
 /// The Base weights that read the voices cloned in `cache`, for a Qwen3-TTS entry, once there
@@ -654,7 +637,7 @@ pub fn run(
     // The runner reads cloned voices with the Base weights that preparing verified.
     if let Some(base) = cloner(id, cache) {
         command
-            .env("BOUBOU_VOICES", cache.join("voices"))
+            .env("BOUBOU_VOICES", library::folder(cache))
             .env("BOUBOU_CLONER", base);
     }
     // Later options replace earlier ones: the voice replaces the model's own speaker, and
@@ -764,9 +747,9 @@ fn speech(id: &str, voice: &profiles::Voice, cloned: &[profiles::Voice]) -> Vec<
 /// writes down what an uploaded clip says.
 pub const CLONE: &str = "qwen3-tts:clone";
 
-/// Opens the runner's page in a browser, where a person clones a voice into `cache`, until
-/// Ctrl+C. The page shows `run` with `--voice` to talk with it.
-pub fn clone(cache: &Path, run: &str) -> Result<()> {
+/// Opens the runner's page in a browser, where a person clones a voice into `voices`, until
+/// Ctrl+C. The page lists the folder through `boubou voices`, with the commands for each voice.
+pub fn clone(cache: &Path, voices: &Path) -> Result<()> {
     use std::{
         io::Read,
         sync::{
@@ -775,6 +758,7 @@ pub fn clone(cache: &Path, run: &str) -> Result<()> {
         },
     };
 
+    library::ready(voices)?;
     let installed = prepare(CLONE, None, cache, false)?;
     let stopped = Arc::new(AtomicBool::new(false));
     let flag = stopped.clone();
@@ -790,9 +774,9 @@ pub fn clone(cache: &Path, run: &str) -> Result<()> {
         .args(["clone", CLONE])
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"))
-        .env("BOUBOU_VOICES", cache.join("voices"))
-        .env("BOUBOU_KEY", &key)
-        .env("BOUBOU_RUN", run);
+        .env("BOUBOU_VOICES", voices)
+        .env("BOUBOU_BIN", std::env::current_exe()?)
+        .env("BOUBOU_KEY", &key);
     let (mut server, _) = chat::Server::launch(command, Duration::from_secs(300), &stopped)?;
     let link = format!("http://127.0.0.1:{}/#{key}", server.address.port());
     let opened = Command::new("open").arg(&link).status();
@@ -961,19 +945,23 @@ mod tests {
         let cache = std::env::temp_dir().join(format!("boubou-clones-{}", std::process::id()));
         let small = "qwen3-tts:0.6b-customvoice-whisper";
         assert_eq!(cloner(small, &cache), None);
-        fs::create_dir_all(cache.join("voices")).unwrap();
-        for (file, words) in [
-            ("mom.json", r#"{"text":"你好。","language":"zh"}"#),
-            ("dad.json", r#"{"text":"Hello.","language":"en"}"#),
-            // Half-written, in a language Qwen3-TTS does not speak, or not a name the page gives.
-            (".kid.json", r#"{"text":"Hi.","language":"en"}"#),
-            ("pet.json", r#"{"text":"Hej.","language":"sv"}"#),
-            ("Big.json", r#"{"text":"Hi.","language":"en"}"#),
-            ("mom.wav", ""),
-        ] {
-            fs::write(cache.join("voices").join(file), words).unwrap();
-        }
+        let voices = cache.join("voices");
+        library::keep(&voices, "mom", "zh");
+        library::keep(&voices, "dad", "en");
+        // Half-written, in a language Qwen3-TTS does not speak, not a name the page gives, or
+        // words without a recording.
+        library::keep(&voices, "pet", "sv");
+        fs::copy(voices.join("dad.json"), voices.join(".kid.json")).unwrap();
+        fs::copy(voices.join("dad.json"), voices.join("Big.json")).unwrap();
+        fs::copy(voices.join("dad.json"), voices.join("gone.json")).unwrap();
         let both = vec![("dad".into(), "English"), ("mom".into(), "Chinese")];
+        assert_eq!(clones(&cache), both);
+        // A renamed recording is its voice under the new name, without another step.
+        fs::rename(voices.join("mom.wav"), voices.join("mother.wav")).unwrap();
+        let renamed = vec![("dad".into(), "English"), ("mother".into(), "Chinese")];
+        assert_eq!(clones(&cache), renamed);
+        fs::rename(voices.join("mother.wav"), voices.join("mom.wav")).unwrap();
+        fs::rename(voices.join("mother.json"), voices.join("mom.json")).unwrap();
         assert_eq!(clones(&cache), both);
         assert_eq!(cloner(small, &cache), Some("qwen3-tts:0.6b-base"));
         let large = "qwen3-tts:1.7b-customvoice-27b";

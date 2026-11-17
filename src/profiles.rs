@@ -885,10 +885,8 @@ mod tests {
             voice("Aiden", "English").map(|v| (whisper, v))
         );
         // A voice cloned on this computer is found by its name, and heard in its language.
-        fs::create_dir_all(cache.join("voices")).unwrap();
         for (name, language) in [("mom", "zh"), ("dad", "en")] {
-            let words = format!(r#"{{"text":"Hello.","language":"{language}"}}"#);
-            fs::write(cache.join(format!("voices/{name}.json")), words).unwrap();
+            crate::library::keep(&cache.join("voices"), name, language);
         }
         assert_eq!(
             voiced(small, "Mom"),
