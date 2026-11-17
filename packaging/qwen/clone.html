@@ -60,6 +60,9 @@
   .where code { flex: 1 1 100%; overflow-wrap: anywhere; }
   .warning { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bad); color: var(--bad); }
   #attention li { display: grid; gap: 2px; }
+  #check { display: grid; gap: 8px; }
+  #advice li { display: list-item; list-style: disc; margin-left: 20px; padding: 2px 0; border: 0; color: var(--bad); }
+  #heard { justify-self: start; }
   [hidden] { display: none !important; }
 </style>
 <main>
@@ -98,6 +101,11 @@
       </div>
     </div>
     <audio id="sample" controls hidden></audio>
+    <div id="check" hidden>
+      <p id="verdict"></p>
+      <ul id="advice"></ul>
+      <button type="button" id="heard" hidden>Keep the words Boubou heard</button>
+    </div>
   </section>
 
   <section>
@@ -195,10 +203,12 @@
     $('upload').hidden = voice.way !== 'upload';
     $('sentence').textContent = sentence();
     $('sample').hidden = !voice.clip;
+    if (!voice.clip) $('check').hidden = true;
   }
 
-  // Any audio the browser can play becomes 24 kHz mono 16-bit WAV, at most 15 seconds, its loudest
-  // moment near full scale. A clip with no voice in it is refused, not made loud.
+  // Any audio the browser can play becomes 24 kHz mono 16-bit WAV, at most 15 seconds, at the
+  // level it was recorded, so the check hears whether it was faint or distorted; Boubou sets the
+  // level when it saves the voice. A clip with no voice in it is refused.
   async function toWav(blob) {
     const decoder = new AudioContext();
     const decoded = await decoder.decodeAudioData(await blob.arrayBuffer()).finally(() => decoder.close());
@@ -213,15 +223,46 @@
     samples.forEach((sample, i) => { samples[i] = sample - middle; });
     const peak = samples.reduce((loudest, sample) => Math.max(loudest, Math.abs(sample)), 0);
     if (peak < 0.01) throw new RangeError('Boubou heard no voice. Check the microphone or the clip, then try again.');
-    const gain = 0.9 / peak;
     const wav = new DataView(new ArrayBuffer(44 + samples.length * 2));
     const text = (at, value) => [...value].forEach((char, i) => wav.setUint8(at + i, char.charCodeAt(0)));
     text(0, 'RIFF'); wav.setUint32(4, 36 + samples.length * 2, true); text(8, 'WAVEfmt ');
     wav.setUint32(16, 16, true); wav.setUint16(20, 1, true); wav.setUint16(22, 1, true);
     wav.setUint32(24, RATE, true); wav.setUint32(28, RATE * 2, true); wav.setUint16(32, 2, true);
     wav.setUint16(34, 16, true); text(36, 'data'); wav.setUint32(40, samples.length * 2, true);
-    samples.forEach((sample, i) => wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample * gain)) * 32767, true));
+    samples.forEach((sample, i) => wav.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample)) * 32767, true));
     return { wav: new Blob([wav], { type: 'audio/wav' }), seconds: samples.length / RATE };
+  }
+
+  // Asks Boubou what it hears in the take, and shows what to fix before saving. `words` are the
+  // words the take should say, for a recording of the sentence. Returns what Boubou heard, unless
+  // the person gave something else meanwhile.
+  async function review(turn, words = '') {
+    $('check').hidden = false;
+    $('verdict').textContent = 'Checking the recording…';
+    $('verdict').className = 'muted';
+    $('advice').replaceChildren();
+    $('heard').hidden = true;
+    const form = new FormData();
+    form.append('audio', voice.clip, 'take.wav');
+    form.append('words', words);
+    const found = await (await api('/check', { method: 'POST', body: form })).json();
+    if (turn !== choice) return null;
+    const fine = !found.advice.length;
+    $('verdict').textContent = fine ? 'It should clone well.' : 'Before you save, this would make the clone better:';
+    $('verdict').className = fine ? 'good' : '';
+    $('advice').replaceChildren(...found.advice.map((line) => {
+      const item = document.createElement('li');
+      item.textContent = line;
+      return item;
+    }));
+    $('heard').hidden = !found.differ;
+    $('heard').onclick = () => {
+      voice.words = found.text;
+      $('heard').hidden = true;
+      $('verdict').textContent = 'Boubou will keep the words it heard.';
+      $('advice').replaceChildren(...[...$('advice').children].filter((item) => !item.textContent.startsWith('Boubou heard other words')));
+    };
+    return found;
   }
 
   function keep(clip) {
@@ -282,6 +323,7 @@
       $('microphone').textContent = 'Record again';
       $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below, then save it.`;
       keep(clip);
+      await review(turn, words).catch((error) => turn === choice && say(error.message, 'bad'));
     };
     recorder.start();
     $('microphone').textContent = 'Stop';
@@ -298,11 +340,10 @@
     try {
       const clip = await toWav(file);
       if (clip.seconds < 3) throw new RangeError('The clip is too short. Choose one with at least 3 seconds of speech.');
-      const form = new FormData();
-      form.append('audio', clip.wav, 'clip.wav');
-      const heard = await (await api('/transcribe', { method: 'POST', body: form })).json();
       if (turn !== choice) return;
       keep(clip);
+      const heard = await review(turn);
+      if (!heard) return;
       $('words').value = voice.words = heard.text;
       if (heard.language) voice.language = heard.language;
       show();
