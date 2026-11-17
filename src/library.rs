@@ -14,8 +14,29 @@ use std::{
     sync::OnceLock,
 };
 
-/// The model the commands for a voice start, which reads cloned voices.
-pub const MODEL: &str = "qwen3-tts:0.6b-customvoice";
+/// The Qwen3-TTS entry the commands for a voice start, and whose size of Base weights reads
+/// cloned voices on this computer: see `model_for`.
+pub fn model() -> &'static str {
+    static MODEL: OnceLock<&'static str> = OnceLock::new();
+    MODEL.get_or_init(|| model_for(crate::onboarding::memory()))
+}
+
+/// The entry for a computer with `memory` bytes: the 1.7B one, whose clones misread fewer words
+/// and cope better with a recording that does not match its words, where its conversation and
+/// Base weights fit with room to spare; else the 0.6B one, which clones as alike.
+fn model_for(memory: Option<u64>) -> &'static str {
+    const LARGE: &str = "qwen3-tts:1.7b-customvoice";
+    const SMALL: &str = "qwen3-tts:0.6b-customvoice";
+    // The 1.7B Base weights take about 3 GiB beside the conversation's estimate, and 2 GiB more
+    // keeps the rest of the computer usable, as the checklist asks.
+    let needs = crate::profiles::Model::Modular(LARGE)
+        .memory_gib()
+        .map(|gib| (gib + 3 + 2) << 30);
+    match (memory, needs) {
+        (Some(memory), Some(needs)) if memory >= needs => LARGE,
+        _ => SMALL,
+    }
+}
 /// The file in Boubou's data folder that keeps the folder a person chose.
 const SETTING: &str = "voices-folder";
 /// The longest file an imported zip may hold: 30 seconds of 48 kHz stereo 32-bit audio is 12 MB.
@@ -496,7 +517,7 @@ fn launcher(name: &str, elsewhere: &str) -> String {
         Some(package) => format!("npx --yes {package}"),
         None => program.to_owned(),
     };
-    let talk = format!("{program} run {MODEL} --voice {name}{elsewhere}");
+    let talk = format!("{program} run {} --voice {name}{elsewhere}", model());
     let talk = shlex::try_quote(&talk).map_or_else(|_| talk.clone(), |quoted| quoted.into_owned());
     format!(
         "{MADE} {name}. Double-click it to talk with {name}; close the window to stop.\n\
@@ -683,11 +704,11 @@ pub fn commands(name: &str, elsewhere: &str) -> [(&'static str, String); 3] {
     [
         (
             "Talk",
-            format!("{program} run {MODEL} --voice {name}{elsewhere}"),
+            format!("{program} run {} --voice {name}{elsewhere}", model()),
         ),
         (
             "Share",
-            format!("{program} serve {MODEL} --voice {name}{elsewhere}"),
+            format!("{program} serve {} --voice {name}{elsewhere}", model()),
         ),
         (
             "API",
@@ -994,6 +1015,17 @@ mod tests {
     }
 
     #[test]
+    fn computers_with_room_clone_with_the_larger_model() {
+        let gib = |gib: u64| Some(gib << 30);
+        assert_eq!(model_for(gib(128)), "qwen3-tts:1.7b-customvoice");
+        assert_eq!(model_for(gib(24)), "qwen3-tts:1.7b-customvoice");
+        assert_eq!(model_for(gib(16)), "qwen3-tts:0.6b-customvoice");
+        assert_eq!(model_for(gib(8)), "qwen3-tts:0.6b-customvoice");
+        assert_eq!(model_for(None), "qwen3-tts:0.6b-customvoice");
+        assert!(commands("me", "")[0].1.contains(model()));
+    }
+
+    #[test]
     fn synced_folders_are_named() {
         let home = Path::new("/Users/someone");
         for folder in [
@@ -1203,7 +1235,7 @@ mod tests {
             .unwrap();
         assert!(ran.success());
         let flag = format!(" --voices-dir {}", quote(folder));
-        let talk = format!("boubou run {MODEL} --voice mother{flag}");
+        let talk = format!("boubou run {} --voice mother{flag}", model());
         assert_eq!(
             fs::read_to_string(folder.join("shell.args")).unwrap(),
             format!("-lic|{talk}|")

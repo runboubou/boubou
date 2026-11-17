@@ -662,6 +662,11 @@ pub fn start(cache: &Path) -> Result<Choice> {
     }
 }
 
+/// This computer's memory, in bytes.
+pub fn memory() -> Option<u64> {
+    Some(Device::here(0).ok()?.memory)
+}
+
 /// What a command typed by hand tells its checklist: this computer's memory against the model's
 /// estimate, before anything is downloaded.
 pub fn fit(model: Model, cache: &Path) -> Option<String> {

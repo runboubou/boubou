@@ -66,8 +66,9 @@ ORIGINALS = [
     ("hexgrad/Kokoro-82M", "f3ff3571791e39611d31c381e3a41a3af07b4987", {"README.md"}, "kokoro:82m"),
 ]
 # Qwen3-TTS Base weights clone a voice; CustomVoice weights cannot. A Qwen3-TTS entry reads a cloned
-# voice with the Base weights of its own size, and `boubou clone` with the 0.6B ones and Whisper, which
-# writes down what an uploaded clip says. Nobody else downloads them.
+# voice with the Base weights of its own size. `boubou clone` holds Whisper, which writes down what an
+# uploaded clip says, and adds the Base weights of the size Boubou chose for the computer. Nobody else
+# downloads them.
 CLONE = "qwen3-tts:clone"
 BASE = [
     ("0.6B", "4e44ed4bcee28a0f89a493e07bde16e6dccd43eb", "5d83992436eae1d760afd27aff78a71d676296fc"),
@@ -348,12 +349,11 @@ def with_cloning(files):
              for file in files]
     for size, revision, original in BASE:
         profile = f"qwen3-tts:{size.lower()}-base"
-        profiles = [profile, CLONE] if size == "0.6B" else [profile]
         name, repo = f"Qwen3-TTS-12Hz-{size}-Base-6bit", f"Qwen/Qwen3-TTS-12Hz-{size}-Base"
         for file in [*snapshot(f"mlx-community/{name}", revision, f"hub/models--mlx-community--{name}/snapshots/{revision}", profile),
                      *snapshot(repo, original, f"licenses/{repo}/{original}", profile, {"README.md"})]:
             del file["profile"]
-            files.append({**file, "profiles": profiles})
+            files.append({**file, "profiles": [profile]})
     return files
 
 

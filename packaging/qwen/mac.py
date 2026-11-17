@@ -193,7 +193,8 @@ run = voice.run
 
 def clone(profile, cache, manifest, *extra):
     """Serve the page that clones a voice: from a recording of a sentence the page shows, or from a
-    clip whose words Whisper writes down. Each voice stays in BOUBOU_VOICES, on this Mac.
+    clip whose words Whisper writes down, which `profile` holds. The Base weights that BOUBOU_CLONER
+    holds speak each voice. Each voice stays in BOUBOU_VOICES, on this Mac.
 
     `boubou voices`, at BOUBOU_BIN, keeps the folder: it lists it, moves it, exports and imports.
     This writes down what each recording dropped into the folder says."""
@@ -232,7 +233,8 @@ def clone(profile, cache, manifest, *extra):
                 if not (whisper / path.name).exists():
                     (whisper / path.name).symlink_to(path)
         hear = ears(str(whisper))
-        (base,) = (path for name, path in found.items() if name.startswith("Qwen3-TTS"))
+        # The Base weights of the size Boubou chose for this computer, BOUBOU_CLONER's.
+        (base,) = (path for name, path in snapshots(manifest, CLONER).items() if name.startswith("Qwen3-TTS"))
         speak = mouth(str(cache / base))
         page = (HERE / "clone.html").read_text()
         app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
