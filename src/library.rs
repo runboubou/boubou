@@ -295,6 +295,22 @@ fn synced_in(folder: &Path, home: &Path) -> bool {
     .any(|synced| folder.starts_with(home.join(synced)))
 }
 
+/// `folder` as a person reads it, with their home folder as `~`.
+fn shown(folder: &Path) -> String {
+    dirs::home_dir().map_or_else(
+        || folder.display().to_string(),
+        |home| shown_in(folder, &home),
+    )
+}
+
+fn shown_in(folder: &Path, home: &Path) -> String {
+    match folder.strip_prefix(home) {
+        Ok(inside) if inside.as_os_str().is_empty() => "~".into(),
+        Ok(inside) => format!("~/{}", inside.display()),
+        Err(_) => folder.display().to_string(),
+    }
+}
+
 /// A file's name without its extension, and the extension in lowercase.
 fn parts(path: &Path) -> Option<(String, String)> {
     let name = path.file_name()?.to_str()?;
@@ -529,13 +545,17 @@ fn quote(path: &Path) -> String {
 /// What a command adds to find voices in `folder`: nothing for the folder Boubou keeps them in,
 /// or `--voices-dir` for a folder one command chose.
 fn elsewhere(folder: &Path) -> String {
-    let same = |a: &Path, b: &Path| match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    };
     match data() {
         Ok(data) if same(&kept(&data), folder) => String::new(),
         _ => format!(" --voices-dir {}", quote(folder)),
+    }
+}
+
+/// Whether two paths name one folder.
+fn same(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 
@@ -809,6 +829,9 @@ pub fn listing(folder: &Path) -> Value {
         .collect();
     json!({
         "folder": folder,
+        "shown": shown(folder),
+        // The folder Boubou keeps voices in unless a person chose another: its data folder.
+        "default": data().is_ok_and(|data| same(&data.join("voices"), folder)),
         "synced": synced(folder),
         "voices": voices,
         "unheard": scan.unheard,
@@ -1113,6 +1136,20 @@ mod tests {
         assert_eq!(record["terms"], NOTICE);
         assert_eq!(record["via"], "terminal");
         assert!(record["accepted_unix"].as_u64().unwrap() > 1_700_000_000);
+    }
+
+    #[test]
+    fn folders_are_shown_from_home() {
+        let home = Path::new("/Users/ana");
+        let support = home.join("Library/Application Support/boubou/voices");
+        assert_eq!(
+            shown_in(&support, home),
+            "~/Library/Application Support/boubou/voices"
+        );
+        assert_eq!(shown_in(home, home), "~");
+        assert_eq!(shown_in(Path::new("/Volumes/x"), home), "/Volumes/x");
+        // Another person's home is not this one.
+        assert_eq!(shown_in(Path::new("/Users/anabel"), home), "/Users/anabel");
     }
 
     #[test]

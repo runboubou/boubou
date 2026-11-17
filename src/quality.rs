@@ -152,12 +152,35 @@ pub fn advice(measure: &Measure, words: Option<(&str, &str)>) -> Vec<String> {
     advice
 }
 
+/// What is already right about a recording, beside the `advice` on what to fix: the page shows
+/// both, so the person sees what was checked.
+pub fn fine(measure: &Measure, words: Option<(&str, &str)>) -> Vec<String> {
+    let mut fine = Vec::new();
+    if measure.speech >= SPEECH {
+        fine.push(format!("{:.1} seconds of speech", measure.speech));
+    }
+    if measure.level >= FAINT && measure.clipped <= DISTORTED {
+        fine.push("Volume is good, no clipping".into());
+    }
+    if measure.level >= FAINT && measure.level - measure.noise >= CLEAR {
+        fine.push("Quiet behind the voice".into());
+    }
+    if let Some((words, heard)) = words
+        && !words.trim().is_empty()
+        && alike(words, heard) >= SAME
+    {
+        fine.push("The words match the sentence".into());
+    }
+    fine
+}
+
 /// `boubou voices --check`: says whether a recording will clone well.
 pub fn command(path: &Path, words: Option<&str>, heard: Option<&str>, json: bool) -> Result<()> {
     let measure =
         measure(fs::File::open(path).with_context(|| format!("Cannot open {}", path.display()))?)?;
     let words = words.zip(Some(heard.unwrap_or_default()));
     let advice = advice(&measure, words);
+    let fine = fine(&measure, words);
     // Whether the page should offer the words Whisper heard instead.
     let differ =
         words.is_some_and(|(words, heard)| !words.trim().is_empty() && alike(words, heard) < SAME);
@@ -175,6 +198,7 @@ pub fn command(path: &Path, words: Option<&str>, heard: Option<&str>, json: bool
             "level": level,
             "noise": noise,
             "clipped": clipped,
+            "fine": fine,
             "advice": advice,
             "differ": differ,
         });
@@ -246,6 +270,14 @@ mod tests {
         assert!(measure.noise < -60.0, "{measure:?}");
         assert_eq!(measure.clipped, 0.0);
         assert!(advice.is_empty(), "{advice:?}");
+        assert_eq!(
+            fine(&measure, None),
+            [
+                "8.0 seconds of speech",
+                "Volume is good, no clipping",
+                "Quiet behind the voice"
+            ]
+        );
     }
 
     #[test]
@@ -259,6 +291,15 @@ mod tests {
         says(take(3.0, 0.0003, 10.0), "distorted");
         says(take(0.3, 0.06, 10.0), "noise behind the voice");
         says(take(0.3, 0.0003, 2.0), "only 1.6 seconds");
+        // What is wrong is not also said to be fine.
+        let noisy = measure(take(0.3, 0.06, 10.0).as_slice()).unwrap();
+        assert_eq!(fine(&noisy, None).len(), 2);
+        let distorted = measure(take(3.0, 0.0003, 10.0).as_slice()).unwrap();
+        assert!(
+            !fine(&distorted, None)
+                .iter()
+                .any(|line| line.starts_with("Volume"))
+        );
         // Silence is faint and has no speech.
         let (_, advice) = checked(take(0.0, 0.0, 0.0));
         assert_eq!(advice.len(), 2, "{advice:?}");
@@ -301,6 +342,10 @@ mod tests {
         let other = advice(&clear, Some((say, " Hello, is this thing on? ")));
         assert_eq!(other.len(), 1);
         assert!(other[0].starts_with("Boubou heard other words: “Hello, is this thing on?”"));
+        assert!(
+            fine(&clear, Some((say, say))).contains(&"The words match the sentence".to_owned())
+        );
+        assert_eq!(fine(&clear, Some((say, "Hello."))).len(), 3);
         // Without words to say, as for an uploaded clip, any words will do.
         assert!(advice(&clear, Some(("", "Anything."))).is_empty());
     }

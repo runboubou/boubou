@@ -271,6 +271,7 @@ def clone(profile, cache, manifest, *extra):
     import soundfile
     import uvicorn
     from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import HTMLResponse, Response
     from mlx_audio.stt.generate import load_model as ears
     from mlx_audio.tts.utils import load_model as mouth
@@ -440,21 +441,21 @@ def clone(profile, cache, manifest, *extra):
             noncommercial = bool(known) and kind((None, None, known)) == "omnivoice"
             return {**found, "text": text, "language": known, "noncommercial": noncommercial}
 
-        @app.post("/voices")
-        async def save(audio: UploadFile, name: str = Form(), text: str = Form(), language: str = Form(),
-                       consent: str = Form(""), noncommercial: str = Form("")):
-            name, text = name.strip().lower(), " ".join(text.split())
+        def given(clip, name, text, language, consent=None, noncommercial=""):
+            """A voice as the page gives it: its recording at the level it is kept, at the rate the Base
+            weights read, after OmniVoice's terms when they read its language. `consent` and `name`
+            are checked when the voice is saved."""
             if kind((None, None, language)) == "omnivoice" and not library()["noncommercial_accepted"]:
                 if noncommercial != "yes":
                     raise HTTPException(400, "Tick the box to accept OmniVoice's noncommercial terms.")
                 accept()
-            if consent != "yes":
+            if consent is not None and consent != "yes":
                 raise HTTPException(400, "Confirm the voice is yours, or that you may use it.")
-            if not NAME.fullmatch(name) or name in SPEAKERS:
+            if name is not None and (not NAME.fullmatch(name) or name in SPEAKERS):
                 raise HTTPException(400, "Choose another name: lowercase letters and digits, not a built-in voice.")
             if not 0 < len(text) <= 500 or language not in WHISPER:
                 raise HTTPException(400, "Write what the voice says.")
-            clip = samples(await audio.read(), speak.sample_rate)
+            clip = samples(clip, speak.sample_rate)
             if not 3 <= len(clip) / speak.sample_rate <= 30:
                 raise HTTPException(400, "Give 3 to 30 seconds of voice.")
             # The page sends the take at the level it was recorded, so the check hears any
@@ -462,11 +463,32 @@ def clone(profile, cache, manifest, *extra):
             clip = clip - clip.mean()
             if np.abs(clip).max() < 0.01:
                 raise HTTPException(400, "Boubou heard no voice. Check the microphone or the clip, then try again.")
-            clip = clip * (0.9 / np.abs(clip).max())
+            return wav(clip * (0.9 / np.abs(clip).max()), speak.sample_rate)
+
+        @app.post("/voices")
+        async def save(audio: UploadFile, name: str = Form(), text: str = Form(), language: str = Form(),
+                       consent: str = Form(""), noncommercial: str = Form("")):
+            name, text = name.strip().lower(), " ".join(text.split())
+            recording = given(await audio.read(), name, text, language, consent, noncommercial)
             # The words last: a voice is listed once they are there.
-            keep(Path(CLONES, f"{name}.wav"), wav(clip, speak.sample_rate))
+            keep(Path(CLONES, f"{name}.wav"), recording)
             keep(Path(CLONES, f"{name}.json"), json.dumps({"text": text, "language": language}).encode())
             return {"name": name}
+
+        @app.post("/takes")
+        async def takes(audio: UploadFile, text: str = Form(), language: str = Form(), input: str = Form(),
+                        seed: int = Form(0), noncommercial: str = Form("")):
+            """A take of `input` in a voice the page has not saved yet, read from the recording as it
+            would be saved. Each `seed` reads it a little differently."""
+            text, line = " ".join(text.split()), " ".join(input.split())
+            if not 0 < len(line) <= 300:
+                raise HTTPException(400, "Type a sentence to hear.")
+            recording = given(await audio.read(), None, text, language, noncommercial=noncommercial)
+            with TemporaryDirectory(prefix="boubou-take-") as temp:
+                path = Path(temp, "voice.wav")
+                path.write_bytes(recording)
+                # Off the event loop: the page stays answerable while a take is read.
+                return await run_in_threadpool(read, (str(path), text, language), line, seed)
 
         @app.post("/voices/{name}/language")
         def relabel(name: str, request: dict):
@@ -532,16 +554,24 @@ def clone(profile, cache, manifest, *extra):
             accept()
             return library()
 
+        def read(clone, line, seed=None):
+            """`line` read aloud in `clone`, as a WAV; with `seed`, the same each time."""
+            import mlx.core as mx
+
+            reading = reader(clone)
+            with mlx:
+                if seed is not None:
+                    mx.random.seed(seed)
+                parts = [np.array(part.audio).reshape(-1) for part in reading.generate(
+                    text=line, ref_audio=clone[0], ref_text=clone[1], lang_code="auto")]
+            return Response(wav(np.concatenate(parts), reading.sample_rate), media_type="audio/wav")
+
         @app.post("/speech")
         def speech(request: dict):
             clone = cloned(request.get("voice"))
             if clone is None or not str(request.get("input", "")).strip():
                 raise HTTPException(404, "No voice has that name.")
-            reading = reader(clone)
-            with mlx:
-                parts = [np.array(part.audio).reshape(-1) for part in reading.generate(
-                    text=str(request["input"]), ref_audio=clone[0], ref_text=clone[1], lang_code="auto")]
-            return Response(wav(np.concatenate(parts), reading.sample_rate), media_type="audio/wav")
+            return read(clone, str(request["input"]))
 
         uvicorn.run(app, host=address.host, port=address.port, log_level="warning")
 

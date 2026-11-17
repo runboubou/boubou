@@ -7,70 +7,108 @@
 <style>
   :root {
     --page: #fafaf9; --card: #fff; --ink: #18181b; --muted: #71717a; --line: #e4e4e7;
-    --accent: #2563eb; --on-accent: #fff; --soft: #eff6ff; --bad: #b91c1c; --good: #15803d;
+    --accent: #5b47e0; --strong: #4a3bc2; --on-accent: #fff; --soft: #f1f0fb; --bad: #b91c1c; --warn: #b45309; --good: #15803d;
+    --code: #f4f4f5;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --page: #0b0b0c; --card: #161618; --ink: #f4f4f5; --muted: #a1a1aa; --line: #2e2e33;
-      --accent: #60a5fa; --on-accent: #0b0b0c; --soft: #172033; --bad: #f87171; --good: #4ade80;
+      --accent: #a597f5; --strong: #c3b9fa; --on-accent: #0b0b0c; --soft: #221d3d; --bad: #f87171; --warn: #fbbf24; --good: #4ade80;
+      --code: #222226;
     }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 640px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 20px; }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 16px 64px; display: grid; gap: 20px; }
   h1 { margin: 0; font-size: 1.6rem; font-weight: 600; }
-  h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
-  .step { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 10px; border-radius: 50%; background: var(--soft); color: var(--accent); font-size: .85rem; }
+  h2 { margin: 0; font-size: 1.15rem; font-weight: 600; display: flex; align-items: center; flex: 1; }
+  h3 { margin: 0; font-size: 1rem; font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .step { display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; margin-right: 14px; border-radius: 50%; background: var(--soft); color: var(--strong); font-size: .9rem; font-weight: 500; }
   p { margin: 0; }
   .muted { color: var(--muted); font-size: .92rem; }
-  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 14px; }
-  button, .file { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 14px; cursor: pointer; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; display: grid; gap: 16px; min-width: 0; }
+  section.waiting > :not(h2):not(.head) { opacity: .45; pointer-events: none; }
+  button, .file { font: inherit; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 16px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; justify-content: center; }
   button:hover, .file:hover { border-color: var(--muted); }
-  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { cursor: progress; opacity: .7; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, .file:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
   .primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .ways button[aria-pressed="true"], .languages button[aria-pressed="true"] { border: 2px solid var(--accent); color: var(--accent); background: var(--soft); }
+  .primary:hover { background: var(--strong); border-color: var(--strong); }
+  .icon { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .ways { display: flex; gap: 8px; }
+  .ways button { padding: 4px 16px; }
+  [aria-pressed="true"] { border-color: var(--accent); color: var(--strong); background: var(--soft); }
   .languages { display: flex; flex-wrap: wrap; gap: 6px; }
-  .languages button, .languages select { padding: 4px 10px; font-size: .9rem; }
-  .languages select { font: inherit; font-size: .9rem; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
-  .languages select.chosen { border: 2px solid var(--accent); color: var(--accent); background: var(--soft); }
-  blockquote { margin: 0; padding: 14px 16px; border-radius: 10px; background: var(--soft); font-size: 1.12rem; line-height: 1.6; }
+  .languages button, .languages select { padding: 3px 10px; font-size: .9rem; border-radius: 999px; }
+  .languages select { font: inherit; font-size: .9rem; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .languages select.chosen { border-color: var(--accent); color: var(--strong); background: var(--soft); }
+  blockquote { margin: 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--line); font: 1.25rem/1.5 ui-serif, Georgia, "Songti SC", serif; }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .recording { background: var(--bad); border-color: var(--bad); color: #fff; }
-  .level { flex: 1; min-width: 80px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .level { flex: 1; min-width: 80px; max-width: 240px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
   .level span { display: block; height: 100%; width: 0; background: var(--good); transition: width .08s linear; }
-  input[type="text"], textarea { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--page); color: var(--ink); }
+  #time { font-variant-numeric: tabular-nums; }
+  input[type="text"], textarea { font: inherit; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: var(--card); color: var(--ink); }
   textarea { min-height: 84px; resize: vertical; }
+  #line { font-size: 1.1rem; }
   input[type="file"] { position: absolute; opacity: 0; width: 1px; }
-  .name { flex: 1; min-width: 160px; }
-  audio { width: 100%; }
   label.consent { display: flex; gap: 10px; align-items: flex-start; }
-  label.consent input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--accent); }
-  #status:empty, #archive:empty { display: none; }
+  label.consent input { margin-top: 4px; width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+  #status:empty, #archive:empty, #heard-status:empty, #saved:empty { display: none; }
   .bad { color: var(--bad); } .good { color: var(--good); }
-  code, .command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
-  .command { display: flex; gap: 8px; align-items: center; background: #18181b; color: #f4f4f5; border-radius: 10px; padding: 10px 12px; }
-  .command span { flex: 1; overflow-wrap: anywhere; }
-  .command button { background: none; color: #f4f4f5; border-color: #52525b; padding: 2px 10px; font-size: .85rem; }
   ul { list-style: none; margin: 0; padding: 0; }
-  li { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
-  li:first-child { border-top: 0; }
-  li b { flex: 1; font-weight: 600; }
-  #voices li { flex-wrap: wrap; }
-  li button { padding: 4px 10px; font-size: .9rem; }
-  .where { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .where code { flex: 1 1 100%; overflow-wrap: anywhere; }
+  #checks { display: grid; gap: 4px; }
+  #checks li { display: flex; gap: 12px; align-items: flex-start; }
+  #checks li::before { content: "✓"; color: var(--good); width: 18px; flex: none; text-align: center; }
+  #checks li.warn::before { content: "⚠"; color: var(--warn); }
+  .takes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .take { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 4px 6px 4px 4px; min-width: 0; }
+  .take > button:first-child { border: 0; flex: 1; justify-content: flex-start; padding: 6px 12px; min-width: 0; }
+  .name { flex: 0 1 280px; min-width: 160px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  code, .command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88rem; }
+  .command { display: flex; gap: 8px; align-items: flex-start; background: var(--code); border-radius: 8px; padding: 8px 10px; }
+  .command span { flex: 1; overflow-wrap: anywhere; }
+  .command button { padding: 0 8px; font-size: .8rem; border-radius: 6px; font-family: system-ui, sans-serif; }
+  details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  details[open] summary { margin-bottom: 8px; }
+  #voices li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-top: 1px solid var(--line); }
+  #voices li:first-child { border-top: 0; }
+  #voices li b { font-weight: 600; }
+  #voices .tools { margin-left: auto; display: flex; gap: 2px; }
+  #voices .tools button { border: 0; padding: 6px; background: none; }
+  #voices .tools button:hover { background: var(--soft); }
+  #voices .tools .use { padding: 4px 10px; font-size: .9rem; border: 1px solid var(--line); margin-right: 6px; }
+  #attention li { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .where { display: flex; gap: 6px 10px; align-items: baseline; flex-wrap: wrap; }
+  .where button { border: 0; padding: 0; background: none; color: var(--strong); font-size: .92rem; }
+  .where button:hover { text-decoration: underline; }
   .warning { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bad); color: var(--bad); }
-  #attention li { display: grid; gap: 2px; }
-  #check { display: grid; gap: 8px; }
-  #advice li { display: list-item; list-style: disc; margin-left: 20px; padding: 2px 0; border: 0; color: var(--bad); }
-  #heard { justify-self: start; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; border: 1px solid var(--bad); color: var(--bad); }
+  .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: .8rem; border: 1px solid var(--bad); color: var(--bad); }
   .terms { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--bad); border-radius: 10px; }
   .terms a { color: inherit; }
-  select.relabel { font: inherit; font-size: .85rem; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--muted); padding: 2px 6px; max-width: 12rem; }
+  select.relabel { font: inherit; font-size: .9rem; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--muted); padding: 2px 4px; max-width: 12rem; }
+  select.relabel:hover { border-color: var(--line); }
   [hidden] { display: none !important; }
+  @media (max-width: 560px) {
+    section { padding: 18px 16px; }
+    .takes { grid-template-columns: 1fr; }
+    .head button, .head .file { padding: 6px 12px; }
+    blockquote { font-size: 1.1rem; }
+  }
 </style>
+<svg width="0" height="0" style="position: absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-mac" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 10l3 2-3 2M12 15h4"/></symbol>
+  <symbol id="i-app" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+</svg>
 <main>
   <header>
     <h1>Clone a voice</h1>
@@ -78,76 +116,113 @@
   </header>
   <p class="warning synced" hidden></p>
 
-  <section>
-    <h2><span class="step">1</span>Give a voice</h2>
-    <div class="ways">
-      <button type="button" data-way="record" aria-pressed="true">Record</button>
-      <button type="button" data-way="upload" aria-pressed="false">Upload a clip</button>
+  <section id="give">
+    <div class="head">
+      <h2><span class="step">1</span>Give a voice</h2>
+    </div>
+    <div class="row" style="justify-content: space-between">
+      <div class="ways" role="group" aria-label="How to give a voice">
+        <button type="button" data-way="record" aria-pressed="true">Record</button>
+        <button type="button" data-way="upload" aria-pressed="false">Upload a clip</button>
+      </div>
     </div>
     <div class="languages" role="group" aria-label="Language">
       <select id="more" aria-label="More languages"><option value="">More languages…</option></select>
     </div>
-    <div id="record">
-      <div style="display: grid; gap: 12px">
-        <p class="muted">Read this aloud, in your own natural voice:</p>
-        <blockquote id="sentence" dir="auto"></blockquote>
-        <div class="row">
-          <button type="button" class="primary" id="microphone">Record</button>
-          <span class="muted" id="time">Up to 15 seconds</span>
-          <div class="level" id="level" hidden><span></span></div>
-        </div>
+    <div id="record" style="display: grid; gap: 14px">
+      <p class="muted">Read this aloud, in your own natural voice:</p>
+      <blockquote id="sentence" dir="auto"></blockquote>
+      <div class="row">
+        <button type="button" class="primary" id="microphone"><svg class="icon"><use href="#i-mic"/></svg><span>Record</span></button>
+        <span class="muted" id="time">Up to 0:15</span>
+        <div class="level" id="level" hidden><span></span></div>
       </div>
     </div>
-    <div id="upload" hidden>
-      <div style="display: grid; gap: 12px">
-        <div class="row">
-          <label class="file"><input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav">Choose an audio file</label>
-          <span class="muted" id="chosen">One person speaking, about 10 seconds. Boubou uses the first 15.</span>
-        </div>
-        <label for="words" class="muted">What it says. Whisper writes it down; fix any mistakes.</label>
-        <textarea id="words"></textarea>
-        <div class="row" id="spoken-row" hidden>
-          <label for="spoken" class="muted">Language it speaks</label>
-          <select id="spoken" class="relabel"></select>
-        </div>
+    <div id="upload" style="display: grid; gap: 12px" hidden>
+      <div class="row">
+        <label class="file"><input type="file" id="file" accept="audio/*,.m4a,.mp3,.wav"><svg class="icon"><use href="#i-up"/></svg>Choose an audio file</label>
+        <span class="muted" id="chosen">One person speaking, about 10 seconds. Boubou uses the first 15.</span>
       </div>
+      <div class="row" id="spoken-row" hidden>
+        <label for="spoken" class="muted">Language it speaks</label>
+        <select id="spoken" class="relabel" style="border-color: var(--line)"></select>
+      </div>
+      <label for="words" class="muted">What it says. Whisper writes it down; fix any mistakes.</label>
+      <textarea id="words" dir="auto"></textarea>
     </div>
-    <audio id="sample" controls hidden></audio>
-    <div id="check" hidden>
-      <p id="verdict"></p>
-      <ul id="advice"></ul>
-      <button type="button" id="heard" hidden>Keep the words Boubou heard</button>
+    <ul id="checks" aria-live="polite" hidden></ul>
+    <div class="row" id="decide" hidden>
+      <button type="button" id="again">Record again</button>
+      <button type="button" id="anyway">Use anyway</button>
     </div>
-  </section>
-
-  <section>
-    <h2><span class="step">2</span>Name it and save</h2>
-    <label class="consent"><input type="checkbox" id="consent"><span>This is my own voice, or I have permission to use it.</span></label>
+    <button type="button" id="heard" style="justify-self: start" hidden>Keep the words Boubou heard</button>
     <label class="consent terms" id="noncommercial-box" hidden><input type="checkbox" id="noncommercial"><span>Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.</span></label>
-    <div class="row">
-      <input type="text" class="name" id="name" placeholder="mom" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Name">
-      <button type="button" class="primary" id="save">Save voice</button>
-    </div>
     <p id="status" role="status"></p>
   </section>
 
-  <section id="use" hidden>
-    <h2>Use <span class="named"></span></h2>
-    <div class="row" id="launcher" hidden>
-      <p style="flex: 1">Double-click <b id="launcher-file"></b> in your voices folder to talk with it. No typing needed.</p>
-      <button type="button" id="reveal">Show in Finder</button>
+  <section id="hear" class="waiting">
+    <div class="head">
+      <h2><span class="step">2</span>Hear it</h2>
     </div>
-    <p class="muted">Or type a command:</p>
-    <div id="commands" style="display: grid; gap: 10px"></div>
-    <p class="muted">In an app's voice setting, while it is shared, type <b class="named"></b>.</p>
+    <input type="text" id="line" dir="auto" maxlength="300" aria-label="A sentence for the new voice to say" autocomplete="off">
+    <div class="takes" id="takes"></div>
+    <div class="row">
+      <button type="button" id="original"><svg class="icon"><use href="#i-play"/></svg>Your recording</button>
+    </div>
+    <p class="muted" id="hear-note"></p>
+    <p id="heard-status" role="status"></p>
+  </section>
+
+  <section id="save-step" class="waiting">
+    <div class="head">
+      <h2><span class="step">3</span>Save</h2>
+    </div>
+    <div class="row" style="gap: 16px">
+      <input type="text" class="name" id="name" placeholder="me" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Name">
+      <label class="consent"><input type="checkbox" id="consent"><span>This is my voice, or I have permission to use it</span></label>
+    </div>
+    <div class="row">
+      <button type="button" class="primary" id="save">Save voice</button>
+    </div>
+    <p id="saved" role="status"></p>
+  </section>
+
+  <section id="use" hidden>
+    <div class="head">
+      <h2><span class="step">4</span>Use <span class="named" style="margin-left: .3em"></span></h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <h3><svg class="icon"><use href="#i-phone"/></svg>Talk on your phone</h3>
+        <p class="muted">Run this, then scan the QR code it shows with your phone's camera. The phone answers in this voice, on the same Wi-Fi.</p>
+        <div class="command" id="share"></div>
+      </div>
+      <div class="card">
+        <h3><svg class="icon"><use href="#i-mac"/></svg>Talk on this Mac</h3>
+        <div id="launcher" style="display: grid; gap: 8px" hidden>
+          <p class="muted">Double-click <b id="launcher-file"></b> in your voices folder. No typing needed.</p>
+          <button type="button" id="reveal" style="justify-self: start; padding: 4px 12px">Show in Finder</button>
+        </div>
+        <p class="muted">Or type:</p>
+        <div class="command" id="talk"></div>
+      </div>
+      <div class="card">
+        <h3><svg class="icon"><use href="#i-app"/></svg>Use in an app</h3>
+        <p class="muted">While it is shared, set the app's voice to:</p>
+        <div class="command" id="field"></div>
+        <details>
+          <summary>Read a text aloud through the API</summary>
+          <div class="command" id="curl"></div>
+        </details>
+      </div>
+    </div>
   </section>
 
   <section id="yours" hidden>
-    <h2>Your voices</h2>
-    <div class="where">
-      <code id="folder"></code>
-      <button type="button" id="open">Open</button>
-      <button type="button" id="move">Change folder</button>
+    <div class="head">
+      <h2>Your voices</h2>
+      <label class="file"><input type="file" id="import" accept=".zip,application/zip"><svg class="icon"><use href="#i-up"/></svg>Import</label>
+      <button type="button" id="export"><svg class="icon"><use href="#i-down"/></svg>Export all</button>
     </div>
     <p class="warning synced" hidden></p>
     <div class="terms" id="unaccepted" hidden>
@@ -155,17 +230,19 @@
       <label class="consent"><input type="checkbox" id="accept-terms"><span>Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.</span></label>
       <button type="button" id="accept">Accept and let them speak</button>
     </div>
+    <p id="archive" role="status"></p>
     <ul id="voices"></ul>
-    <p class="muted">Put a WAV file of one voice in this folder to add it; rename the file to rename the voice.</p>
+    <p class="muted" id="none" hidden>No voices yet. The ones you save appear here.</p>
     <div id="needs" hidden>
       <p class="muted">These files need attention:</p>
       <ul id="attention"></ul>
     </div>
-    <div class="row">
-      <button type="button" id="export">Export all</button>
-      <label class="file"><input type="file" id="import" accept=".zip,application/zip">Import a zip file</label>
+    <div class="where muted">
+      <span id="folder"></span>
+      <button type="button" id="open">Open</button>
+      <button type="button" id="move">Change folder</button>
     </div>
-    <p id="archive" role="status"></p>
+    <p class="muted">Put a WAV file of one voice in this folder to add it; rename the file to rename the voice.</p>
   </section>
 </main>
 <script>
@@ -217,15 +294,12 @@
   const key = location.hash.slice(1);
   // What will be saved: the voice as a WAV, its words and language, and how it was given.
   // `noncommercial`: OmniVoice reads the language a clip speaks, so its terms come first.
-  const voice = { way: 'record', language: 'en', clip: null, words: '', noncommercial: false };
+  // `ready`: the check found nothing to fix, or the person chose to use it anyway.
+  const voice = { way: 'record', language: 'en', clip: null, words: '', noncommercial: false, ready: false };
   // The folder and what it holds, as Boubou last listed it.
-  let listed = { voices: [] };
-  // What each of a voice's commands is for.
-  const PURPOSES = {
-    Talk: 'Talk with it on this Mac:',
-    Share: 'Share it with phones and apps on this Wi-Fi:',
-    API: 'Read a text aloud through the API, while it is shared:',
-  };
+  let listed = { voices: [], languages: [] };
+  // Three takes of the sentence in "Hear it", each read with a seed of its own.
+  const TAKES = [1, 2, 3];
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
@@ -244,18 +318,50 @@
     return speaking(voice.language)?.[2] ?? LANGUAGES[0][2];
   }
 
+  function hello(language) {
+    return speaking(language)?.[3] ?? LANGUAGES[0][3];
+  }
+
+  function icon(name) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'icon');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `#i-${name}`);
+    svg.append(use);
+    return svg;
+  }
+
+  function button(label, onclick, symbol) {
+    const made = document.createElement('button');
+    made.type = 'button';
+    if (symbol) made.append(icon(symbol));
+    made.append(label);
+    made.onclick = onclick;
+    return made;
+  }
+
+  // Whether OmniVoice reads the voice being given, and its terms are still to accept.
+  function terms() {
+    return voice.noncommercial && !listed.noncommercial_accepted;
+  }
+
   function show() {
-    for (const button of document.querySelectorAll('[data-way]')) button.setAttribute('aria-pressed', button.dataset.way === voice.way);
-    for (const button of document.querySelectorAll('[data-language]')) button.setAttribute('aria-pressed', button.dataset.language === voice.language);
+    for (const choice of document.querySelectorAll('[data-way]')) choice.setAttribute('aria-pressed', choice.dataset.way === voice.way);
+    for (const chip of document.querySelectorAll('[data-language]')) chip.setAttribute('aria-pressed', chip.dataset.language === voice.language);
     const more = MORE.some(([code]) => code === voice.language);
     $('more').value = more ? voice.language : '';
     $('more').classList.toggle('chosen', more);
     $('record').hidden = voice.way !== 'record';
     $('upload').hidden = voice.way !== 'upload';
     $('sentence').textContent = sentence();
-    $('sample').hidden = !voice.clip;
-    $('noncommercial-box').hidden = !(voice.way === 'upload' && voice.noncommercial && !listed.noncommercial_accepted);
-    if (!voice.clip) $('check').hidden = true;
+    $('again').textContent = voice.way === 'record' ? 'Record again' : 'Choose another clip';
+    $('noncommercial-box').hidden = !(voice.clip && terms());
+    if (!voice.clip) { $('checks').hidden = true; $('decide').hidden = true; $('heard').hidden = true; }
+    for (const step of ['hear', 'save-step']) $(step).classList.toggle('waiting', !(voice.clip && voice.ready));
+    $('hear-note').textContent = voice.clip && voice.ready
+      ? 'Type any sentence, then play a take. Each take reads it a little differently; compare them with your recording.'
+      : 'Give a voice first.';
   }
 
   // Any audio the browser can play becomes 24 kHz mono 16-bit WAV, at most 15 seconds, at the
@@ -285,15 +391,27 @@
     return { wav: new Blob([wav], { type: 'audio/wav' }), seconds: samples.length / RATE };
   }
 
+  // Shows the check as lines: what is right, then what to fix. With something to fix, the person
+  // gives the voice again or uses it anyway.
+  function verdict(found) {
+    const lines = [...found.fine.map((line) => [line, '']), ...found.advice.map((line) => [line, 'warn'])];
+    $('checks').replaceChildren(...lines.map(([line, tone]) => Object.assign(document.createElement('li'), { textContent: line, className: tone })));
+    $('checks').hidden = false;
+    voice.ready = !found.advice.length;
+    $('decide').hidden = voice.ready;
+    show();
+  }
+
   // Asks Boubou what it hears in the take, and shows what to fix before saving. `words` are the
   // words the take should say, for a recording of the sentence. Returns what Boubou heard, unless
   // the person gave something else meanwhile.
   async function review(turn, words = '', language = '') {
-    $('check').hidden = false;
-    $('verdict').textContent = 'Checking the recording…';
-    $('verdict').className = 'muted';
-    $('advice').replaceChildren();
+    voice.ready = false;
+    $('checks').replaceChildren(Object.assign(document.createElement('li'), { textContent: 'Checking the recording…', className: 'muted' }));
+    $('checks').hidden = false;
+    $('decide').hidden = true;
     $('heard').hidden = true;
+    show();
     const form = new FormData();
     form.append('audio', voice.clip, 'take.wav');
     form.append('words', words);
@@ -301,28 +419,19 @@
     form.append('language', language);
     const found = await (await api('/check', { method: 'POST', body: form })).json();
     if (turn !== choice) return null;
-    const fine = !found.advice.length;
-    $('verdict').textContent = fine ? 'It should clone well.' : 'Before you save, this would make the clone better:';
-    $('verdict').className = fine ? 'good' : '';
-    $('advice').replaceChildren(...found.advice.map((line) => {
-      const item = document.createElement('li');
-      item.textContent = line;
-      return item;
-    }));
+    verdict(found);
     $('heard').hidden = !found.differ;
     $('heard').onclick = () => {
       voice.words = found.text;
+      verdict({ ...found, fine: [...found.fine, 'Boubou will keep the words it heard'], advice: found.advice.filter((line) => !line.startsWith('Boubou heard other words')) });
       $('heard').hidden = true;
-      $('verdict').textContent = 'Boubou will keep the words it heard.';
-      $('advice').replaceChildren(...[...$('advice').children].filter((item) => !item.textContent.startsWith('Boubou heard other words')));
     };
     return found;
   }
 
   function keep(clip) {
     voice.clip = clip.wav;
-    URL.revokeObjectURL($('sample').src);
-    $('sample').src = URL.createObjectURL(clip.wav);
+    forget();
     show();
   }
 
@@ -330,6 +439,10 @@
   // nothing changed since it began, with the words it began with.
   let choice = 0;
   let recorder;
+  function microphone(label) {
+    $('microphone').lastElementChild.textContent = label;
+  }
+
   async function record() {
     if (recorder) return recorder.stop();
     const turn = ++choice, words = sentence();
@@ -357,7 +470,7 @@
       const loudest = heard.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0);
       $('level').firstElementChild.style.width = `${Math.min(100, loudest * 250)}%`;
       const seconds = Math.floor((Date.now() - started) / 1000);
-      $('time').textContent = `0:${String(seconds).padStart(2, '0')} of about 0:10`;
+      $('time').textContent = `0:${String(seconds).padStart(2, '0')} / 0:${LONGEST}`;
       if (seconds >= LONGEST) recorder.stop();
     }, 100);
     recorder.onstop = async () => {
@@ -367,20 +480,20 @@
       recorder = null;
       $('level').hidden = true;
       $('microphone').classList.remove('recording');
-      $('microphone').textContent = 'Record';
-      $('time').textContent = 'Up to 15 seconds';
+      microphone('Record');
+      $('time').textContent = `Up to 0:${LONGEST}`;
       const clip = await toWav(new Blob(parts, { type: parts[0]?.type })).catch((error) => error);
       if (turn !== choice) return;
       if (clip instanceof Error) return say(clip.message, 'bad');
       if (clip.seconds < 3) return say('That was short. Record the whole sentence.', 'bad');
       voice.words = words;
-      $('microphone').textContent = 'Record again';
-      $('time').textContent = `${Math.round(clip.seconds)} seconds. Listen below, then save it.`;
+      microphone('Record again');
+      $('time').textContent = `${clip.seconds.toFixed(1)} seconds`;
       keep(clip);
       await review(turn, words).catch((error) => turn === choice && say(error.message, 'bad'));
     };
     recorder.start();
-    $('microphone').textContent = 'Stop';
+    microphone('Stop');
     $('microphone').classList.add('recording');
   }
 
@@ -401,7 +514,7 @@
       const heard = await review(turn);
       if (!heard) return;
       heardClip(heard);
-      say(heard.language ? 'Check the language and the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
+      say(heard.language ? 'Check the language and the words, then hear it.' : 'Choose the language the clip speaks, and check the words.');
     } catch (error) {
       if (turn === choice) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
     }
@@ -415,6 +528,8 @@
     voice.noncommercial = heard.noncommercial;
     $('spoken-row').hidden = false;
     $('spoken').value = heard.language || '';
+    $('line').value = hello(voice.language);
+    forget();
     show();
   }
 
@@ -424,7 +539,7 @@
     say('Listening again in that language…');
     try {
       const heard = await review(turn, '', $('spoken').value);
-      if (heard) { heardClip(heard); say('Check the words below, then save.'); }
+      if (heard) { heardClip(heard); say('Check the words, then hear it.'); }
     } catch (error) {
       if (turn === choice) say(error.message, 'bad');
     }
@@ -437,92 +552,143 @@
     return menu;
   }
 
+  // One player for the page: a new sound stops the last.
+  const player = new Audio();
+  function play(blob) {
+    URL.revokeObjectURL(player.src);
+    player.src = URL.createObjectURL(blob);
+    return player.play();
+  }
+
+  // Says, after a while, that a voice is waiting for its model to arrive.
+  let fetching;
+  function patience(language, where) {
+    clearTimeout(fetching);
+    // VoxCPM2 and OmniVoice read the languages Qwen3-TTS does not speak; Boubou gets them the first time.
+    if (!LANGUAGES.some(([code]) => code === language)) {
+      fetching = setTimeout(() => say('The first time a voice in this language speaks, Boubou gets its voice model (about 3 GB). This can take a few minutes.', '', where), 4000);
+    }
+  }
+
+  // The takes heard so far, by their sentence and seed; let go when the voice changes.
+  let takes = new Map();
+  function forget() {
+    takes = new Map();
+  }
+
+  // Reads the sentence in the box in the voice being given, with take `seed`, and plays it.
+  async function take(seed, control) {
+    const line = $('line').value.trim();
+    if (!line) return say('Type a sentence to hear.', 'bad', 'heard-status');
+    if (terms() && !$('noncommercial').checked) {
+      $('noncommercial-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return say('This language is read by OmniVoice: tick its noncommercial terms above first.', 'bad', 'heard-status');
+    }
+    if (voice.way === 'upload') voice.words = $('words').value.trim();
+    const known = `${seed}\n${voice.language}\n${voice.words}\n${line}`;
+    const label = control.lastChild.textContent;
+    control.disabled = true;
+    say('', '', 'heard-status');
+    try {
+      if (!takes.has(known)) {
+        control.lastChild.textContent = 'Reading…';
+        patience(voice.language, 'heard-status');
+        const form = new FormData();
+        form.append('audio', voice.clip, 'voice.wav');
+        for (const [field, value] of Object.entries({ text: voice.words, language: voice.language, input: line, seed, noncommercial: terms() ? 'yes' : '' })) form.append(field, value);
+        const turn = choice;
+        const spoken = await (await api('/takes', { method: 'POST', body: form })).blob();
+        if (turn !== choice) return;
+        takes.set(known, spoken);
+        if (terms()) await list();
+      }
+      await play(takes.get(known));
+    } catch (error) {
+      say(error.message, 'bad', 'heard-status');
+    } finally {
+      clearTimeout(fetching);
+      control.lastChild.textContent = label;
+      control.disabled = false;
+    }
+  }
+
+  $('takes').append(...TAKES.map((seed, i) => {
+    const holder = document.createElement('div');
+    holder.className = 'take';
+    const control = button(`Take ${i + 1}`, () => take(seed, control), 'play');
+    holder.append(control);
+    return holder;
+  }));
+  $('original').onclick = () => voice.clip && play(voice.clip);
+
   async function save() {
     const name = $('name').value.trim().toLowerCase();
     if (voice.way === 'upload') voice.words = $('words').value.trim();
-    if (!voice.clip) return say(voice.way === 'record' ? 'Record the sentence first.' : 'Choose a clip first.', 'bad');
-    if (!voice.words) return say('Write what the clip says.', 'bad');
-    if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad');
-    const terms = !$('noncommercial-box').hidden;
-    if (terms && !$('noncommercial').checked) return say('Tick the box to accept OmniVoice\'s noncommercial terms.', 'bad');
-    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as mom.', 'bad');
+    if (!voice.clip) return say(voice.way === 'record' ? 'Record the sentence first.' : 'Choose a clip first.', 'bad', 'saved');
+    if (!voice.ready) return say('Record again, or choose Use anyway.', 'bad', 'saved');
+    if (!voice.words) return say('Write what the clip says.', 'bad', 'saved');
+    const accepting = terms();
+    if (accepting && !$('noncommercial').checked) return say('Tick the box to accept OmniVoice\'s noncommercial terms.', 'bad', 'saved');
+    if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad', 'saved');
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as me.', 'bad', 'saved');
     if (listed.voices.some((kept) => kept.name === name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
     const form = new FormData();
     form.append('audio', voice.clip, 'voice.wav');
-    for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes', noncommercial: terms ? 'yes' : '' })) form.append(field, value);
+    for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes', noncommercial: accepting ? 'yes' : '' })) form.append(field, value);
     $('save').disabled = true;
-    say('Saving…');
+    say('Saving…', '', 'saved');
     try {
       await api('/voices', { method: 'POST', body: form });
-      say(`Saved as ${name}. Only this Mac has it.`, 'good');
+      say(`Saved as ${name}. Only this Mac has it.`, 'good', 'saved');
       await list();
       use(name);
-      hear(name, voice.language, $(`play-${name}`));
     } catch (error) {
-      say(error.message, 'bad');
+      say(error.message, 'bad', 'saved');
     } finally {
       $('save').disabled = false;
     }
   }
 
-  // Shows, after a while, that a voice is waiting for its model to arrive.
-  let fetching;
-  async function hear(name, language, button) {
-    const label = button.textContent;
-    button.textContent = 'Speaking…';
-    button.disabled = true;
+  // Plays a saved voice saying hello in its language.
+  async function hear(name, language, control) {
+    control.disabled = true;
     try {
-      const hello = speaking(language)?.[3] ?? LANGUAGES[0][3];
-      // VoxCPM2 reads the languages Qwen3-TTS does not speak; Boubou fetches it the first time.
-      if (!LANGUAGES.some(([code]) => code === language)) {
-        clearTimeout(fetching);
-        fetching = setTimeout(() => say('The first time a voice in this language speaks, Boubou gets its voice model (about 3 GB). This can take a few minutes.'), 4000);
-      }
-      const spoken = await api('/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: name, input: hello }) });
-      const player = new Audio(URL.createObjectURL(await spoken.blob()));
-      player.onended = () => URL.revokeObjectURL(player.src);
-      await player.play();
+      patience(language, 'archive');
+      const spoken = await api('/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: name, input: hello(language) }) });
+      await play(await spoken.blob());
     } catch (error) {
-      say(error.message, 'bad');
+      say(error.message, 'bad', 'archive');
     } finally {
       clearTimeout(fetching);
-      button.textContent = label;
-      button.disabled = false;
+      control.disabled = false;
     }
   }
 
-  function button(label, onclick) {
-    const made = document.createElement('button');
-    made.type = 'button';
-    made.textContent = label;
-    made.onclick = onclick;
-    return made;
+  // Fills `holder` with `command` and a button that copies it.
+  function copyable(holder, command) {
+    const text = document.createElement('span');
+    text.textContent = command;
+    const copy = button('Copy', async () => {
+      await navigator.clipboard.writeText(command);
+      copy.textContent = 'Copied';
+      setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+    });
+    holder.replaceChildren(text, copy);
   }
 
-  // The commands for a voice, each with a button that copies it.
+  // The ways to use a voice: on a phone, on this Mac, in an app.
   function use(name) {
     const chosen = listed.voices.find((kept) => kept.name === name);
     if (!chosen) return;
+    const command = (title) => chosen.commands.find((each) => each.title === title)?.command ?? '';
     for (const named of document.querySelectorAll('.named')) named.textContent = name;
     $('launcher').hidden = !chosen.launcher;
     $('launcher-file').textContent = `${name}.command`;
-    $('reveal').onclick = () => api(`/folder/open?name=${encodeURIComponent(name)}`, { method: 'POST' }).catch((error) => say(error.message, 'bad'));
-    $('commands').replaceChildren(...chosen.commands.flatMap(({ title, command }) => {
-      const purpose = document.createElement('p');
-      purpose.className = 'muted';
-      purpose.textContent = PURPOSES[title] ?? title;
-      const line = document.createElement('div');
-      const text = document.createElement('span');
-      line.className = 'command';
-      text.textContent = command;
-      const copy = button('Copy', async () => {
-        await navigator.clipboard.writeText(command);
-        copy.textContent = 'Copied';
-        setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
-      });
-      line.append(text, copy);
-      return [purpose, line];
-    }));
+    $('reveal').onclick = () => api(`/folder/open?name=${encodeURIComponent(name)}`, { method: 'POST' }).catch((error) => say(error.message, 'bad', 'archive'));
+    copyable($('share'), command('Share'));
+    copyable($('talk'), command('Talk'));
+    copyable($('field'), `"voice": "${name}"`);
+    copyable($('curl'), command('API'));
     $('use').hidden = false;
     $('use').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
@@ -559,21 +725,21 @@
     listed = found;
     if (!$('spoken').options.length) languages($('spoken'), voice.language);
     $('yours').hidden = false;
-    $('folder').textContent = found.folder;
+    $('folder').textContent = `Kept in ${found.shown}${found.default ? ', not in caches' : ''}.`;
+    $('folder').title = found.folder;
     for (const warning of document.querySelectorAll('.synced')) {
       warning.hidden = !found.synced;
       warning.textContent = 'This folder may sync to iCloud or another cloud service, so your voices may leave this Mac. Change folder to keep them here.';
     }
     if (found.noncommercial_accepted) waiting = null;
     $('unaccepted').hidden = found.noncommercial_accepted || !(waiting || found.voices.some((kept) => kept.noncommercial));
+    $('none').hidden = found.voices.length > 0;
     $('voices').replaceChildren(...found.voices.map(({ name, language, speaks: known, noncommercial }) => {
       const row = document.createElement('li');
       const title = document.createElement('b');
-      const speaks = document.createElement('span');
       title.textContent = name;
-      speaks.className = 'muted';
       // The voice's language, which the person can correct: Boubou writes its words down again.
-      const relabel = languages(Object.assign(document.createElement('select'), { className: 'relabel', title: `${name} speaks ${known}` }), language);
+      const relabel = languages(Object.assign(document.createElement('select'), { className: 'relabel', title: `${name} speaks ${known}. Choose another language if Boubou got it wrong.` }), language);
       relabel.setAttribute('aria-label', `Language ${name} speaks`);
       relabel.onchange = () => {
         const chosen = relabel.value;
@@ -589,19 +755,25 @@
         }
         speakIn(name, chosen, relabel.selectedOptions[0]?.textContent ?? chosen).catch(() => { relabel.value = language; });
       };
-      speaks.append(relabel);
-      if (noncommercial) {
-        const pill = Object.assign(document.createElement('span'), { className: 'pill', textContent: 'Noncommercial', title: 'Read by OmniVoice, licensed CC BY-NC 4.0' });
-        speaks.append(' ', pill);
-      }
-      const play = button('Play', () => hear(name, language, play));
-      play.id = `play-${name}`;
-      const remove = button('Delete', async () => {
+      row.append(title, relabel);
+      if (noncommercial) row.append(Object.assign(document.createElement('span'), { className: 'pill', textContent: 'Noncommercial', title: 'Read by OmniVoice, licensed CC BY-NC 4.0' }));
+      const tools = document.createElement('span');
+      tools.className = 'tools';
+      const listen = button('', () => hear(name, language, listen), 'play');
+      const keepIt = button('', () => download(name), 'down');
+      const remove = button('', async () => {
         if (!confirm(`Delete ${name} from this Mac?`)) return;
         await api(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch((error) => say(error.message, 'bad', 'archive'));
         list();
-      });
-      row.append(title, speaks, play, button('Use', () => use(name)), button('Export', () => download(name)), remove);
+      }, 'trash');
+      const using = button('Use', () => use(name));
+      using.className = 'use';
+      for (const [control, what] of [[listen, 'Play'], [keepIt, 'Export'], [remove, 'Delete']]) {
+        control.title = `${what} ${name}`;
+        control.setAttribute('aria-label', `${what} ${name}`);
+      }
+      tools.append(using, listen, keepIt, remove);
+      row.append(tools);
       return row;
     }));
     $('export').hidden = !found.voices.length;
@@ -616,6 +788,7 @@
       row.append(title, what);
       return row;
     }));
+    show();
   }
 
   async function list() {
@@ -635,31 +808,36 @@
   $('consent').checked = false;
   function choose(code) {
     voice.language = code;
+    $('line').value = hello(code);
     // Another sentence: a recording of the last one, finished or not, is let go.
-    if (voice.way === 'record') { choice++; voice.clip = null; recorder?.stop(); }
+    if (voice.way === 'record') { choice++; voice.clip = null; voice.ready = false; recorder?.stop(); }
     show();
   }
   $('more').before(...LANGUAGES.map(([code, label]) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.language = code;
-    button.textContent = label;
-    button.onclick = () => choose(code);
-    return button;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.dataset.language = code;
+    chip.textContent = label;
+    chip.onclick = () => choose(code);
+    return chip;
   }));
   $('more').append(...MORE.map(([code, label]) => Object.assign(document.createElement('option'), { value: code, textContent: label })));
   $('more').onchange = () => $('more').value && choose($('more').value);
-  for (const button of document.querySelectorAll('[data-way]')) {
-    button.onclick = () => {
-      choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = ''; voice.noncommercial = false;
+  for (const way of document.querySelectorAll('[data-way]')) {
+    way.onclick = () => {
+      choice++; recorder?.stop(); voice.way = way.dataset.way; voice.clip = null; voice.ready = false; voice.words = ''; voice.noncommercial = false;
       // A language heard in a clip may have no sentence to record yet.
-      if (voice.way === 'record' && !speaking(voice.language)?.[2]) voice.language = 'en';
+      if (voice.way === 'record' && !speaking(voice.language)?.[2]) choose('en');
       show(); say('');
     };
   }
   $('microphone').onclick = record;
+  $('again').onclick = () => (voice.way === 'record' ? record() : $('file').click());
+  $('anyway').onclick = () => { voice.ready = true; $('decide').hidden = true; show(); $('line').focus(); };
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
+  $('words').oninput = forget;
   $('name').oninput = () => { $('name').value = $('name').value.toLowerCase().replace(/[^a-z0-9_-]/g, ''); };
+  $('line').onkeydown = (event) => { if (event.key === 'Enter') $('takes').querySelector('button').click(); };
   $('save').onclick = save;
   $('open').onclick = () => api('/folder/open', { method: 'POST' }).catch((error) => say(error.message, 'bad', 'archive'));
   $('move').onclick = async () => {
@@ -701,6 +879,7 @@
       $('import').value = '';
     }
   };
+  $('line').value = hello(voice.language);
   show();
   if (!key) say('This link is incomplete. Run boubou clone again.', 'bad');
   else list().catch((error) => say(error.message, 'bad'));
