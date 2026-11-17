@@ -151,7 +151,7 @@
     </div>
     <p class="warning synced" hidden></p>
     <div class="terms" id="unaccepted" hidden>
-      <p>Some voices here are in languages OmniVoice reads. They stay silent until you accept its terms.</p>
+      <p id="unaccepted-why">Some voices here are in languages OmniVoice reads. They stay silent until you accept its terms.</p>
       <label class="consent"><input type="checkbox" id="accept-terms"><span>Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.</span></label>
       <button type="button" id="accept">Accept and let them speak</button>
     </div>
@@ -229,7 +229,8 @@
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
-    if (response.status === 403) throw new Error('This page no longer has the right key. Run boubou clone again.');
+    // A wrong key comes back bare; a refusal with a reason, such as OmniVoice's terms, says why.
+    if (response.status === 403) throw new Error((await response.json().catch(() => ({}))).detail ?? 'This page no longer has the right key. Run boubou clone again.');
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? 'Boubou could not do that. Try again.');
     return response;
   }
@@ -539,6 +540,21 @@
     }
   }
 
+  // A language change that waits for OmniVoice's terms: the voice, its new language and its name.
+  let waiting = null;
+
+  // Gives a kept voice the language the person picked; Boubou writes its words down again.
+  async function speakIn(name, language, title) {
+    say(`Listening to ${name} again in that language…`, '', 'archive');
+    try {
+      render(await (await api(`/voices/${encodeURIComponent(name)}/language`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language }) })).json());
+      say(`${name} now speaks ${title}.`, 'good', 'archive');
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+      throw error;
+    }
+  }
+
   function render(found) {
     listed = found;
     if (!$('spoken').options.length) languages($('spoken'), voice.language);
@@ -548,7 +564,8 @@
       warning.hidden = !found.synced;
       warning.textContent = 'This folder may sync to iCloud or another cloud service, so your voices may leave this Mac. Change folder to keep them here.';
     }
-    $('unaccepted').hidden = found.noncommercial_accepted || !found.voices.some((kept) => kept.noncommercial);
+    if (found.noncommercial_accepted) waiting = null;
+    $('unaccepted').hidden = found.noncommercial_accepted || !(waiting || found.voices.some((kept) => kept.noncommercial));
     $('voices').replaceChildren(...found.voices.map(({ name, language, speaks: known, noncommercial }) => {
       const row = document.createElement('li');
       const title = document.createElement('b');
@@ -558,15 +575,19 @@
       // The voice's language, which the person can correct: Boubou writes its words down again.
       const relabel = languages(Object.assign(document.createElement('select'), { className: 'relabel', title: `${name} speaks ${known}` }), language);
       relabel.setAttribute('aria-label', `Language ${name} speaks`);
-      relabel.onchange = async () => {
-        say(`Listening to ${name} again in that language…`, '', 'archive');
-        try {
-          render(await (await api(`/voices/${encodeURIComponent(name)}/language`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language: relabel.value }) })).json());
-          say(`${name} now speaks ${relabel.selectedOptions[0]?.textContent ?? relabel.value}.`, 'good', 'archive');
-        } catch (error) {
+      relabel.onchange = () => {
+        const chosen = relabel.value;
+        const omnivoice = listed.languages.find(({ code }) => code === chosen)?.reader === 'OmniVoice';
+        // OmniVoice's terms come first: show them, and give the voice its language once accepted.
+        if (omnivoice && !listed.noncommercial_accepted) {
+          waiting = { name, language: chosen, title: relabel.selectedOptions[0]?.textContent ?? chosen };
           relabel.value = language;
-          say(error.message, 'bad', 'archive');
+          $('unaccepted-why').textContent = `OmniVoice reads ${waiting.title}. Accept its terms to give ${name} this language.`;
+          $('unaccepted').hidden = false;
+          $('unaccepted').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
         }
+        speakIn(name, chosen, relabel.selectedOptions[0]?.textContent ?? chosen).catch(() => { relabel.value = language; });
       };
       speaks.append(relabel);
       if (noncommercial) {
@@ -655,9 +676,11 @@
   $('export').onclick = () => download();
   $('accept').onclick = async () => {
     if (!$('accept-terms').checked) return say('Tick the box to accept OmniVoice\'s noncommercial terms.', 'bad', 'archive');
+    const then = waiting;
     try {
       render(await (await api('/noncommercial', { method: 'POST' })).json());
       say('Accepted. These voices can speak now.', 'good', 'archive');
+      if (then) await speakIn(then.name, then.language, then.title);
     } catch (error) {
       say(error.message, 'bad', 'archive');
     }
