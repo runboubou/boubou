@@ -332,9 +332,10 @@ fn language(id: &str) -> String {
 }
 
 /// The languages of the voices a voice list names, by the codes it gives them: the ten Qwen3-TTS
-/// speaks, then the twenty more VoxCPM2 reads cloned voices in, Dutch and Hindi first.
-/// Supertonic's are `profiles::SUPERTONIC_LANGUAGES`.
-pub const LANGUAGES: [(&str, &str); 30] = [
+/// speaks, then the twenty more VoxCPM2 reads cloned voices in, Dutch and Hindi first, then the
+/// seventy more Whisper hears, which OmniVoice reads. Supertonic's are
+/// `profiles::SUPERTONIC_LANGUAGES`.
+pub const LANGUAGES: [(&str, &str); 100] = [
     ("en", "English"),
     ("ja", "Japanese"),
     ("zh", "Chinese"),
@@ -365,21 +366,126 @@ pub const LANGUAGES: [(&str, &str); 30] = [
     ("th", "Thai"),
     ("tr", "Turkish"),
     ("vi", "Vietnamese"),
+    ("ca", "Catalan"),
+    ("uk", "Ukrainian"),
+    ("cs", "Czech"),
+    ("ro", "Romanian"),
+    ("hu", "Hungarian"),
+    ("ta", "Tamil"),
+    ("ur", "Urdu"),
+    ("hr", "Croatian"),
+    ("bg", "Bulgarian"),
+    ("lt", "Lithuanian"),
+    ("la", "Latin"),
+    ("mi", "Maori"),
+    ("ml", "Malayalam"),
+    ("cy", "Welsh"),
+    ("sk", "Slovak"),
+    ("te", "Telugu"),
+    ("fa", "Persian"),
+    ("lv", "Latvian"),
+    ("bn", "Bengali"),
+    ("sr", "Serbian"),
+    ("az", "Azerbaijani"),
+    ("sl", "Slovenian"),
+    ("kn", "Kannada"),
+    ("et", "Estonian"),
+    ("mk", "Macedonian"),
+    ("br", "Breton"),
+    ("eu", "Basque"),
+    ("is", "Icelandic"),
+    ("hy", "Armenian"),
+    ("ne", "Nepali"),
+    ("mn", "Mongolian"),
+    ("bs", "Bosnian"),
+    ("kk", "Kazakh"),
+    ("sq", "Albanian"),
+    ("gl", "Galician"),
+    ("mr", "Marathi"),
+    ("pa", "Punjabi"),
+    ("si", "Sinhala"),
+    ("sn", "Shona"),
+    ("yo", "Yoruba"),
+    ("so", "Somali"),
+    ("af", "Afrikaans"),
+    ("oc", "Occitan"),
+    ("ka", "Georgian"),
+    ("be", "Belarusian"),
+    ("tg", "Tajik"),
+    ("sd", "Sindhi"),
+    ("gu", "Gujarati"),
+    ("am", "Amharic"),
+    ("yi", "Yiddish"),
+    ("uz", "Uzbek"),
+    ("fo", "Faroese"),
+    ("ht", "Haitian Creole"),
+    ("ps", "Pashto"),
+    ("tk", "Turkmen"),
+    ("nn", "Norwegian Nynorsk"),
+    ("mt", "Maltese"),
+    ("sa", "Sanskrit"),
+    ("lb", "Luxembourgish"),
+    ("bo", "Tibetan"),
+    ("mg", "Malagasy"),
+    ("as", "Assamese"),
+    ("tt", "Tatar"),
+    ("haw", "Hawaiian"),
+    ("ln", "Lingala"),
+    ("ha", "Hausa"),
+    ("ba", "Bashkir"),
+    ("jw", "Javanese"),
+    ("su", "Sundanese"),
+    ("yue", "Cantonese"),
 ];
 
-/// VoxCPM2's weights, which read the voices cloned in languages Qwen3-TTS does not speak, from
-/// the recording and its words. A Qwen3-TTS conversation hands it those voices' sentences.
+/// VoxCPM2's weights, which read the voices cloned in the twenty languages after Qwen3-TTS's
+/// ten, from the recording and its words. A Qwen3-TTS conversation hands it those voices'
+/// sentences.
 pub const VOXCPM: &str = "voxcpm2:2b";
+/// OmniVoice's weights, the ones its own entry runs, which read the voices cloned in the other
+/// languages Whisper hears. Its model allows noncommercial use only, so its voices speak once
+/// the person accepted that (`library::accepted`).
+pub const OMNIVOICE: &str = "omnivoice:clone";
 
-/// Whether Qwen3-TTS reads a voice cloned in the language `speaks`, one of its ten; VoxCPM2
-/// reads the others.
-pub fn qwen_reads(speaks: &str) -> bool {
-    LANGUAGES[..10].iter().any(|(_, title)| *title == speaks)
+/// What reads a voice cloned in a language.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Reader {
+    /// Qwen3-TTS's Base weights, for its ten languages.
+    Qwen,
+    /// VoxCPM2, for the next twenty.
+    VoxCpm,
+    /// OmniVoice, for the rest, for noncommercial use only.
+    OmniVoice,
 }
 
-/// The voices cloned on this computer, by name, each with the language it speaks. A recording
-/// renamed in the folder is found by its new name.
+/// What reads a voice cloned in the language `speaks`.
+pub fn reader(speaks: &str) -> Reader {
+    match LANGUAGES.iter().position(|(_, title)| *title == speaks) {
+        Some(0..10) => Reader::Qwen,
+        Some(10..30) => Reader::VoxCpm,
+        _ => Reader::OmniVoice,
+    }
+}
+
+/// The voices cloned on this computer that can speak, by name, each with the language it speaks.
+/// A recording renamed in the folder is found by its new name. A voice OmniVoice reads speaks
+/// once the person accepted its noncommercial terms.
 pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
+    let accepted = library::accepted();
+    every_clone(cache)
+        .into_iter()
+        .filter(|(_, speaks)| speaks_now(speaks, accepted))
+        .collect()
+}
+
+/// Whether a voice in the language `speaks` can speak, once the person `accepted` OmniVoice's
+/// noncommercial terms or not.
+fn speaks_now(speaks: &str, accepted: bool) -> bool {
+    accepted || reader(speaks) != Reader::OmniVoice
+}
+
+/// Every voice cloned on this computer, whether it can speak yet or not.
+fn every_clone(cache: &Path) -> Vec<profiles::Voice> {
     let folder = library::folder(cache);
     // A folder Boubou cannot write to still lists the voices it holds.
     let _ = library::tidy(&folder);
@@ -387,6 +493,17 @@ pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
     voices
         .iter()
         .map(|voice| (voice.name.clone(), voice.speaks()))
+        .collect()
+}
+
+/// The voices cloned on this computer that wait for the person to accept OmniVoice's
+/// noncommercial terms.
+pub fn unaccepted(cache: &Path) -> Vec<String> {
+    let accepted = library::accepted();
+    let every = every_clone(cache).into_iter();
+    every
+        .filter(|(_, speaks)| !speaks_now(speaks, accepted))
+        .map(|(name, _)| name)
         .collect()
 }
 
@@ -406,16 +523,35 @@ fn cloner(id: &str, cache: &Path) -> Option<&'static str> {
     if id == CLONE {
         return base(library::model());
     }
-    let reads = || clones(cache).iter().any(|(_, speaks)| qwen_reads(speaks));
-    base(id).filter(|_| reads())
+    base(id).filter(|_| reads(cache, Reader::Qwen))
 }
 
-/// VoxCPM2, for a Qwen3-TTS entry or `boubou clone`, once a voice cloned in `cache` speaks a
-/// language Qwen3-TTS does not. The clone page fetches it when such a voice first speaks.
-fn voxcpm(id: &str, cache: &Path) -> Option<&'static str> {
+/// Whether a voice cloned in `cache` that can speak is read by `which`.
+fn reads(cache: &Path, which: Reader) -> bool {
+    clones(cache)
+        .iter()
+        .any(|(_, speaks)| reader(speaks) == which)
+}
+
+/// VoxCPM2 or OmniVoice, as `which` names, for a Qwen3-TTS entry or `boubou clone`, once a voice
+/// cloned in `cache` that can speak is read by it. The clone page fetches it when such a voice
+/// first speaks.
+fn other(which: Reader, id: &str, cache: &Path) -> Option<&'static str> {
+    let profile = match which {
+        Reader::VoxCpm => VOXCPM,
+        Reader::OmniVoice => OMNIVOICE,
+        Reader::Qwen => return None,
+    };
     let qwen = id == CLONE || base(id).is_some();
-    let other = || clones(cache).iter().any(|(_, speaks)| !qwen_reads(speaks));
-    (qwen && other()).then_some(VOXCPM)
+    (qwen && reads(cache, which)).then_some(profile)
+}
+
+fn voxcpm(id: &str, cache: &Path) -> Option<&'static str> {
+    other(Reader::VoxCpm, id, cache)
+}
+
+fn omnivoice(id: &str, cache: &Path) -> Option<&'static str> {
+    other(Reader::OmniVoice, id, cache)
 }
 
 /// What `GET /v1/audio/voices` answers for a model: the voices a text to read aloud can name,
@@ -544,6 +680,7 @@ fn owners(id: &str, voice: Option<&profiles::Voice>, cache: &Path) -> Vec<String
         .into_iter()
         .chain(cloner(id, cache).map(str::to_owned))
         .chain(voxcpm(id, cache).map(str::to_owned))
+        .chain(omnivoice(id, cache).map(str::to_owned))
         .chain(preset)
         .collect()
 }
@@ -681,16 +818,20 @@ pub fn run(
         .arg(id)
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"));
-    // The runner reads cloned voices with the Base weights or VoxCPM2 that preparing verified.
-    let (base, other) = (cloner(id, cache), voxcpm(id, cache));
-    if base.is_some() || other.is_some() {
+    // The runner reads cloned voices with the Base weights, VoxCPM2 or OmniVoice that preparing
+    // verified.
+    let readers = [
+        ("BOUBOU_CLONER", cloner(id, cache)),
+        ("BOUBOU_VOXCPM", voxcpm(id, cache)),
+        ("BOUBOU_OMNIVOICE", omnivoice(id, cache)),
+    ];
+    if readers.iter().any(|(_, profile)| profile.is_some()) {
         command.env("BOUBOU_VOICES", library::folder(cache));
     }
-    if let Some(base) = base {
-        command.env("BOUBOU_CLONER", base);
-    }
-    if let Some(other) = other {
-        command.env("BOUBOU_VOXCPM", other);
+    for (name, profile) in readers {
+        if let Some(profile) = profile {
+            command.env(name, profile);
+        }
     }
     // Later options replace earlier ones: the voice replaces the model's own speaker, and
     // pipeline options replace both.
@@ -777,9 +918,9 @@ fn speech(id: &str, voice: &profiles::Voice, cloned: &[profiles::Voice]) -> Vec<
         ]
     } else {
         // In its own language a speaker keeps its entry's way with languages; --language named
-        // any other. VoxCPM2 reads a voice in a language Qwen3-TTS does not speak, so only the
-        // language model is told it.
-        let other = cloned.contains(voice) && !qwen_reads(language);
+        // any other. VoxCPM2 or OmniVoice reads a voice in a language Qwen3-TTS does not speak,
+        // so only the language model is told it.
+        let other = cloned.contains(voice) && reader(language) != Reader::Qwen;
         told = other || !(profiles::VOICES.contains(&(name, language)) || cloned.contains(voice));
         let mut options = Vec::new();
         if !cloned.iter().any(|(clone, _)| clone == name) {
@@ -833,8 +974,9 @@ pub fn clone(cache: &Path, voices: &Path) -> Result<()> {
             "BOUBOU_CLONER",
             cloner(CLONE, cache).context("No Base weights clone here.")?,
         )
-        // Fetched by `boubou voices --prepare` when a voice it reads first speaks.
+        // Fetched by `boubou voices --prepare` when a voice they read first speaks.
         .env("BOUBOU_VOXCPM", VOXCPM)
+        .env("BOUBOU_OMNIVOICE", OMNIVOICE)
         .env("BOUBOU_BIN", std::env::current_exe()?)
         .env("BOUBOU_KEY", &key);
     let (mut server, _) = chat::Server::launch(command, Duration::from_secs(300), &stopped)?;
@@ -1016,7 +1158,7 @@ mod tests {
         library::keep(&voices, "dad", "en");
         // Half-written, in a language no model here speaks, not a name the page gives, or words
         // without a recording.
-        library::keep(&voices, "pet", "eu");
+        library::keep(&voices, "pet", "zu");
         fs::copy(voices.join("dad.json"), voices.join(".kid.json")).unwrap();
         fs::copy(voices.join("dad.json"), voices.join("Big.json")).unwrap();
         fs::copy(voices.join("dad.json"), voices.join("gone.json")).unwrap();
@@ -1057,7 +1199,22 @@ mod tests {
         }
         assert_eq!(cloner(small, &cache), None);
         assert_eq!(voxcpm(small, &cache), Some(VOXCPM));
-        assert!(qwen_reads("Chinese") && !qwen_reads("Thai"));
+        assert_eq!(
+            ["Chinese", "Thai", "Cantonese"].map(reader),
+            [Reader::Qwen, Reader::VoxCpm, Reader::OmniVoice]
+        );
+        // OmniVoice's voices speak once its noncommercial terms are accepted; the others always.
+        assert!(!speaks_now("Cantonese", false) && speaks_now("Cantonese", true));
+        assert!(speaks_now("Thai", false) && speaks_now("Chinese", false));
+        // Every language Whisper hears has a title, and each reader the share it was given.
+        let readers = LANGUAGES.map(|(_, title)| reader(title));
+        let count = |which| readers.iter().filter(|r| **r == which).count();
+        assert_eq!(
+            [Reader::Qwen, Reader::VoxCpm, Reader::OmniVoice].map(count),
+            [10, 20, 70]
+        );
+        let codes: std::collections::HashSet<_> = LANGUAGES.iter().map(|(code, _)| code).collect();
+        assert_eq!(codes.len(), 100);
         fs::remove_dir_all(&cache).unwrap();
     }
 

@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{self, Read, Write},
+    io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -39,6 +39,41 @@ fn model_for(memory: Option<u64>) -> &'static str {
 }
 /// The file in Boubou's data folder that keeps the folder a person chose.
 const SETTING: &str = "voices-folder";
+/// The file in Boubou's data folder that records when the person accepted OmniVoice's terms.
+const ACCEPTED: &str = "noncommercial.json";
+
+/// What a person accepts before a voice OmniVoice reads can speak: on the clone page by ticking
+/// it, in a terminal by typing yes.
+pub const NOTICE: &str = "Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (CC BY-NC 4.0, https://creativecommons.org/licenses/by-nc/4.0/). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.";
+
+/// Whether the person accepted OmniVoice's noncommercial terms on this computer.
+pub fn accepted() -> bool {
+    data().is_ok_and(|data| data.join(ACCEPTED).is_file())
+}
+
+/// Records that the person accepted OmniVoice's noncommercial terms, `via` the clone page or a
+/// terminal, with the terms and when.
+pub fn accept(via: &str) -> Result<PathBuf> {
+    accept_in(&data()?, via)
+}
+
+fn accept_in(data: &Path, via: &str) -> Result<PathBuf> {
+    let when = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let record = json!({
+        "model": "OmniVoice (k2-fsa/OmniVoice)",
+        "license": "CC-BY-NC-4.0",
+        "terms": NOTICE,
+        "accepted_unix": when,
+        "via": via,
+        "boubou": env!("CARGO_PKG_VERSION"),
+    });
+    fs::create_dir_all(data)?;
+    let path = data.join(ACCEPTED);
+    write(&path, serde_json::to_string_pretty(&record)?.as_bytes())?;
+    Ok(path)
+}
 /// The longest file an imported zip may hold: 30 seconds of 48 kHz stereo 32-bit audio is 12 MB.
 const LARGEST: u64 = 64 << 20;
 /// Audio a person may drop into the folder that only the clone page can turn into a voice.
@@ -695,6 +730,29 @@ pub fn import(folder: &Path, zip: &Path) -> Result<Imported> {
     Ok(found)
 }
 
+/// `boubou voices --accept-noncommercial`: shows OmniVoice's terms and records that the person
+/// accepted them by typing yes. The clone page passes `ticked` once its own box is ticked.
+pub fn accept_command(ticked: bool) -> Result<()> {
+    if !ticked {
+        println!("{NOTICE}\n");
+        ensure!(
+            io::stdin().is_terminal(),
+            "Run this in a terminal to read and accept the terms."
+        );
+        print!("Type yes to accept: ");
+        io::stdout().flush()?;
+        let mut answer = String::new();
+        io::stdin().read_line(&mut answer)?;
+        ensure!(
+            answer.trim().eq_ignore_ascii_case("yes"),
+            "Not accepted. Voices OmniVoice reads stay silent."
+        );
+    }
+    let path = accept(if ticked { "clone page" } else { "terminal" })?;
+    println!("Accepted. Recorded in {}.", path.display());
+    Ok(())
+}
+
 /// What a person types to use the voice `name`: to talk with it, to share it with phones and
 /// apps, and to read a text aloud through the API while `serve` runs. `elsewhere` finds the
 /// voice's folder.
@@ -731,12 +789,16 @@ pub fn listing(folder: &Path) -> Value {
                 .into_iter()
                 .map(|(title, command)| json!({"title": title, "command": command}))
                 .collect();
+            let reader = crate::modular::reader(voice.speaks());
             json!({
                 "name": voice.name,
                 "language": voice.language,
+                "speaks": voice.speaks(),
                 "text": voice.text,
                 "commands": commands,
                 "launcher": launcher_of(folder, &voice.name),
+                "reader": format!("{reader:?}"),
+                "noncommercial": reader == crate::modular::Reader::OmniVoice,
             })
         })
         .collect();
@@ -751,6 +813,12 @@ pub fn listing(folder: &Path) -> Value {
         "voices": voices,
         "unheard": scan.unheard,
         "attention": attention,
+        "noncommercial_accepted": accepted(),
+        // Every language a voice can be in, for the page to offer when Whisper guessed wrong.
+        "languages": crate::modular::LANGUAGES
+            .iter()
+            .map(|(code, title)| json!({"code": code, "title": title, "reader": format!("{:?}", crate::modular::reader(title))}))
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -772,6 +840,15 @@ pub fn print(folder: &Path) {
     }
     for voice in &scan.voices {
         println!("\n{} · {}", voice.name, voice.speaks());
+        if crate::modular::reader(voice.speaks()) == crate::modular::Reader::OmniVoice {
+            println!("  Read by OmniVoice: noncommercial use only (CC BY-NC 4.0).");
+            if !accepted() {
+                println!(
+                    "  Accept its terms before it speaks: {} voices --accept-noncommercial",
+                    crate::update::program()
+                );
+            }
+        }
         for (title, command) in commands(&voice.name, &elsewhere(folder)) {
             println!("  {title:<6} {command}");
         }
@@ -1026,6 +1103,19 @@ mod tests {
     }
 
     #[test]
+    fn accepting_omnivoice_terms_is_recorded() {
+        let dir = TestDir::new("accept");
+        let data = dir.0.join("data");
+        assert!(!data.join(ACCEPTED).exists());
+        let path = accept_in(&data, "terminal").unwrap();
+        let record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(record["license"], "CC-BY-NC-4.0");
+        assert_eq!(record["terms"], NOTICE);
+        assert_eq!(record["via"], "terminal");
+        assert!(record["accepted_unix"].as_u64().unwrap() > 1_700_000_000);
+    }
+
+    #[test]
     fn synced_folders_are_named() {
         let home = Path::new("/Users/someone");
         for folder in [
@@ -1096,7 +1186,7 @@ mod tests {
         fs::copy(folder.join("me.wav"), folder.join("pet.wav")).unwrap();
         fs::write(
             folder.join("pet.json"),
-            r#"{"text":"Kaixo.","language":"eu"}"#,
+            r#"{"text":"Sawubona.","language":"zu"}"#,
         )
         .unwrap();
         // Hidden and other files are not voices.
@@ -1111,6 +1201,18 @@ mod tests {
             .collect();
         assert_eq!(names, ["me", "mom"]);
         assert_eq!(found.voices[1].speaks(), "Chinese");
+        // The page offers every language a voice can be in, each with what reads it.
+        let languages = listing(folder)["languages"].as_array().unwrap().clone();
+        assert_eq!(languages.len(), 100);
+        assert_eq!(
+            languages[0],
+            json!({"code": "en", "title": "English", "reader": "Qwen"})
+        );
+        let cantonese = languages
+            .iter()
+            .find(|language| language["code"] == "yue")
+            .unwrap();
+        assert_eq!(cantonese["reader"], "OmniVoice");
         assert_eq!(found.unheard, ["dad"]);
         let attention: Vec<_> = found
             .attention

@@ -788,7 +788,18 @@ impl Model {
         let (name, own) = voices
             .into_iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(voice))
-            .with_context(|| format!("No voice is named {voice}. Choose from: {names}."))?;
+            .with_context(|| {
+                // A voice OmniVoice reads speaks once the person accepted its terms.
+                let unaccepted = crate::modular::unaccepted(cache);
+                if unaccepted.iter().any(|name| name.eq_ignore_ascii_case(voice)) {
+                    format!(
+                        "{voice} is read by OmniVoice, whose model allows noncommercial use only. Read and accept its terms first: {} voices --accept-noncommercial",
+                        crate::update::program()
+                    )
+                } else {
+                    format!("No voice is named {voice}. Choose from: {names}.")
+                }
+            })?;
         let speaker = (
             name,
             named(&crate::modular::LANGUAGES[..10])?.unwrap_or(own),

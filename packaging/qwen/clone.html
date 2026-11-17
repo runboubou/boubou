@@ -65,6 +65,10 @@
   #check { display: grid; gap: 8px; }
   #advice li { display: list-item; list-style: disc; margin-left: 20px; padding: 2px 0; border: 0; color: var(--bad); }
   #heard { justify-self: start; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .75rem; border: 1px solid var(--bad); color: var(--bad); }
+  .terms { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--bad); border-radius: 10px; }
+  .terms a { color: inherit; }
+  select.relabel { font: inherit; font-size: .85rem; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--muted); padding: 2px 6px; max-width: 12rem; }
   [hidden] { display: none !important; }
 </style>
 <main>
@@ -102,6 +106,10 @@
         </div>
         <label for="words" class="muted">What it says. Whisper writes it down; fix any mistakes.</label>
         <textarea id="words"></textarea>
+        <div class="row" id="spoken-row" hidden>
+          <label for="spoken" class="muted">Language it speaks</label>
+          <select id="spoken" class="relabel"></select>
+        </div>
       </div>
     </div>
     <audio id="sample" controls hidden></audio>
@@ -115,6 +123,7 @@
   <section>
     <h2><span class="step">2</span>Name it and save</h2>
     <label class="consent"><input type="checkbox" id="consent"><span>This is my own voice, or I have permission to use it.</span></label>
+    <label class="consent terms" id="noncommercial-box" hidden><input type="checkbox" id="noncommercial"><span>Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.</span></label>
     <div class="row">
       <input type="text" class="name" id="name" placeholder="mom" maxlength="32" autocomplete="off" spellcheck="false" aria-label="Name">
       <button type="button" class="primary" id="save">Save voice</button>
@@ -141,6 +150,11 @@
       <button type="button" id="move">Change folder</button>
     </div>
     <p class="warning synced" hidden></p>
+    <div class="terms" id="unaccepted" hidden>
+      <p id="unaccepted-why">Some voices here are in languages OmniVoice reads. They stay silent until you accept its terms.</p>
+      <label class="consent"><input type="checkbox" id="accept-terms"><span>Voices in this language are read by OmniVoice (k2-fsa). Its model is licensed for noncommercial use only (<a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a>). I will use voices read by OmniVoice for noncommercial purposes only, and I am responsible for how I use them and for having the right to use each voice. Boubou is provided as is, without warranty.</span></label>
+      <button type="button" id="accept">Accept and let them speak</button>
+    </div>
     <ul id="voices"></ul>
     <p class="muted">Put a WAV file of one voice in this folder to add it; rename the file to rename the voice.</p>
     <div id="needs" hidden>
@@ -202,7 +216,8 @@
   const $ = (id) => document.getElementById(id);
   const key = location.hash.slice(1);
   // What will be saved: the voice as a WAV, its words and language, and how it was given.
-  const voice = { way: 'record', language: 'en', clip: null, words: '' };
+  // `noncommercial`: OmniVoice reads the language a clip speaks, so its terms come first.
+  const voice = { way: 'record', language: 'en', clip: null, words: '', noncommercial: false };
   // The folder and what it holds, as Boubou last listed it.
   let listed = { voices: [] };
   // What each of a voice's commands is for.
@@ -214,7 +229,8 @@
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
-    if (response.status === 403) throw new Error('This page no longer has the right key. Run boubou clone again.');
+    // A wrong key comes back bare; a refusal with a reason, such as OmniVoice's terms, says why.
+    if (response.status === 403) throw new Error((await response.json().catch(() => ({}))).detail ?? 'This page no longer has the right key. Run boubou clone again.');
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail ?? 'Boubou could not do that. Try again.');
     return response;
   }
@@ -238,6 +254,7 @@
     $('upload').hidden = voice.way !== 'upload';
     $('sentence').textContent = sentence();
     $('sample').hidden = !voice.clip;
+    $('noncommercial-box').hidden = !(voice.way === 'upload' && voice.noncommercial && !listed.noncommercial_accepted);
     if (!voice.clip) $('check').hidden = true;
   }
 
@@ -271,7 +288,7 @@
   // Asks Boubou what it hears in the take, and shows what to fix before saving. `words` are the
   // words the take should say, for a recording of the sentence. Returns what Boubou heard, unless
   // the person gave something else meanwhile.
-  async function review(turn, words = '') {
+  async function review(turn, words = '', language = '') {
     $('check').hidden = false;
     $('verdict').textContent = 'Checking the recording…';
     $('verdict').className = 'muted';
@@ -280,6 +297,8 @@
     const form = new FormData();
     form.append('audio', voice.clip, 'take.wav');
     form.append('words', words);
+    // The language the person chose, when Whisper named the clip's language wrongly.
+    form.append('language', language);
     const found = await (await api('/check', { method: 'POST', body: form })).json();
     if (turn !== choice) return null;
     const fine = !found.advice.length;
@@ -368,6 +387,8 @@
   async function upload(file) {
     const turn = ++choice;
     voice.clip = null;
+    voice.noncommercial = false;
+    $('spoken-row').hidden = true;
     $('words').value = voice.words = '';
     show();
     $('chosen').textContent = file.name;
@@ -379,13 +400,41 @@
       keep(clip);
       const heard = await review(turn);
       if (!heard) return;
-      $('words').value = voice.words = heard.text;
-      if (heard.language) voice.language = heard.language;
-      show();
-      say(heard.language ? 'Check the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
+      heardClip(heard);
+      say(heard.language ? 'Check the language and the words below, then save.' : 'Choose the language the clip speaks, and check the words.');
     } catch (error) {
       if (turn === choice) say(error.name === 'EncodingError' ? 'This file is not audio the browser can play. Try another.' : error.message, 'bad');
     }
+  }
+
+  // Takes in what Whisper heard in an uploaded clip: its words, its language, and whether OmniVoice's
+  // terms come first.
+  function heardClip(heard) {
+    $('words').value = voice.words = heard.text;
+    if (heard.language) voice.language = heard.language;
+    voice.noncommercial = heard.noncommercial;
+    $('spoken-row').hidden = false;
+    $('spoken').value = heard.language || '';
+    show();
+  }
+
+  // Whisper names many languages wrongly; the person picks the right one and Whisper listens again.
+  $('spoken').onchange = async () => {
+    const turn = ++choice;
+    say('Listening again in that language…');
+    try {
+      const heard = await review(turn, '', $('spoken').value);
+      if (heard) { heardClip(heard); say('Check the words below, then save.'); }
+    } catch (error) {
+      if (turn === choice) say(error.message, 'bad');
+    }
+  };
+
+  // A language menu with every language a voice can be in, `chosen` selected.
+  function languages(menu, chosen) {
+    menu.replaceChildren(...listed.languages.map(({ code, title }) => Object.assign(document.createElement('option'), { value: code, textContent: speaking(code)?.[1] ?? title })));
+    menu.value = chosen;
+    return menu;
   }
 
   async function save() {
@@ -394,11 +443,13 @@
     if (!voice.clip) return say(voice.way === 'record' ? 'Record the sentence first.' : 'Choose a clip first.', 'bad');
     if (!voice.words) return say('Write what the clip says.', 'bad');
     if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad');
+    const terms = !$('noncommercial-box').hidden;
+    if (terms && !$('noncommercial').checked) return say('Tick the box to accept OmniVoice\'s noncommercial terms.', 'bad');
     if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as mom.', 'bad');
     if (listed.voices.some((kept) => kept.name === name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
     const form = new FormData();
     form.append('audio', voice.clip, 'voice.wav');
-    for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes' })) form.append(field, value);
+    for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes', noncommercial: terms ? 'yes' : '' })) form.append(field, value);
     $('save').disabled = true;
     say('Saving…');
     try {
@@ -489,21 +540,60 @@
     }
   }
 
+  // A language change that waits for OmniVoice's terms: the voice, its new language and its name.
+  let waiting = null;
+
+  // Gives a kept voice the language the person picked; Boubou writes its words down again.
+  async function speakIn(name, language, title) {
+    say(`Listening to ${name} again in that language…`, '', 'archive');
+    try {
+      render(await (await api(`/voices/${encodeURIComponent(name)}/language`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language }) })).json());
+      say(`${name} now speaks ${title}.`, 'good', 'archive');
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+      throw error;
+    }
+  }
+
   function render(found) {
     listed = found;
+    if (!$('spoken').options.length) languages($('spoken'), voice.language);
     $('yours').hidden = false;
     $('folder').textContent = found.folder;
     for (const warning of document.querySelectorAll('.synced')) {
       warning.hidden = !found.synced;
       warning.textContent = 'This folder may sync to iCloud or another cloud service, so your voices may leave this Mac. Change folder to keep them here.';
     }
-    $('voices').replaceChildren(...found.voices.map(({ name, language }) => {
+    if (found.noncommercial_accepted) waiting = null;
+    $('unaccepted').hidden = found.noncommercial_accepted || !(waiting || found.voices.some((kept) => kept.noncommercial));
+    $('voices').replaceChildren(...found.voices.map(({ name, language, speaks: known, noncommercial }) => {
       const row = document.createElement('li');
       const title = document.createElement('b');
       const speaks = document.createElement('span');
       title.textContent = name;
       speaks.className = 'muted';
-      speaks.textContent = speaking(language)?.[1] ?? '';
+      // The voice's language, which the person can correct: Boubou writes its words down again.
+      const relabel = languages(Object.assign(document.createElement('select'), { className: 'relabel', title: `${name} speaks ${known}` }), language);
+      relabel.setAttribute('aria-label', `Language ${name} speaks`);
+      relabel.onchange = () => {
+        const chosen = relabel.value;
+        const omnivoice = listed.languages.find(({ code }) => code === chosen)?.reader === 'OmniVoice';
+        // OmniVoice's terms come first: show them, and give the voice its language once accepted.
+        if (omnivoice && !listed.noncommercial_accepted) {
+          waiting = { name, language: chosen, title: relabel.selectedOptions[0]?.textContent ?? chosen };
+          relabel.value = language;
+          $('unaccepted-why').textContent = `OmniVoice reads ${waiting.title}. Accept its terms to give ${name} this language.`;
+          $('unaccepted').hidden = false;
+          $('unaccepted').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
+        }
+        speakIn(name, chosen, relabel.selectedOptions[0]?.textContent ?? chosen).catch(() => { relabel.value = language; });
+      };
+      speaks.append(relabel);
+      if (noncommercial) {
+        const pill = Object.assign(document.createElement('span'), { className: 'pill', textContent: 'Noncommercial', title: 'Read by OmniVoice, licensed CC BY-NC 4.0' });
+        speaks.append(' ', pill);
+      }
       const play = button('Play', () => hear(name, language, play));
       play.id = `play-${name}`;
       const remove = button('Delete', async () => {
@@ -561,7 +651,7 @@
   $('more').onchange = () => $('more').value && choose($('more').value);
   for (const button of document.querySelectorAll('[data-way]')) {
     button.onclick = () => {
-      choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = '';
+      choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = ''; voice.noncommercial = false;
       // A language heard in a clip may have no sentence to record yet.
       if (voice.way === 'record' && !speaking(voice.language)?.[2]) voice.language = 'en';
       show(); say('');
@@ -584,6 +674,17 @@
     }
   };
   $('export').onclick = () => download();
+  $('accept').onclick = async () => {
+    if (!$('accept-terms').checked) return say('Tick the box to accept OmniVoice\'s noncommercial terms.', 'bad', 'archive');
+    const then = waiting;
+    try {
+      render(await (await api('/noncommercial', { method: 'POST' })).json());
+      say('Accepted. These voices can speak now.', 'good', 'archive');
+      if (then) await speakIn(then.name, then.language, then.title);
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+    }
+  };
   $('import').onchange = async () => {
     const zip = $('import').files[0];
     if (!zip) return;

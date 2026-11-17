@@ -25,18 +25,30 @@ one_voice = voice.read_aloud
 
 # Voices cloned on this Mac: <name>.wav, a recording, and <name>.json, what it says and its language.
 # Boubou names the folder once it has verified the weights that read them: the Qwen3-TTS Base weights
-# of the profile BOUBOU_CLONER for a language Qwen3-TTS speaks, VoxCPM2's of BOUBOU_VOXCPM for the
-# others. BOUBOU_VOICE names a cloned voice that speaks first. The clone page may choose another folder.
-CLONES, CLONER, VOXCPM, OWN = (os.environ.get(name) for name in
-                               ("BOUBOU_VOICES", "BOUBOU_CLONER", "BOUBOU_VOXCPM", "BOUBOU_VOICE"))
+# of the profile BOUBOU_CLONER for a language Qwen3-TTS speaks, VoxCPM2's of BOUBOU_VOXCPM for twenty
+# more, and OmniVoice's of BOUBOU_OMNIVOICE for the rest Whisper hears, once the person accepted its
+# noncommercial terms. BOUBOU_VOICE names a cloned voice that speaks first. The clone page may choose
+# another folder.
+CLONES, CLONER, VOXCPM, OMNIVOICE, OWN = (os.environ.get(name) for name in (
+    "BOUBOU_VOICES", "BOUBOU_CLONER", "BOUBOU_VOXCPM", "BOUBOU_OMNIVOICE", "BOUBOU_VOICE"))
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 # Qwen3-TTS CustomVoice's own speakers keep their names.
 SPEAKERS = {"aiden", "ryan", "ono_anna", "sohee", "vivian", "serena", "uncle_fu", "dylan", "eric"}
-# The languages Qwen3-TTS speaks, and the twenty more VoxCPM2 reads cloned voices in.
+# The languages Qwen3-TTS speaks, and the twenty more VoxCPM2 reads cloned voices in. OmniVoice reads
+# the other languages Whisper hears.
 LANGUAGES = {"en", "ja", "zh", "ko", "es", "fr", "de", "pt", "it", "ru"}
 OTHERS = {"nl", "hi", "ar", "my", "da", "fi", "el", "he", "id", "km", "lo", "ms", "no", "pl", "sw", "sv",
           "tl", "th", "tr", "vi"}
-# Weights by kind, "base", "custom_voice" or "voxcpm": a path until a reading first needs them.
+# Every language Whisper writes down, the ones OmniVoice reads included.
+WHISPER = LANGUAGES | OTHERS | {
+    "ca", "uk", "cs", "ro", "hu", "ta", "ur", "hr", "bg", "lt", "la", "mi", "ml", "cy", "sk",
+    "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne",
+    "mn", "bs", "kk", "sq", "gl", "mr", "pa", "si", "sn", "yo", "so", "af", "oc", "ka", "be",
+    "tg", "sd", "gu", "am", "yi", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "bo",
+    "mg", "as", "tt", "haw", "ln", "ha", "ba", "jw", "su", "yue"
+}
+# Weights by kind, "base", "custom_voice", "voxcpm" or "omnivoice": a path until a reading first needs
+# them.
 weights = {}
 
 
@@ -65,11 +77,26 @@ class VoxCPMReader:
         return self.model.generate(text=text, prompt_audio=ref_audio, prompt_text=ref_text)
 
 
+class OmniVoiceReader(VoxCPMReader):
+    """OmniVoice behind the same calls, for a voice cloned in a language neither Qwen3-TTS nor VoxCPM2
+    speaks: it clones from the recording and its words."""
+
+    def __init__(self, model):
+        self.model, self.sample_rate = model, model.config.sample_rate
+
+    def generate(self, text, ref_audio=None, ref_text=None, **_):
+        return self.model.generate(text=text, ref_audio=ref_audio, ref_text=ref_text)
+
+
+# The weights that read cloned voices besides the Base weights: their profile, repository and reader.
+READERS = {"voxcpm": (VOXCPM, "VoxCPM2", VoxCPMReader), "omnivoice": (OMNIVOICE, "OmniVoice", OmniVoiceReader)}
+
+
 def kind(clone):
     """Which weights read `clone`, a voice from `cloned`, or Qwen3-TTS's own speakers for None."""
     if not clone:
         return "custom_voice"
-    return "base" if clone[2] in LANGUAGES else "voxcpm"
+    return "base" if clone[2] in LANGUAGES else "voxcpm" if clone[2] in OTHERS else "omnivoice"
 
 
 def snapshots(manifest, profile):
@@ -137,15 +164,16 @@ def arguments(model_id, cache, manifest, work):
         local_kokoro_voices(Path(options[options.index("--kokoro_model_name") + 1]))
         read_japanese()
     os.environ.update(HUB)
-    if CLONER or VOXCPM:
+    if CLONER or VOXCPM or OMNIVOICE:
         at = options.index("--qwen3_tts_model_name") + 1
         weights["custom_voice"] = options[at]
-        for profile, model, name in ((CLONER, "Qwen3-TTS", "base"), (VOXCPM, "VoxCPM2", "voxcpm")):
+        for profile, model, name in ((CLONER, "Qwen3-TTS", "base"),
+                                     *((profile, repo, name) for name, (profile, repo, _) in READERS.items())):
             if profile:
                 (path,) = (path for repo, path in snapshots(manifest, profile).items() if repo.startswith(model))
                 weights[name] = str(Path(cache).resolve() / path)
         # A cloned voice Qwen3-TTS reads that speaks first starts with the Base weights, as upstream
-        # clones. Any other starts with the entry's own, and its sentences go to VoxCPM2.
+        # clones. Any other starts with the entry's own, and its sentences go to VoxCPM2 or OmniVoice.
         if (own := cloned(OWN)) and kind(own) == "base":
             options[at] = weights["base"]
             options += ["--qwen3_tts_ref_audio", own[0], "--qwen3_tts_ref_text", own[1]]
@@ -154,7 +182,7 @@ def arguments(model_id, cache, manifest, work):
 
 def read_aloud():
     """Let a text to read aloud name who reads it: `voice`, one of Qwen3-TTS's speakers or a voice
-    cloned on this Mac, which Qwen3-TTS's Base weights or VoxCPM2 read, by its language.
+    cloned on this Mac, which Qwen3-TTS's Base weights, VoxCPM2 or OmniVoice read, by its language.
 
     Any other name, such as OpenAI's own, keeps the voice Boubou started with, as every other
     model does. voice.py reads in that voice only, and stays as the Linux runner published it.
@@ -190,7 +218,9 @@ def read_aloud():
             nonlocal asked
             with turn:
                 name = str(request.get("voice") or "").lower()
-                asked = speakers.get(name) or (name if cloned(name) else None)
+                # A cloned voice speaks when Boubou passed the weights that read it.
+                clone = cloned(name)
+                asked = speakers.get(name) or (name if clone and kind(clone) in weights else None)
                 try:
                     return route.endpoint(request)
                 finally:
@@ -200,11 +230,11 @@ def read_aloud():
             # Upstream keeps a speaker until a conversation ends, and a reading is none.
             reader.speaker, reader.language = (asked, reading) if asked else own
             clone = cloned(reader.speaker)
-            if CLONER or VOXCPM:
+            if CLONER or VOXCPM or OMNIVOICE:
                 which = kind(clone)
                 if isinstance(weights[which], str):
                     model = load_model(weights[which])
-                    weights[which] = VoxCPMReader(model) if which == "voxcpm" else model
+                    weights[which] = READERS[which][2](model) if which in READERS else model
                 reader.model = weights[which]
             reader.ref_audio, reader.ref_text = clone[:2] if clone else (None, reader.ref_text)
             if clone:
@@ -316,7 +346,7 @@ def clone(profile, cache, manifest, *extra):
             with mlx:
                 heard = hear.generate(clip, verbose=False)
             text, language = " ".join(heard.text.split()), getattr(heard, "language", None)
-            if language not in LANGUAGES | OTHERS:
+            if not language or language not in WHISPER:
                 return "Boubou cannot tell its language, or no voice model here speaks it. Upload it on this page instead."
             if not text:
                 return "Boubou heard no words in it."
@@ -386,31 +416,43 @@ def clone(profile, cache, manifest, *extra):
                 path.write_bytes(await archive.read())
                 return library("--import", str(path))
 
-        @app.post("/check")
-        async def check(audio: UploadFile, words: str = Form("")):
-            """What Whisper hears in a take, and what to fix before cloning it: `boubou voices --check`
-            compares the words heard with `words`, the words the take should say, when given."""
-            take = await audio.read()
-            clip = samples(take, 16000)
+        def listen(clip, language=""):
+            """What Whisper writes down from 16 kHz `clip`, in `language` when the person named it: Whisper
+            names many languages wrongly on its own, and writes them down well once told."""
             with mlx:
-                heard = hear.generate(clip, verbose=False)
-            text, language = " ".join(heard.text.split()), getattr(heard, "language", None)
+                heard = hear.generate(clip, verbose=False, **({"language": language} if language in WHISPER else {}))
+            return " ".join(heard.text.split()), language if language in WHISPER else getattr(heard, "language", None)
+
+        @app.post("/check")
+        async def check(audio: UploadFile, words: str = Form(""), language: str = Form("")):
+            """What Whisper hears in a take, and what to fix before cloning it: `boubou voices --check`
+            compares the words heard with `words`, the words the take should say, when given. `language`
+            is the one the person chose, when Whisper's own guess was wrong."""
+            take = await audio.read()
+            text, language = listen(samples(take, 16000), language)
             with TemporaryDirectory(prefix="boubou-check-") as temp:
                 path = Path(temp, "take.wav")
                 path.write_bytes(take)
                 compared = [f"--words={words}", f"--heard={text}"] if words.strip() else []
                 found = library("--check", str(path), *compared)
-            return {**found, "text": text, "language": language if language in LANGUAGES | OTHERS else ""}
+            known = language if language in WHISPER else ""
+            # OmniVoice reads a voice in this language: the page asks for its noncommercial terms.
+            noncommercial = bool(known) and kind((None, None, known)) == "omnivoice"
+            return {**found, "text": text, "language": known, "noncommercial": noncommercial}
 
         @app.post("/voices")
         async def save(audio: UploadFile, name: str = Form(), text: str = Form(), language: str = Form(),
-                       consent: str = Form("")):
+                       consent: str = Form(""), noncommercial: str = Form("")):
             name, text = name.strip().lower(), " ".join(text.split())
+            if kind((None, None, language)) == "omnivoice" and not library()["noncommercial_accepted"]:
+                if noncommercial != "yes":
+                    raise HTTPException(400, "Tick the box to accept OmniVoice's noncommercial terms.")
+                accept()
             if consent != "yes":
                 raise HTTPException(400, "Confirm the voice is yours, or that you may use it.")
             if not NAME.fullmatch(name) or name in SPEAKERS:
                 raise HTTPException(400, "Choose another name: lowercase letters and digits, not a built-in voice.")
-            if not 0 < len(text) <= 500 or language not in LANGUAGES | OTHERS:
+            if not 0 < len(text) <= 500 or language not in WHISPER:
                 raise HTTPException(400, "Write what the voice says.")
             clip = samples(await audio.read(), speak.sample_rate)
             if not 3 <= len(clip) / speak.sample_rate <= 30:
@@ -426,6 +468,25 @@ def clone(profile, cache, manifest, *extra):
             keep(Path(CLONES, f"{name}.json"), json.dumps({"text": text, "language": language}).encode())
             return {"name": name}
 
+        @app.post("/voices/{name}/language")
+        def relabel(name: str, request: dict):
+            """Give a kept voice the language the person says it speaks, and its words heard in that
+            language. Its reader follows the language."""
+            clone, language = cloned(name), str(request.get("language", ""))
+            if clone is None:
+                raise HTTPException(404, "No voice has that name.")
+            if language not in WHISPER:
+                raise HTTPException(400, "Choose a language from the list.")
+            if kind((None, None, language)) == "omnivoice" and not library()["noncommercial_accepted"]:
+                raise HTTPException(403, "This language is read by OmniVoice, which allows noncommercial use only. "
+                                         "Accept its terms on this page first.")
+            audio, rate = soundfile.read(clone[0], dtype="float32", always_2d=True)
+            text, _ = listen(resample_poly(audio.mean(axis=1), 16000, rate).astype(np.float32), language)
+            if not text:
+                raise HTTPException(400, "Boubou heard no words in it in that language.")
+            keep(Path(CLONES, f"{name}.json"), json.dumps({"text": text, "language": language}).encode())
+            return library()
+
         @app.delete("/voices/{name}")
         def delete(name: str):
             if not NAME.fullmatch(name):
@@ -436,22 +497,40 @@ def clone(profile, cache, manifest, *extra):
 
         other = {}
 
+        def boubou(*options, failure="Boubou could not do that."):
+            """Run `boubou` on this page's cache and folder, and say why it failed, if it did."""
+            done = subprocess.run([os.environ["BOUBOU_BIN"], "--cache-dir", str(cache.parent), "--voices-dir", CLONES,
+                                   *options], capture_output=True, text=True)
+            if done.returncode:
+                said = [line for line in done.stderr.splitlines() if line.strip()] or [failure]
+                raise HTTPException(503, said[-1].removeprefix("boubou: "))
+
+        def accept():
+            # Only after the person ticked the box that shows OmniVoice's terms.
+            boubou("voices", "--accept-noncommercial", "--yes")
+
         def reader(clone):
-            """What reads `clone`: the Base weights, or VoxCPM2 for a language Qwen3-TTS does not speak,
-            fetched the first time such a voice speaks."""
-            if kind(clone) == "base":
+            """What reads `clone`: the Base weights, or VoxCPM2 or OmniVoice for a language Qwen3-TTS does
+            not speak, fetched the first time such a voice speaks. OmniVoice's voices wait for its terms."""
+            which = kind(clone)
+            if which == "base":
                 return speak
-            if "voxcpm" not in other:
-                (path,) = (path for repo, path in snapshots(manifest, VOXCPM).items() if repo.startswith("VoxCPM2"))
+            if which == "omnivoice" and not library()["noncommercial_accepted"]:
+                raise HTTPException(403, "This voice is read by OmniVoice, which allows noncommercial use only. "
+                                         "Accept its terms on this page first.")
+            if which not in other:
+                profile, repo, wrap = READERS[which]
+                (path,) = (path for name, path in snapshots(manifest, profile).items() if name.startswith(repo))
                 # Boubou fetches what is missing and verifies every file before the first load: a fetch
                 # cut short may have left only some of them.
-                done = subprocess.run([os.environ["BOUBOU_BIN"], "--cache-dir", str(cache.parent),
-                                       "--voices-dir", CLONES, "voices", "--prepare"], capture_output=True, text=True)
-                if done.returncode:
-                    said = [line for line in done.stderr.splitlines() if line.strip()] or ["Boubou could not get the voice model."]
-                    raise HTTPException(503, said[-1].removeprefix("boubou: "))
-                other["voxcpm"] = VoxCPMReader(mouth(str(cache / path)))
-            return other["voxcpm"]
+                boubou("voices", "--prepare", profile, failure="Boubou could not get the voice model.")
+                other[which] = wrap(mouth(str(cache / path)))
+            return other[which]
+
+        @app.post("/noncommercial")
+        def take_terms():
+            accept()
+            return library()
 
         @app.post("/speech")
         def speech(request: dict):
