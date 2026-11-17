@@ -23,9 +23,9 @@ HUB = {"HF_HOME": HOME, "HF_HUB_CACHE": os.environ.get("HF_HUB_CACHE") or os.pat
 pinned = voice.arguments
 one_voice = voice.read_aloud
 
-# Voices cloned on this Mac: <name>.wav, at the 24 kHz Qwen3-TTS hears, and <name>.json, what it says.
-# Boubou names the folder once it has verified the Base weights of the profile BOUBOU_CLONER, which read
-# them, and BOUBOU_VOICE when a cloned voice speaks first.
+# Voices cloned on this Mac: <name>.wav, a recording, and <name>.json, what it says. Boubou names the
+# folder once it has verified the Base weights of the profile BOUBOU_CLONER, which read them, and
+# BOUBOU_VOICE when a cloned voice speaks first. The clone page may choose another folder.
 CLONES, CLONER, OWN = (os.environ.get(name) for name in ("BOUBOU_VOICES", "BOUBOU_CLONER", "BOUBOU_VOICE"))
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 # Qwen3-TTS CustomVoice's own speakers keep their names.
@@ -39,7 +39,8 @@ def cloned(name):
     """The recording and words of the voice cloned as `name`, if there is one."""
     name = str(name or "").lower()
     folder = Path(CLONES or "")
-    if not (CLONES and NAME.fullmatch(name) and (folder / f"{name}.json").is_file()):
+    if not (CLONES and NAME.fullmatch(name) and (folder / f"{name}.json").is_file()
+            and (folder / f"{name}.wav").is_file()):
         return None
     return str((folder / f"{name}.wav").resolve()), json.loads((folder / f"{name}.json").read_text())["text"]
 
@@ -192,10 +193,14 @@ run = voice.run
 
 def clone(profile, cache, manifest, *extra):
     """Serve the page that clones a voice: from a recording of a sentence the page shows, or from a
-    clip whose words Whisper writes down. Each voice stays in BOUBOU_VOICES, on this Mac."""
+    clip whose words Whisper writes down. Each voice stays in BOUBOU_VOICES, on this Mac.
+
+    `boubou voices`, at BOUBOU_BIN, keeps the folder: it lists it, moves it, exports and imports.
+    This writes down what each recording dropped into the folder says."""
     import argparse
     import io
     import secrets
+    import subprocess
     import threading
     from tempfile import TemporaryDirectory
 
@@ -213,8 +218,9 @@ def clone(profile, cache, manifest, *extra):
     address.add_argument("--port", type=int)
     address = address.parse_args(extra)
     # Links made in temporary storage must not point at a cache named relative to here.
-    cache, folder, key, mlx = Path(cache).resolve(), Path(CLONES), os.environ["BOUBOU_KEY"], threading.Lock()
-    folder.mkdir(parents=True, exist_ok=True)
+    cache, key, mlx = Path(cache).resolve(), os.environ["BOUBOU_KEY"], threading.Lock()
+    # Why each recording dropped into the folder has no words yet, by its path, size and time.
+    unheard = {}
     found = snapshots(manifest, profile)
     with TemporaryDirectory(prefix="boubou-clone-") as work:
         os.environ.update(HF_HUB_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1", XDG_CACHE_HOME=f"{work}/cache")
@@ -251,14 +257,95 @@ def clone(profile, cache, manifest, *extra):
             soundfile.write(file, audio, rate, format="WAV", subtype="PCM_16")
             return file.getvalue()
 
+        def keep(path, content):
+            # Whole or not at all: the folder's listing skips hidden files.
+            (path.parent / f".{path.name}").write_bytes(content)
+            os.replace(path.parent / f".{path.name}", path)
+
+        def library(*options):
+            """The folder and its voices, each with the commands that use it, after `options`."""
+            done = subprocess.run([os.environ["BOUBOU_BIN"], "--voices-dir", CLONES, "voices", "--json", *options],
+                                  capture_output=True, text=True)
+            if done.returncode:
+                said = [line for line in done.stderr.splitlines() if line.strip()] or ["Boubou could not do that."]
+                raise HTTPException(400, said[-1].removeprefix("boubou: "))
+            return json.loads(done.stdout)
+
+        def write_down(path):
+            """Write down what a recording dropped into the folder says, or say why not."""
+            try:
+                clip = samples(path.read_bytes(), 16000)
+            except (HTTPException, OSError):
+                return "Boubou cannot read this WAV file. Export it again as a 16-bit WAV."
+            if np.abs(clip - clip.mean()).max() < 0.01:
+                return "Boubou heard no voice in it."
+            with mlx:
+                heard = hear.generate(clip, verbose=False)
+            text, language = " ".join(heard.text.split()), getattr(heard, "language", None)
+            if language not in LANGUAGES:
+                return "Boubou cannot tell its language, or Qwen3-TTS does not speak it. Upload it on this page instead."
+            if not text:
+                return "Boubou heard no words in it."
+            keep(path.with_suffix(".json"), json.dumps({"text": text, "language": language}).encode())
+
         @app.get("/")
         def home():
             return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
         @app.get("/voices")
         def voices():
-            listed = [{"name": path.stem, **json.loads(path.read_text())} for path in sorted(folder.glob("*.json"))]
-            return {"run": os.environ.get("BOUBOU_RUN", ""), "voices": listed}
+            listed, waiting = library(), []
+            for name in listed["unheard"]:
+                path = Path(CLONES, f"{name}.wav")
+                seen = (str(path), path.stat().st_size, path.stat().st_mtime_ns)
+                if seen not in unheard:
+                    unheard[seen] = write_down(path)
+                if unheard[seen]:
+                    waiting.append({"file": path.name, "hint": unheard[seen]})
+            if len(waiting) < len(listed["unheard"]):
+                listed = library()
+            listed["attention"] += waiting
+            return listed
+
+        @app.post("/folder")
+        def choose():
+            """Keep voices in a folder the person picks in macOS's own window: a page cannot name one."""
+            global CLONES
+            picked = subprocess.run(
+                ["osascript", "-e", "on run argv", "-e", "activate", "-e",
+                 'POSIX path of (choose folder with prompt "Choose the folder that keeps your voices." '
+                 "default location (POSIX file (item 1 of argv) as alias))", "-e", "end run", CLONES],
+                capture_output=True, text=True)
+            # Cancelled.
+            if picked.returncode:
+                return library()
+            listed = library("--folder", picked.stdout.strip())
+            CLONES = listed["folder"]
+            return listed
+
+        @app.post("/folder/open")
+        def show():
+            subprocess.run(["open", CLONES], check=False)
+            return Response(status_code=204)
+
+        @app.get("/export")
+        def export(name: str = ""):
+            if name and not NAME.fullmatch(name):
+                raise HTTPException(404, "No voice has that name.")
+            with TemporaryDirectory(prefix="boubou-export-") as temp:
+                archive = Path(temp, "voices.zip")
+                library("--export", str(archive), *([name] if name else []))
+                content = archive.read_bytes()
+            named = f"{name or 'boubou-voices'}.zip"
+            return Response(content, media_type="application/zip",
+                            headers={"Content-Disposition": f'attachment; filename="{named}"'})
+
+        @app.post("/import")
+        async def take(archive: UploadFile):
+            with TemporaryDirectory(prefix="boubou-import-") as temp:
+                path = Path(temp, "voices.zip")
+                path.write_bytes(await archive.read())
+                return library("--import", str(path))
 
         @app.post("/transcribe")
         async def transcribe(audio: UploadFile):
@@ -284,10 +371,8 @@ def clone(profile, cache, manifest, *extra):
             if np.abs(clip - clip.mean()).max() < 0.01:
                 raise HTTPException(400, "Boubou heard no voice. Check the microphone or the clip, then try again.")
             # The words last: a voice is listed once they are there.
-            for suffix, content in ((".wav", wav(clip, speak.sample_rate)),
-                                    (".json", json.dumps({"text": text, "language": language}).encode())):
-                (folder / f".{name}{suffix}").write_bytes(content)
-                os.replace(folder / f".{name}{suffix}", folder / f"{name}{suffix}")
+            keep(Path(CLONES, f"{name}.wav"), wav(clip, speak.sample_rate))
+            keep(Path(CLONES, f"{name}.json"), json.dumps({"text": text, "language": language}).encode())
             return {"name": name}
 
         @app.delete("/voices/{name}")
@@ -295,7 +380,7 @@ def clone(profile, cache, manifest, *extra):
             if not NAME.fullmatch(name):
                 raise HTTPException(404)
             for suffix in (".json", ".wav"):
-                (folder / f"{name}{suffix}").unlink(missing_ok=True)
+                Path(CLONES, f"{name}{suffix}").unlink(missing_ok=True)
             return Response(status_code=204)
 
         @app.post("/speech")

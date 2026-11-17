@@ -44,7 +44,7 @@
   audio { width: 100%; }
   label.consent { display: flex; gap: 10px; align-items: flex-start; }
   label.consent input { margin-top: 5px; width: 18px; height: 18px; accent-color: var(--accent); }
-  #status:empty { display: none; }
+  #status:empty, #archive:empty { display: none; }
   .bad { color: var(--bad); } .good { color: var(--good); }
   code, .command { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
   .command { display: flex; gap: 8px; align-items: center; background: #18181b; color: #f4f4f5; border-radius: 10px; padding: 10px 12px; }
@@ -54,6 +54,12 @@
   li { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
   li:first-child { border-top: 0; }
   li b { flex: 1; font-weight: 600; }
+  #voices li { flex-wrap: wrap; }
+  li button { padding: 4px 10px; font-size: .9rem; }
+  .where { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .where code { flex: 1 1 100%; overflow-wrap: anywhere; }
+  .warning { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bad); color: var(--bad); }
+  #attention li { display: grid; gap: 2px; }
   [hidden] { display: none !important; }
 </style>
 <main>
@@ -61,6 +67,7 @@
     <h1>Clone a voice</h1>
     <p class="muted">Give Boubou about 10 seconds of a voice. It stays on this Mac. Nothing is uploaded.</p>
   </header>
+  <p class="warning synced" hidden></p>
 
   <section>
     <h2><span class="step">1</span>Give a voice</h2>
@@ -105,14 +112,29 @@
 
   <section id="use" hidden>
     <h2>Use <span class="named"></span></h2>
-    <p class="muted">Talk with it:</p>
-    <div class="command"><span id="command"></span><button type="button" id="copy">Copy</button></div>
-    <p class="muted">In an app's voice setting, while <code>boubou serve</code> runs, type <b class="named"></b>.</p>
+    <div id="commands" style="display: grid; gap: 10px"></div>
+    <p class="muted">In an app's voice setting, while it is shared, type <b class="named"></b>.</p>
   </section>
 
   <section id="yours" hidden>
     <h2>Your voices</h2>
+    <div class="where">
+      <code id="folder"></code>
+      <button type="button" id="open">Open</button>
+      <button type="button" id="move">Change folder</button>
+    </div>
+    <p class="warning synced" hidden></p>
     <ul id="voices"></ul>
+    <p class="muted">Put a WAV file of one voice in this folder to add it; rename the file to rename the voice.</p>
+    <div id="needs" hidden>
+      <p class="muted">These files need attention:</p>
+      <ul id="attention"></ul>
+    </div>
+    <div class="row">
+      <button type="button" id="export">Export all</button>
+      <label class="file"><input type="file" id="import" accept=".zip,application/zip">Import a zip file</label>
+    </div>
+    <p id="archive" role="status"></p>
   </section>
 </main>
 <script>
@@ -136,9 +158,14 @@
   const key = location.hash.slice(1);
   // What will be saved: the voice as a WAV, its words and language, and how it was given.
   const voice = { way: 'record', language: 'en', clip: null, words: '' };
-  let run = '';
-  // The names this Mac already keeps.
-  let kept = new Set();
+  // The folder and what it holds, as Boubou last listed it.
+  let listed = { voices: [] };
+  // What each of a voice's commands is for.
+  const PURPOSES = {
+    Talk: 'Talk with it on this Mac:',
+    Share: 'Share it with phones and apps on this Wi-Fi:',
+    API: 'Read a text aloud through the API, while it is shared:',
+  };
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
@@ -147,9 +174,9 @@
     return response;
   }
 
-  function say(text, tone = '') {
-    $('status').textContent = text;
-    $('status').className = tone;
+  function say(text, tone = '', where = 'status') {
+    $(where).textContent = text;
+    $(where).className = tone;
   }
 
   function sentence() {
@@ -287,7 +314,7 @@
     if (!voice.words) return say('Write what the clip says.', 'bad');
     if (!$('consent').checked) return say('Tick the box to confirm you may use this voice.', 'bad');
     if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(name)) return say('Name it with lowercase letters and digits, such as mom.', 'bad');
-    if (kept.has(name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
+    if (listed.voices.some((kept) => kept.name === name) && !confirm(`Replace the voice ${name} on this Mac?`)) return;
     const form = new FormData();
     form.append('audio', voice.clip, 'voice.wav');
     for (const [field, value] of Object.entries({ name, text: voice.words, language: voice.language, consent: 'yes' })) form.append(field, value);
@@ -296,11 +323,8 @@
     try {
       await api('/voices', { method: 'POST', body: form });
       say(`Saved as ${name}. Only this Mac has it.`, 'good');
-      for (const named of document.querySelectorAll('.named')) named.textContent = name;
-      $('command').textContent = `${run} --voice ${name}`;
-      $('use').hidden = false;
-      $('use').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       await list();
+      use(name);
       hear(name, voice.language, $(`play-${name}`));
     } catch (error) {
       say(error.message, 'bad');
@@ -327,32 +351,103 @@
     }
   }
 
-  async function list() {
-    const listed = await (await api('/voices')).json();
-    run = listed.run;
-    kept = new Set(listed.voices.map((voice) => voice.name));
-    $('yours').hidden = !listed.voices.length;
-    $('voices').replaceChildren(...listed.voices.map(({ name, language }) => {
+  function button(label, onclick) {
+    const made = document.createElement('button');
+    made.type = 'button';
+    made.textContent = label;
+    made.onclick = onclick;
+    return made;
+  }
+
+  // The commands for a voice, each with a button that copies it.
+  function use(name) {
+    const chosen = listed.voices.find((kept) => kept.name === name);
+    if (!chosen) return;
+    for (const named of document.querySelectorAll('.named')) named.textContent = name;
+    $('commands').replaceChildren(...chosen.commands.flatMap(({ title, command }) => {
+      const purpose = document.createElement('p');
+      purpose.className = 'muted';
+      purpose.textContent = PURPOSES[title] ?? title;
+      const line = document.createElement('div');
+      const text = document.createElement('span');
+      line.className = 'command';
+      text.textContent = command;
+      const copy = button('Copy', async () => {
+        await navigator.clipboard.writeText(command);
+        copy.textContent = 'Copied';
+        setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
+      });
+      line.append(text, copy);
+      return [purpose, line];
+    }));
+    $('use').hidden = false;
+    $('use').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function download(name = '') {
+    try {
+      const zip = await (await api(`/export?name=${encodeURIComponent(name)}`)).blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(zip);
+      link.download = `${name || 'boubou-voices'}.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+    }
+  }
+
+  function render(found) {
+    listed = found;
+    $('yours').hidden = false;
+    $('folder').textContent = found.folder;
+    for (const warning of document.querySelectorAll('.synced')) {
+      warning.hidden = !found.synced;
+      warning.textContent = 'This folder may sync to iCloud or another cloud service, so your voices may leave this Mac. Change folder to keep them here.';
+    }
+    $('voices').replaceChildren(...found.voices.map(({ name, language }) => {
       const row = document.createElement('li');
       const title = document.createElement('b');
       const speaks = document.createElement('span');
-      const play = document.createElement('button');
-      const remove = document.createElement('button');
       title.textContent = name;
       speaks.className = 'muted';
       speaks.textContent = LANGUAGES.find(([code]) => code === language)?.[1] ?? '';
+      const play = button('Play', () => hear(name, language, play));
       play.id = `play-${name}`;
-      play.textContent = 'Play';
-      play.onclick = () => hear(name, language, play);
-      remove.textContent = 'Delete';
-      remove.onclick = async () => {
+      const remove = button('Delete', async () => {
         if (!confirm(`Delete ${name} from this Mac?`)) return;
-        await api(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch((error) => say(error.message, 'bad'));
+        await api(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch((error) => say(error.message, 'bad', 'archive'));
         list();
-      };
-      row.append(title, speaks, play, remove);
+      });
+      row.append(title, speaks, play, button('Use', () => use(name)), button('Export', () => download(name)), remove);
       return row;
     }));
+    $('export').hidden = !found.voices.length;
+    $('needs').hidden = !found.attention.length;
+    $('attention').replaceChildren(...found.attention.map(({ file, hint }) => {
+      const row = document.createElement('li');
+      const title = document.createElement('b');
+      const what = document.createElement('span');
+      title.textContent = file;
+      what.className = 'muted';
+      what.textContent = hint;
+      row.append(title, what);
+      return row;
+    }));
+  }
+
+  async function list() {
+    render(await (await api('/voices')).json());
+  }
+
+  // What a change of folder or an import did, in a sentence or two.
+  function report(done) {
+    const lines = [];
+    if (done.moved?.length) lines.push(`Moved ${done.moved.join(', ')} here.`);
+    for (const name of done.kept ?? []) lines.push(`Left ${name} in the old folder: this one has a voice with that name.`);
+    for (const { from, to } of done.added ?? []) lines.push(from === to ? `Added ${to}.` : `Added ${from} as ${to}, as ${from} was taken.`);
+    for (const { file, why } of done.skipped ?? []) lines.push(`Left out ${file}: ${why}`);
+    say(lines.join(' '), 'good', 'archive');
   }
 
   $('consent').checked = false;
@@ -376,10 +471,34 @@
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
   $('name').oninput = () => { $('name').value = $('name').value.toLowerCase().replace(/[^a-z0-9_-]/g, ''); };
   $('save').onclick = save;
-  $('copy').onclick = async () => {
-    await navigator.clipboard.writeText($('command').textContent);
-    $('copy').textContent = 'Copied';
-    setTimeout(() => { $('copy').textContent = 'Copy'; }, 1500);
+  $('open').onclick = () => api('/folder/open', { method: 'POST' }).catch((error) => say(error.message, 'bad', 'archive'));
+  $('move').onclick = async () => {
+    say('Choose a folder in the window that opened.', '', 'archive');
+    try {
+      const done = await (await api('/folder', { method: 'POST' })).json();
+      const moved = done.folder !== listed.folder;
+      render(done);
+      if (moved) report(done); else say('', '', 'archive');
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+    }
+  };
+  $('export').onclick = () => download();
+  $('import').onchange = async () => {
+    const zip = $('import').files[0];
+    if (!zip) return;
+    const form = new FormData();
+    form.append('archive', zip, zip.name);
+    say('Importing…', '', 'archive');
+    try {
+      const done = await (await api('/import', { method: 'POST', body: form })).json();
+      report(done);
+      await list();
+    } catch (error) {
+      say(error.message, 'bad', 'archive');
+    } finally {
+      $('import').value = '';
+    }
   };
   show();
   if (!key) say('This link is incomplete. Run boubou clone again.', 'bad');

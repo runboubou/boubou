@@ -8,6 +8,7 @@ compile_error!("Boubou supports macOS and Linux.");
 mod assets;
 mod audio;
 mod backend;
+mod library;
 mod liquid;
 mod media;
 mod modular;
@@ -49,6 +50,9 @@ struct Cli {
     /// Storage for pinned models and inference binaries.
     #[arg(long, global = true, env = "BOUBOU_HOME")]
     cache_dir: Option<PathBuf>,
+    /// The folder of cloned voices for this command. `voices --folder` chooses one for good.
+    #[arg(long, global = true, env = "BOUBOU_VOICES_DIR")]
+    voices_dir: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -122,6 +126,23 @@ enum Action {
     /// Clone a voice on a page in your browser, from a recording or a clip. It stays on this
     /// Mac, and Qwen3-TTS models speak it with --voice.
     Clone,
+    /// List the voices you cloned, the commands that use them, and the folder that keeps them.
+    Voices {
+        /// Keep voices in this folder from now on, and move them there.
+        #[arg(long)]
+        folder: Option<PathBuf>,
+        /// Write the voices NAMES names, or all of them, to a zip file.
+        #[arg(long, value_name = "ZIP", conflicts_with = "folder")]
+        export: Option<PathBuf>,
+        /// Add the voices in a zip file. A voice whose name is taken gets the next free one.
+        #[arg(long, value_name = "ZIP", conflicts_with_all = ["folder", "export"])]
+        import: Option<PathBuf>,
+        #[arg(requires = "export")]
+        names: Vec<String>,
+        /// Answer in JSON, as the clone page reads it.
+        #[arg(long, hide = true)]
+        json: bool,
+    },
     /// Download and verify the selected model and its inference backend.
     Pull {
         #[arg(value_parser = profiles::value_parser())]
@@ -241,6 +262,7 @@ fn run() -> Result<()> {
         .cache_dir
         .or_else(|| dirs::cache_dir().map(|p| p.join("boubou")))
         .context("Cannot find a cache directory. Set BOUBOU_HOME or --cache-dir.")?;
+    let voices = library::open(&cache, cli.voices_dir)?;
     let command = match cli.command {
         Some(command) => command,
         None => {
@@ -351,8 +373,15 @@ fn run() -> Result<()> {
                 &cache,
                 true,
             );
-            modular::clone(&cache, &format!("{program} run qwen3-tts:0.6b-customvoice"))
+            modular::clone(&cache, &voices)
         }
+        Action::Voices {
+            folder,
+            export,
+            import,
+            names,
+            json,
+        } => library::command(&voices, folder, export, import, &names, json),
         Action::Pull { model, offline } => {
             let _checklist = checklist(
                 format!("{program} pull {}", model.id()),
