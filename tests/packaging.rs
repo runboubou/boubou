@@ -66,6 +66,7 @@ impl Package {
         command
             .arg(copy.join("cli.cjs"))
             .env("BOUBOU_HOME", self.0.join("cache"))
+            .env("BOUBOU_VOICES_DIR", self.0.join("voices"))
             .env("BOUBOU_NO_UPDATE_CHECK", "1")
             .env_remove("BOUBOU_UPDATE_CHECKED")
             .env_remove("BOUBOU_NPM");
@@ -146,6 +147,7 @@ impl Prompt {
     fn native(package: &Package, controlling: bool) -> Self {
         let mut command = Command::new(package.0.join("boubou"));
         command
+            .env("BOUBOU_VOICES_DIR", package.0.join("voices"))
             .env("BOUBOU_NO_UPDATE_CHECK", "1")
             .env_remove("BOUBOU_NPM");
         Self::start(package, command, false, &[], controlling)
