@@ -332,8 +332,9 @@ fn language(id: &str) -> String {
 }
 
 /// The languages of the voices a voice list names, by the codes it gives them: the ten Qwen3-TTS
-/// speaks, then Dutch and Hindi. Supertonic's are `profiles::SUPERTONIC_LANGUAGES`.
-pub const LANGUAGES: [(&str, &str); 12] = [
+/// speaks, then the twenty more VoxCPM2 reads cloned voices in, Dutch and Hindi first.
+/// Supertonic's are `profiles::SUPERTONIC_LANGUAGES`.
+pub const LANGUAGES: [(&str, &str); 30] = [
     ("en", "English"),
     ("ja", "Japanese"),
     ("zh", "Chinese"),
@@ -346,7 +347,35 @@ pub const LANGUAGES: [(&str, &str); 12] = [
     ("ru", "Russian"),
     ("nl", "Dutch"),
     ("hi", "Hindi"),
+    ("ar", "Arabic"),
+    ("my", "Burmese"),
+    ("da", "Danish"),
+    ("fi", "Finnish"),
+    ("el", "Greek"),
+    ("he", "Hebrew"),
+    ("id", "Indonesian"),
+    ("km", "Khmer"),
+    ("lo", "Lao"),
+    ("ms", "Malay"),
+    ("no", "Norwegian"),
+    ("pl", "Polish"),
+    ("sw", "Swahili"),
+    ("sv", "Swedish"),
+    ("tl", "Tagalog"),
+    ("th", "Thai"),
+    ("tr", "Turkish"),
+    ("vi", "Vietnamese"),
 ];
+
+/// VoxCPM2's weights, which read the voices cloned in languages Qwen3-TTS does not speak, from
+/// the recording and its words. A Qwen3-TTS conversation hands it those voices' sentences.
+pub const VOXCPM: &str = "voxcpm2:2b";
+
+/// Whether Qwen3-TTS reads a voice cloned in the language `speaks`, one of its ten; VoxCPM2
+/// reads the others.
+pub fn qwen_reads(speaks: &str) -> bool {
+    LANGUAGES[..10].iter().any(|(_, title)| *title == speaks)
+}
 
 /// The voices cloned on this computer, by name, each with the language it speaks. A recording
 /// renamed in the folder is found by its new name.
@@ -370,13 +399,23 @@ fn base(id: &str) -> Option<&'static str> {
     }
 }
 
-/// The Base weights that read the voices cloned in `cache`, for a Qwen3-TTS entry, once there
-/// are any, and for `boubou clone`, those of the size this computer clones with.
+/// The Base weights that read the voices cloned in `cache`, for a Qwen3-TTS entry, once one
+/// speaks a language Qwen3-TTS does, and for `boubou clone`, those of the size this computer
+/// clones with.
 fn cloner(id: &str, cache: &Path) -> Option<&'static str> {
     if id == CLONE {
         return base(library::model());
     }
-    base(id).filter(|_| !clones(cache).is_empty())
+    let reads = || clones(cache).iter().any(|(_, speaks)| qwen_reads(speaks));
+    base(id).filter(|_| reads())
+}
+
+/// VoxCPM2, for a Qwen3-TTS entry or `boubou clone`, once a voice cloned in `cache` speaks a
+/// language Qwen3-TTS does not. The clone page fetches it when such a voice first speaks.
+fn voxcpm(id: &str, cache: &Path) -> Option<&'static str> {
+    let qwen = id == CLONE || base(id).is_some();
+    let other = || clones(cache).iter().any(|(_, speaks)| !qwen_reads(speaks));
+    (qwen && other()).then_some(VOXCPM)
 }
 
 /// What `GET /v1/audio/voices` answers for a model: the voices a text to read aloud can name,
@@ -504,6 +543,7 @@ fn owners(id: &str, voice: Option<&profiles::Voice>, cache: &Path) -> Vec<String
     [id.to_owned()]
         .into_iter()
         .chain(cloner(id, cache).map(str::to_owned))
+        .chain(voxcpm(id, cache).map(str::to_owned))
         .chain(preset)
         .collect()
 }
@@ -641,11 +681,16 @@ pub fn run(
         .arg(id)
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"));
-    // The runner reads cloned voices with the Base weights that preparing verified.
-    if let Some(base) = cloner(id, cache) {
-        command
-            .env("BOUBOU_VOICES", library::folder(cache))
-            .env("BOUBOU_CLONER", base);
+    // The runner reads cloned voices with the Base weights or VoxCPM2 that preparing verified.
+    let (base, other) = (cloner(id, cache), voxcpm(id, cache));
+    if base.is_some() || other.is_some() {
+        command.env("BOUBOU_VOICES", library::folder(cache));
+    }
+    if let Some(base) = base {
+        command.env("BOUBOU_CLONER", base);
+    }
+    if let Some(other) = other {
+        command.env("BOUBOU_VOXCPM", other);
     }
     // Later options replace earlier ones: the voice replaces the model's own speaker, and
     // pipeline options replace both.
@@ -732,13 +777,15 @@ fn speech(id: &str, voice: &profiles::Voice, cloned: &[profiles::Voice]) -> Vec<
         ]
     } else {
         // In its own language a speaker keeps its entry's way with languages; --language named
-        // any other.
-        told = !(profiles::VOICES.contains(&(name, language)) || cloned.contains(voice));
+        // any other. VoxCPM2 reads a voice in a language Qwen3-TTS does not speak, so only the
+        // language model is told it.
+        let other = cloned.contains(voice) && !qwen_reads(language);
+        told = other || !(profiles::VOICES.contains(&(name, language)) || cloned.contains(voice));
         let mut options = Vec::new();
         if !cloned.iter().any(|(clone, _)| clone == name) {
             options.extend(["--qwen3_tts_speaker", name]);
         }
-        if told {
+        if told && !other {
             options.extend(["--qwen3_tts_language", &lowercase]);
         }
         options
@@ -786,6 +833,8 @@ pub fn clone(cache: &Path, voices: &Path) -> Result<()> {
             "BOUBOU_CLONER",
             cloner(CLONE, cache).context("No Base weights clone here.")?,
         )
+        // Fetched by `boubou voices --prepare` when a voice it reads first speaks.
+        .env("BOUBOU_VOXCPM", VOXCPM)
         .env("BOUBOU_BIN", std::env::current_exe()?)
         .env("BOUBOU_KEY", &key);
     let (mut server, _) = chat::Server::launch(command, Duration::from_secs(300), &stopped)?;
@@ -889,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_voice_reaches_the_pipeline_with_its_language() {
-        let cloned = [("mom".to_owned(), "Chinese")];
+        let cloned = [("mom".to_owned(), "Chinese"), ("nok".to_owned(), "Thai")];
         let speech = |id, name: &str, language| speech(id, &(name.to_owned(), language), &cloned);
         let reply = |language| format!("{PROMPT} Always reply in {language}.");
         assert_eq!(
@@ -932,6 +981,12 @@ mod tests {
         let anna = ["--qwen3_tts_speaker", "Ono_Anna"];
         assert_eq!(speech(whisper, "Ono_Anna", "Japanese"), anna);
         assert!(speech(whisper, "mom", "Chinese").is_empty());
+        // VoxCPM2 reads a voice cloned in a language Qwen3-TTS does not speak: only the language
+        // model is told it.
+        assert_eq!(
+            speech(whisper, "nok", "Thai"),
+            ["--init_chat_prompt", &reply("Thai")]
+        );
         // In another, Qwen3-TTS and the language model are told which.
         let german = ["--qwen3_tts_language", "german", "--init_chat_prompt"];
         assert_eq!(
@@ -959,9 +1014,9 @@ mod tests {
         let voices = cache.join("voices");
         library::keep(&voices, "mom", "zh");
         library::keep(&voices, "dad", "en");
-        // Half-written, in a language Qwen3-TTS does not speak, not a name the page gives, or
-        // words without a recording.
-        library::keep(&voices, "pet", "sv");
+        // Half-written, in a language no model here speaks, not a name the page gives, or words
+        // without a recording.
+        library::keep(&voices, "pet", "eu");
         fs::copy(voices.join("dad.json"), voices.join(".kid.json")).unwrap();
         fs::copy(voices.join("dad.json"), voices.join("Big.json")).unwrap();
         fs::copy(voices.join("dad.json"), voices.join("gone.json")).unwrap();
@@ -982,6 +1037,27 @@ mod tests {
         let size = library::model();
         assert_eq!(cloner(CLONE, &cache), base(size));
         assert!(owners(CLONE, None, &cache).contains(&base(size).unwrap().to_owned()));
+        // VoxCPM2 comes once a voice speaks a language Qwen3-TTS does not, and only then.
+        assert_eq!(voxcpm(small, &cache), None);
+        library::keep(&voices, "nok", "th");
+        assert_eq!(clones(&cache)[2], ("nok".into(), "Thai"));
+        for id in [small, large, CLONE] {
+            assert_eq!(voxcpm(id, &cache), Some(VOXCPM), "{id}");
+        }
+        assert_eq!(voxcpm("kokoro:82m", &cache), None);
+        let owned = owners(small, None, &cache);
+        assert!(
+            owned.contains(&"qwen3-tts:0.6b-base".to_owned()) && owned.contains(&VOXCPM.to_owned())
+        );
+        // With only such voices, no Base weights are fetched.
+        for name in ["mom", "dad"] {
+            for extension in ["wav", "json"] {
+                fs::remove_file(voices.join(format!("{name}.{extension}"))).unwrap();
+            }
+        }
+        assert_eq!(cloner(small, &cache), None);
+        assert_eq!(voxcpm(small, &cache), Some(VOXCPM));
+        assert!(qwen_reads("Chinese") && !qwen_reads("Thai"));
         fs::remove_dir_all(&cache).unwrap();
     }
 

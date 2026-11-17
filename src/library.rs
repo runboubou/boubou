@@ -1096,7 +1096,7 @@ mod tests {
         fs::copy(folder.join("me.wav"), folder.join("pet.wav")).unwrap();
         fs::write(
             folder.join("pet.json"),
-            r#"{"text":"Hej.","language":"sv"}"#,
+            r#"{"text":"Kaixo.","language":"eu"}"#,
         )
         .unwrap();
         // Hidden and other files are not voices.

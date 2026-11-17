@@ -896,6 +896,13 @@ mod tests {
             voiced(small, "dad"),
             voice("dad", "English").map(|v| (small, v))
         );
+        // A voice cloned in a language VoxCPM2 reads is heard by the Whisper entry.
+        crate::library::keep(&cache.join("voices"), "nok", "th");
+        assert_eq!(
+            voiced(small, "nok"),
+            voice("nok", "Thai").map(|v| (whisper, v))
+        );
+        fs::remove_file(cache.join("voices/nok.json")).unwrap();
         assert!(
             voiced(small, "nobody")
                 .unwrap_err()
