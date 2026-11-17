@@ -352,13 +352,21 @@ def clone(profile, cache, manifest, *extra):
                 path.write_bytes(await archive.read())
                 return library("--import", str(path))
 
-        @app.post("/transcribe")
-        async def transcribe(audio: UploadFile):
-            clip = samples(await audio.read(), 16000)
+        @app.post("/check")
+        async def check(audio: UploadFile, words: str = Form("")):
+            """What Whisper hears in a take, and what to fix before cloning it: `boubou voices --check`
+            compares the words heard with `words`, the words the take should say, when given."""
+            take = await audio.read()
+            clip = samples(take, 16000)
             with mlx:
                 heard = hear.generate(clip, verbose=False)
-            language = getattr(heard, "language", None)
-            return {"text": heard.text.strip(), "language": language if language in LANGUAGES else ""}
+            text, language = " ".join(heard.text.split()), getattr(heard, "language", None)
+            with TemporaryDirectory(prefix="boubou-check-") as temp:
+                path = Path(temp, "take.wav")
+                path.write_bytes(take)
+                compared = [f"--words={words}", f"--heard={text}"] if words.strip() else []
+                found = library("--check", str(path), *compared)
+            return {**found, "text": text, "language": language if language in LANGUAGES else ""}
 
         @app.post("/voices")
         async def save(audio: UploadFile, name: str = Form(), text: str = Form(), language: str = Form(),
@@ -373,8 +381,12 @@ def clone(profile, cache, manifest, *extra):
             clip = samples(await audio.read(), speak.sample_rate)
             if not 3 <= len(clip) / speak.sample_rate <= 30:
                 raise HTTPException(400, "Give 3 to 30 seconds of voice.")
-            if np.abs(clip - clip.mean()).max() < 0.01:
+            # The page sends the take at the level it was recorded, so the check hears any
+            # distortion. A voice is kept with its loudest moment near full scale.
+            clip = clip - clip.mean()
+            if np.abs(clip).max() < 0.01:
                 raise HTTPException(400, "Boubou heard no voice. Check the microphone or the clip, then try again.")
+            clip = clip * (0.9 / np.abs(clip).max())
             # The words last: a voice is listed once they are there.
             keep(Path(CLONES, f"{name}.wav"), wav(clip, speak.sample_rate))
             keep(Path(CLONES, f"{name}.json"), json.dumps({"text": text, "language": language}).encode())

@@ -15,6 +15,7 @@ mod modular;
 mod onboarding;
 mod profiles;
 mod progress;
+mod quality;
 mod realtime;
 mod serve;
 mod talk;
@@ -139,6 +140,14 @@ enum Action {
         import: Option<PathBuf>,
         #[arg(requires = "export")]
         names: Vec<String>,
+        /// Say whether a WAV recording will clone well, and what to fix.
+        #[arg(long, value_name = "WAV", conflicts_with_all = ["folder", "export", "import"])]
+        check: Option<PathBuf>,
+        /// The words the recording should say, and the words Whisper heard, for --check.
+        #[arg(long, requires = "check", hide = true)]
+        words: Option<String>,
+        #[arg(long, requires = "words", hide = true)]
+        heard: Option<String>,
         /// Answer in JSON, as the clone page reads it.
         #[arg(long, hide = true)]
         json: bool,
@@ -376,11 +385,19 @@ fn run() -> Result<()> {
             modular::clone(&cache, &voices)
         }
         Action::Voices {
+            check: Some(wav),
+            words,
+            heard,
+            json,
+            ..
+        } => quality::command(&wav, words.as_deref(), heard.as_deref(), json),
+        Action::Voices {
             folder,
             export,
             import,
             names,
             json,
+            ..
         } => library::command(&voices, folder, export, import, &names, json),
         Action::Pull { model, offline } => {
             let _checklist = checklist(
