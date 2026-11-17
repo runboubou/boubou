@@ -361,15 +361,22 @@ pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
         .collect()
 }
 
+/// The Base weights of a Qwen3-TTS entry's size, which clone. CustomVoice weights cannot.
+fn base(id: &str) -> Option<&'static str> {
+    match id.get(..14)? {
+        "qwen3-tts:0.6b" => Some("qwen3-tts:0.6b-base"),
+        "qwen3-tts:1.7b" => Some("qwen3-tts:1.7b-base"),
+        _ => None,
+    }
+}
+
 /// The Base weights that read the voices cloned in `cache`, for a Qwen3-TTS entry, once there
-/// are any. CustomVoice weights cannot clone.
+/// are any, and for `boubou clone`, those of the size this computer clones with.
 fn cloner(id: &str, cache: &Path) -> Option<&'static str> {
-    let base = match id.get(..14)? {
-        "qwen3-tts:0.6b" => "qwen3-tts:0.6b-base",
-        "qwen3-tts:1.7b" => "qwen3-tts:1.7b-base",
-        _ => return None,
-    };
-    (!clones(cache).is_empty()).then_some(base)
+    if id == CLONE {
+        return base(library::model());
+    }
+    base(id).filter(|_| !clones(cache).is_empty())
 }
 
 /// What `GET /v1/audio/voices` answers for a model: the voices a text to read aloud can name,
@@ -775,6 +782,10 @@ pub fn clone(cache: &Path, voices: &Path) -> Result<()> {
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"))
         .env("BOUBOU_VOICES", voices)
+        .env(
+            "BOUBOU_CLONER",
+            cloner(CLONE, cache).context("No Base weights clone here.")?,
+        )
         .env("BOUBOU_BIN", std::env::current_exe()?)
         .env("BOUBOU_KEY", &key);
     let (mut server, _) = chat::Server::launch(command, Duration::from_secs(300), &stopped)?;
@@ -967,7 +978,10 @@ mod tests {
         let large = "qwen3-tts:1.7b-customvoice-27b";
         assert_eq!(cloner(large, &cache), Some("qwen3-tts:1.7b-base"));
         assert_eq!(cloner("kokoro:82m", &cache), None);
-        assert_eq!(cloner(CLONE, &cache), None);
+        // `boubou clone` speaks with the Base weights of the size this computer clones with.
+        let size = library::model();
+        assert_eq!(cloner(CLONE, &cache), base(size));
+        assert!(owners(CLONE, None, &cache).contains(&base(size).unwrap().to_owned()));
         fs::remove_dir_all(&cache).unwrap();
     }
 
