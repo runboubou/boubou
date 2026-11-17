@@ -77,6 +77,9 @@ BASE = [
 # VoxCPM2 (Apache-2.0) reads the voices cloned in the twenty languages it speaks and Qwen3-TTS does
 # not, from the recording and its words. A Qwen3-TTS entry or `boubou clone` fetches it once such a
 # voice exists: the MLX 8-bit weights, and the original card for its license.
+# OmniVoice reads the voices cloned in the other languages Whisper hears, with the files its own entry
+# runs. Its model allows noncommercial use only; Boubou asks the person to accept that first.
+OMNIVOICE_CLONE = "omnivoice:clone"
 VOXCPM = ("voxcpm2:2b", "VoxCPM2-8bit", "d52725898a0675703f7f9ddc5a4d1a3cdbb99032",
           {"README.md", "config.json", "model.safetensors", "special_tokens_map.json", "tokenizer.json",
            "tokenizer_config.json"},
@@ -350,9 +353,13 @@ def with_runtime_profiles(files):
 
 
 def with_cloning(files):
-    """Add the Base weights and VoxCPM2, which own nothing else, and lend Whisper to `boubou clone`."""
+    """Add the Base weights and VoxCPM2, which own nothing else, lend Whisper to `boubou clone`, and
+    OmniVoice's weights to the voices it reads (OMNIVOICE_CLONE)."""
     whisper = ("hub/models--mlx-community--whisper-large-v3-turbo/", "hub/models--openai--whisper-large-v3/")
     files = [{**file, "profiles": [*file["profiles"], CLONE]} if file["path"].startswith(whisper) else file
+             for file in files]
+    omnivoice = f"hub/models--{OMNIVOICE[0].replace('/', '--')}/"
+    files = [{**file, "profiles": [*file["profiles"], OMNIVOICE_CLONE]} if file["path"].startswith(omnivoice) else file
              for file in files]
     for size, revision, original in BASE:
         profile = f"qwen3-tts:{size.lower()}-base"

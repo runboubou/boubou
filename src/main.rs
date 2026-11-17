@@ -151,10 +151,17 @@ enum Action {
         /// Answer in JSON, as the clone page reads it.
         #[arg(long, hide = true)]
         json: bool,
-        /// Download VoxCPM2, which reads voices cloned in languages Qwen3-TTS does not speak,
-        /// as the clone page asks when such a voice first speaks.
-        #[arg(long, hide = true, conflicts_with_all = ["folder", "export", "import", "check"])]
-        prepare: bool,
+        /// Read OmniVoice's noncommercial terms and accept them, so the voices it reads can speak.
+        #[arg(long, conflicts_with_all = ["folder", "export", "import", "check"])]
+        accept_noncommercial: bool,
+        /// Accept without asking again, as the clone page does after its own box is ticked.
+        #[arg(long, hide = true, requires = "accept_noncommercial")]
+        yes: bool,
+        /// Download VoxCPM2 or OmniVoice, which read voices cloned in languages Qwen3-TTS does not
+        /// speak, as the clone page asks when such a voice first speaks.
+        #[arg(long, hide = true, value_parser = [modular::VOXCPM, modular::OMNIVOICE],
+              conflicts_with_all = ["folder", "export", "import", "check", "accept_noncommercial"])]
+        prepare: Option<String>,
     },
     /// Download and verify the selected model and its inference backend.
     Pull {
@@ -388,9 +395,15 @@ fn run() -> Result<()> {
             );
             modular::clone(&cache, &voices)
         }
-        Action::Voices { prepare: true, .. } => {
-            modular::prepare(modular::VOXCPM, None, &cache, false).map(drop)
-        }
+        Action::Voices {
+            prepare: Some(profile),
+            ..
+        } => modular::prepare(&profile, None, &cache, false).map(drop),
+        Action::Voices {
+            accept_noncommercial: true,
+            yes,
+            ..
+        } => library::accept_command(yes),
         Action::Voices {
             check: Some(wav),
             words,
