@@ -62,9 +62,6 @@
   #checks li { display: flex; gap: 12px; align-items: flex-start; }
   #checks li::before { content: "✓"; color: var(--good); width: 18px; flex: none; text-align: center; }
   #checks li.warn::before { content: "⚠"; color: var(--warn); }
-  .takes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .take { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 4px 6px 4px 4px; min-width: 0; }
-  .take > button:first-child { border: 0; flex: 1; justify-content: flex-start; padding: 6px 12px; min-width: 0; }
   .name { flex: 0 1 280px; min-width: 160px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
   .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
@@ -82,9 +79,10 @@
   #voices .tools button:hover { background: var(--soft); }
   #voices .tools .use { padding: 4px 10px; font-size: .9rem; border: 1px solid var(--line); margin-right: 6px; }
   #attention li { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--line); }
-  .where { display: flex; gap: 6px 10px; align-items: baseline; flex-wrap: wrap; }
-  .where button { border: 0; padding: 0; background: none; color: var(--strong); font-size: .92rem; }
-  .where button:hover { text-decoration: underline; }
+  .where { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: 10px; background: var(--soft); }
+  .where > div { flex: 1 1 260px; min-width: 0; display: grid; gap: 2px; }
+  .where code { overflow-wrap: anywhere; font-size: .95rem; }
+  .where button { padding: 6px 12px; }
   .warning { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--bad); color: var(--bad); }
   .pill { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: .8rem; border: 1px solid var(--bad); color: var(--bad); }
   .terms { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--bad); border-radius: 10px; }
@@ -94,7 +92,6 @@
   [hidden] { display: none !important; }
   @media (max-width: 560px) {
     section { padding: 18px 16px; }
-    .takes { grid-template-columns: 1fr; }
     .head button, .head .file { padding: 6px 12px; }
     blockquote { font-size: 1.1rem; }
   }
@@ -165,8 +162,8 @@
       <h2><span class="step">2</span>Hear it</h2>
     </div>
     <input type="text" id="line" dir="auto" maxlength="300" aria-label="A sentence for the new voice to say" autocomplete="off">
-    <div class="takes" id="takes"></div>
     <div class="row">
+      <button type="button" class="primary" id="preview"><svg class="icon"><use href="#i-play"/></svg><span>Play</span></button>
       <button type="button" id="original"><svg class="icon"><use href="#i-play"/></svg>Your recording</button>
     </div>
     <p class="muted" id="hear-note"></p>
@@ -183,6 +180,7 @@
     </div>
     <div class="row">
       <button type="button" class="primary" id="save">Save voice</button>
+      <span class="muted" id="save-where"></span>
     </div>
     <p id="saved" role="status"></p>
   </section>
@@ -224,6 +222,15 @@
       <label class="file"><input type="file" id="import" accept=".zip,application/zip"><svg class="icon"><use href="#i-up"/></svg>Import</label>
       <button type="button" id="export"><svg class="icon"><use href="#i-down"/></svg>Export all</button>
     </div>
+    <div class="where">
+      <div>
+        <span class="muted">Saved on this Mac in</span>
+        <code id="folder"></code>
+        <span class="muted" id="folder-why"></span>
+      </div>
+      <button type="button" id="open">Show in Finder</button>
+      <button type="button" id="move">Change folder</button>
+    </div>
     <p class="warning synced" hidden></p>
     <div class="terms" id="unaccepted" hidden>
       <p id="unaccepted-why">Some voices here are in languages OmniVoice reads. They stay silent until you accept its terms.</p>
@@ -236,11 +243,6 @@
     <div id="needs" hidden>
       <p class="muted">These files need attention:</p>
       <ul id="attention"></ul>
-    </div>
-    <div class="where muted">
-      <span id="folder"></span>
-      <button type="button" id="open">Open</button>
-      <button type="button" id="move">Change folder</button>
     </div>
     <p class="muted">Put a WAV file of one voice in this folder to add it; rename the file to rename the voice.</p>
   </section>
@@ -298,8 +300,6 @@
   const voice = { way: 'record', language: 'en', clip: null, words: '', noncommercial: false, ready: false };
   // The folder and what it holds, as Boubou last listed it.
   let listed = { voices: [], languages: [] };
-  // Three takes of the sentence in "Hear it", each read with a seed of its own.
-  const TAKES = [1, 2, 3];
 
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${key}`, ...options.headers } });
@@ -360,7 +360,7 @@
     if (!voice.clip) { $('checks').hidden = true; $('decide').hidden = true; $('heard').hidden = true; }
     for (const step of ['hear', 'save-step']) $(step).classList.toggle('waiting', !(voice.clip && voice.ready));
     $('hear-note').textContent = voice.clip && voice.ready
-      ? 'Type any sentence, then play a take. Each take reads it a little differently; compare them with your recording.'
+      ? 'A preview before you save: type any sentence and play it in the new voice, then compare it with your recording. If it does not sound like the voice, give it again.'
       : 'Give a voice first.';
   }
 
@@ -570,14 +570,16 @@
     }
   }
 
-  // The takes heard so far, by their sentence and seed; let go when the voice changes.
-  let takes = new Map();
+  // The sentences heard so far; let go when the voice changes.
+  let previews = new Map();
   function forget() {
-    takes = new Map();
+    previews = new Map();
   }
 
-  // Reads the sentence in the box in the voice being given, with take `seed`, and plays it.
-  async function take(seed, control) {
+  // Reads the sentence in the box in the voice being given, and plays it. A sentence reads the
+  // same each time: one seed for every preview.
+  async function preview(control) {
+    const seed = 0;
     const line = $('line').value.trim();
     if (!line) return say('Type a sentence to hear.', 'bad', 'heard-status');
     if (terms() && !$('noncommercial').checked) {
@@ -586,12 +588,12 @@
     }
     if (voice.way === 'upload') voice.words = $('words').value.trim();
     const known = `${seed}\n${voice.language}\n${voice.words}\n${line}`;
-    const label = control.lastChild.textContent;
+    const label = control.lastElementChild.textContent;
     control.disabled = true;
     say('', '', 'heard-status');
     try {
-      if (!takes.has(known)) {
-        control.lastChild.textContent = 'Reading…';
+      if (!previews.has(known)) {
+        control.lastElementChild.textContent = 'Reading…';
         patience(voice.language, 'heard-status');
         const form = new FormData();
         form.append('audio', voice.clip, 'voice.wav');
@@ -599,26 +601,20 @@
         const turn = choice;
         const spoken = await (await api('/takes', { method: 'POST', body: form })).blob();
         if (turn !== choice) return;
-        takes.set(known, spoken);
+        previews.set(known, spoken);
         if (terms()) await list();
       }
-      await play(takes.get(known));
+      await play(previews.get(known));
     } catch (error) {
       say(error.message, 'bad', 'heard-status');
     } finally {
       clearTimeout(fetching);
-      control.lastChild.textContent = label;
+      control.lastElementChild.textContent = label;
       control.disabled = false;
     }
   }
 
-  $('takes').append(...TAKES.map((seed, i) => {
-    const holder = document.createElement('div');
-    holder.className = 'take';
-    const control = button(`Take ${i + 1}`, () => take(seed, control), 'play');
-    holder.append(control);
-    return holder;
-  }));
+  $('preview').onclick = () => preview($('preview'));
   $('original').onclick = () => voice.clip && play(voice.clip);
 
   async function save() {
@@ -639,8 +635,8 @@
     say('Saving…', '', 'saved');
     try {
       await api('/voices', { method: 'POST', body: form });
-      say(`Saved as ${name}. Only this Mac has it.`, 'good', 'saved');
       await list();
+      say(`Saved as ${name} in ${listed.shown}. Only this Mac has it.`, 'good', 'saved');
       use(name);
     } catch (error) {
       say(error.message, 'bad', 'saved');
@@ -725,8 +721,10 @@
     listed = found;
     if (!$('spoken').options.length) languages($('spoken'), voice.language);
     $('yours').hidden = false;
-    $('folder').textContent = `Kept in ${found.shown}${found.default ? ', not in caches' : ''}.`;
+    $('folder').textContent = found.shown;
     $('folder').title = found.folder;
+    $('folder-why').textContent = found.default ? "Boubou's own folder, not a cache: cleaners leave it alone." : '';
+    $('save-where').textContent = `Saves to ${found.shown}`;
     for (const warning of document.querySelectorAll('.synced')) {
       warning.hidden = !found.synced;
       warning.textContent = 'This folder may sync to iCloud or another cloud service, so your voices may leave this Mac. Change folder to keep them here.';
@@ -837,7 +835,7 @@
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
   $('words').oninput = forget;
   $('name').oninput = () => { $('name').value = $('name').value.toLowerCase().replace(/[^a-z0-9_-]/g, ''); };
-  $('line').onkeydown = (event) => { if (event.key === 'Enter') $('takes').querySelector('button').click(); };
+  $('line').onkeydown = (event) => { if (event.key === 'Enter') $('preview').click(); };
   $('save').onclick = save;
   $('open').onclick = () => api('/folder/open', { method: 'POST' }).catch((error) => say(error.message, 'bad', 'archive'));
   $('move').onclick = async () => {
