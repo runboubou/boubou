@@ -74,6 +74,13 @@ BASE = [
     ("0.6B", "4e44ed4bcee28a0f89a493e07bde16e6dccd43eb", "5d83992436eae1d760afd27aff78a71d676296fc"),
     ("1.7B", "34ff5318365b59cba9c03ff729f2eee0814caf72", "fd4b254389122332181a7c3db7f27e918eec64e3"),
 ]
+# VoxCPM2 (Apache-2.0) reads the voices cloned in the twenty languages it speaks and Qwen3-TTS does
+# not, from the recording and its words. A Qwen3-TTS entry or `boubou clone` fetches it once such a
+# voice exists: the MLX 8-bit weights, and the original card for its license.
+VOXCPM = ("voxcpm2:2b", "VoxCPM2-8bit", "d52725898a0675703f7f9ddc5a4d1a3cdbb99032",
+          {"README.md", "config.json", "model.safetensors", "special_tokens_map.json", "tokenizer.json",
+           "tokenizer_config.json"},
+          "openbmb/VoxCPM2", "7936080b41163874f38610f46f438e2c0757f9fd")
 # ptts 0.4.0 defaults: its checkpoint, read locally (q8 weights, tokenizer, default voice), and its
 # voice catalog, which the upstream handler lists at startup. The Hub client ptts uses ignores
 # HF_HUB_OFFLINE, but returns a file cached at an exact commit without connecting.
@@ -343,7 +350,7 @@ def with_runtime_profiles(files):
 
 
 def with_cloning(files):
-    """Add the Base weights, which own nothing else, and lend Whisper to `boubou clone`."""
+    """Add the Base weights and VoxCPM2, which own nothing else, and lend Whisper to `boubou clone`."""
     whisper = ("hub/models--mlx-community--whisper-large-v3-turbo/", "hub/models--openai--whisper-large-v3/")
     files = [{**file, "profiles": [*file["profiles"], CLONE]} if file["path"].startswith(whisper) else file
              for file in files]
@@ -354,6 +361,11 @@ def with_cloning(files):
                      *snapshot(repo, original, f"licenses/{repo}/{original}", profile, {"README.md"})]:
             del file["profile"]
             files.append({**file, "profiles": [profile]})
+    profile, name, revision, only, repo, original = VOXCPM
+    for file in [*snapshot(f"mlx-community/{name}", revision, f"hub/models--mlx-community--{name}/snapshots/{revision}", profile, only),
+                 *snapshot(repo, original, f"licenses/{repo}/{original}", profile, {"README.md"})]:
+        del file["profile"]
+        files.append({**file, "profiles": [profile]})
     return files
 
 

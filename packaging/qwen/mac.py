@@ -23,26 +23,53 @@ HUB = {"HF_HOME": HOME, "HF_HUB_CACHE": os.environ.get("HF_HUB_CACHE") or os.pat
 pinned = voice.arguments
 one_voice = voice.read_aloud
 
-# Voices cloned on this Mac: <name>.wav, a recording, and <name>.json, what it says. Boubou names the
-# folder once it has verified the Base weights of the profile BOUBOU_CLONER, which read them, and
-# BOUBOU_VOICE when a cloned voice speaks first. The clone page may choose another folder.
-CLONES, CLONER, OWN = (os.environ.get(name) for name in ("BOUBOU_VOICES", "BOUBOU_CLONER", "BOUBOU_VOICE"))
+# Voices cloned on this Mac: <name>.wav, a recording, and <name>.json, what it says and its language.
+# Boubou names the folder once it has verified the weights that read them: the Qwen3-TTS Base weights
+# of the profile BOUBOU_CLONER for a language Qwen3-TTS speaks, VoxCPM2's of BOUBOU_VOXCPM for the
+# others. BOUBOU_VOICE names a cloned voice that speaks first. The clone page may choose another folder.
+CLONES, CLONER, VOXCPM, OWN = (os.environ.get(name) for name in
+                               ("BOUBOU_VOICES", "BOUBOU_CLONER", "BOUBOU_VOXCPM", "BOUBOU_VOICE"))
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 # Qwen3-TTS CustomVoice's own speakers keep their names.
 SPEAKERS = {"aiden", "ryan", "ono_anna", "sohee", "vivian", "serena", "uncle_fu", "dylan", "eric"}
+# The languages Qwen3-TTS speaks, and the twenty more VoxCPM2 reads cloned voices in.
 LANGUAGES = {"en", "ja", "zh", "ko", "es", "fr", "de", "pt", "it", "ru"}
-# Qwen3-TTS weights by kind, "base" or "custom_voice": a path until a reading first needs them.
+OTHERS = {"nl", "hi", "ar", "my", "da", "fi", "el", "he", "id", "km", "lo", "ms", "no", "pl", "sw", "sv",
+          "tl", "th", "tr", "vi"}
+# Weights by kind, "base", "custom_voice" or "voxcpm": a path until a reading first needs them.
 weights = {}
 
 
 def cloned(name):
-    """The recording and words of the voice cloned as `name`, if there is one."""
+    """The recording, words and language of the voice cloned as `name`, if there is one."""
     name = str(name or "").lower()
     folder = Path(CLONES or "")
     if not (CLONES and NAME.fullmatch(name) and (folder / f"{name}.json").is_file()
             and (folder / f"{name}.wav").is_file()):
         return None
-    return str((folder / f"{name}.wav").resolve()), json.loads((folder / f"{name}.json").read_text())["text"]
+    words = json.loads((folder / f"{name}.json").read_text())
+    return str((folder / f"{name}.wav").resolve()), words["text"], words.get("language", "")
+
+
+class VoxCPMReader:
+    """VoxCPM2 behind the calls that read a voice with Qwen3-TTS Base weights, for a voice cloned in a
+    language Qwen3-TTS does not speak: it continues from the recording and its words."""
+
+    # The Qwen3-TTS handler tells the kinds of weights apart by their config, and clones with Base.
+    config = types.SimpleNamespace(tts_model_type="base")
+
+    def __init__(self, model):
+        self.model, self.sample_rate = model, model.sample_rate
+
+    def generate(self, text, ref_audio=None, ref_text=None, **_):
+        return self.model.generate(text=text, prompt_audio=ref_audio, prompt_text=ref_text)
+
+
+def kind(clone):
+    """Which weights read `clone`, a voice from `cloned`, or Qwen3-TTS's own speakers for None."""
+    if not clone:
+        return "custom_voice"
+    return "base" if clone[2] in LANGUAGES else "voxcpm"
 
 
 def snapshots(manifest, profile):
@@ -110,12 +137,16 @@ def arguments(model_id, cache, manifest, work):
         local_kokoro_voices(Path(options[options.index("--kokoro_model_name") + 1]))
         read_japanese()
     os.environ.update(HUB)
-    if CLONER:
-        (base,) = (path for name, path in snapshots(manifest, CLONER).items() if name.startswith("Qwen3-TTS"))
+    if CLONER or VOXCPM:
         at = options.index("--qwen3_tts_model_name") + 1
-        weights.update(custom_voice=options[at], base=str(Path(cache).resolve() / base))
-        # A cloned voice that speaks first starts with the Base weights, as upstream clones.
-        if own := cloned(OWN):
+        weights["custom_voice"] = options[at]
+        for profile, model, name in ((CLONER, "Qwen3-TTS", "base"), (VOXCPM, "VoxCPM2", "voxcpm")):
+            if profile:
+                (path,) = (path for repo, path in snapshots(manifest, profile).items() if repo.startswith(model))
+                weights[name] = str(Path(cache).resolve() / path)
+        # A cloned voice Qwen3-TTS reads that speaks first starts with the Base weights, as upstream
+        # clones. Any other starts with the entry's own, and its sentences go to VoxCPM2.
+        if (own := cloned(OWN)) and kind(own) == "base":
             options[at] = weights["base"]
             options += ["--qwen3_tts_ref_audio", own[0], "--qwen3_tts_ref_text", own[1]]
     return options
@@ -123,7 +154,7 @@ def arguments(model_id, cache, manifest, work):
 
 def read_aloud():
     """Let a text to read aloud name who reads it: `voice`, one of Qwen3-TTS's speakers or a voice
-    cloned on this Mac.
+    cloned on this Mac, which Qwen3-TTS's Base weights or VoxCPM2 read, by its language.
 
     Any other name, such as OpenAI's own, keeps the voice Boubou started with, as every other
     model does. voice.py reads in that voice only, and stays as the Linux runner published it.
@@ -169,12 +200,13 @@ def read_aloud():
             # Upstream keeps a speaker until a conversation ends, and a reading is none.
             reader.speaker, reader.language = (asked, reading) if asked else own
             clone = cloned(reader.speaker)
-            if CLONER:
-                kind = "base" if clone else "custom_voice"
-                if isinstance(weights[kind], str):
-                    weights[kind] = load_model(weights[kind])
-                reader.model = weights[kind]
-            reader.ref_audio, reader.ref_text = clone or (None, reader.ref_text)
+            if CLONER or VOXCPM:
+                which = kind(clone)
+                if isinstance(weights[which], str):
+                    model = load_model(weights[which])
+                    weights[which] = VoxCPMReader(model) if which == "voxcpm" else model
+                reader.model = weights[which]
+            reader.ref_audio, reader.ref_text = clone[:2] if clone else (None, reader.ref_text)
             if clone:
                 # The recording is kept as Qwen3-TTS hears it. Read it afresh, as it may be recorded again.
                 reader._mlx_ref_audio_cache[clone[0]] = clone[0]
@@ -284,8 +316,8 @@ def clone(profile, cache, manifest, *extra):
             with mlx:
                 heard = hear.generate(clip, verbose=False)
             text, language = " ".join(heard.text.split()), getattr(heard, "language", None)
-            if language not in LANGUAGES:
-                return "Boubou cannot tell its language, or Qwen3-TTS does not speak it. Upload it on this page instead."
+            if language not in LANGUAGES | OTHERS:
+                return "Boubou cannot tell its language, or no voice model here speaks it. Upload it on this page instead."
             if not text:
                 return "Boubou heard no words in it."
             keep(path.with_suffix(".json"), json.dumps({"text": text, "language": language}).encode())
@@ -368,7 +400,7 @@ def clone(profile, cache, manifest, *extra):
                 path.write_bytes(take)
                 compared = [f"--words={words}", f"--heard={text}"] if words.strip() else []
                 found = library("--check", str(path), *compared)
-            return {**found, "text": text, "language": language if language in LANGUAGES else ""}
+            return {**found, "text": text, "language": language if language in LANGUAGES | OTHERS else ""}
 
         @app.post("/voices")
         async def save(audio: UploadFile, name: str = Form(), text: str = Form(), language: str = Form(),
@@ -378,7 +410,7 @@ def clone(profile, cache, manifest, *extra):
                 raise HTTPException(400, "Confirm the voice is yours, or that you may use it.")
             if not NAME.fullmatch(name) or name in SPEAKERS:
                 raise HTTPException(400, "Choose another name: lowercase letters and digits, not a built-in voice.")
-            if not 0 < len(text) <= 500 or language not in LANGUAGES:
+            if not 0 < len(text) <= 500 or language not in LANGUAGES | OTHERS:
                 raise HTTPException(400, "Write what the voice says.")
             clip = samples(await audio.read(), speak.sample_rate)
             if not 3 <= len(clip) / speak.sample_rate <= 30:
@@ -402,15 +434,34 @@ def clone(profile, cache, manifest, *extra):
                 Path(CLONES, f"{name}{suffix}").unlink(missing_ok=True)
             return Response(status_code=204)
 
+        other = {}
+
+        def reader(clone):
+            """What reads `clone`: the Base weights, or VoxCPM2 for a language Qwen3-TTS does not speak,
+            fetched the first time such a voice speaks."""
+            if kind(clone) == "base":
+                return speak
+            if "voxcpm" not in other:
+                (path,) = (path for repo, path in snapshots(manifest, VOXCPM).items() if repo.startswith("VoxCPM2"))
+                if not (cache / path / "model.safetensors").is_file():
+                    done = subprocess.run([os.environ["BOUBOU_BIN"], "--cache-dir", str(cache.parent),
+                                           "--voices-dir", CLONES, "voices", "--prepare"], capture_output=True, text=True)
+                    if done.returncode:
+                        said = [line for line in done.stderr.splitlines() if line.strip()] or ["Boubou could not get the voice model."]
+                        raise HTTPException(503, said[-1].removeprefix("boubou: "))
+                other["voxcpm"] = VoxCPMReader(mouth(str(cache / path)))
+            return other["voxcpm"]
+
         @app.post("/speech")
         def speech(request: dict):
-            clip, text = cloned(request.get("voice")) or (None, None)
-            if clip is None or not str(request.get("input", "")).strip():
+            clone = cloned(request.get("voice"))
+            if clone is None or not str(request.get("input", "")).strip():
                 raise HTTPException(404, "No voice has that name.")
+            reading = reader(clone)
             with mlx:
-                parts = [np.array(part.audio) for part in speak.generate(
-                    text=str(request["input"]), ref_audio=clip, ref_text=text, lang_code="auto")]
-            return Response(wav(np.concatenate(parts), speak.sample_rate), media_type="audio/wav")
+                parts = [np.array(part.audio).reshape(-1) for part in reading.generate(
+                    text=str(request["input"]), ref_audio=clone[0], ref_text=clone[1], lang_code="auto")]
+            return Response(wav(np.concatenate(parts), reading.sample_rate), media_type="audio/wav")
 
         uvicorn.run(app, host=address.host, port=address.port, log_level="warning")
 

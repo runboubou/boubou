@@ -31,7 +31,9 @@
   .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .ways button[aria-pressed="true"], .languages button[aria-pressed="true"] { border: 2px solid var(--accent); color: var(--accent); background: var(--soft); }
   .languages { display: flex; flex-wrap: wrap; gap: 6px; }
-  .languages button { padding: 4px 10px; font-size: .9rem; }
+  .languages button, .languages select { padding: 4px 10px; font-size: .9rem; }
+  .languages select { font: inherit; font-size: .9rem; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  .languages select.chosen { border: 2px solid var(--accent); color: var(--accent); background: var(--soft); }
   blockquote { margin: 0; padding: 14px 16px; border-radius: 10px; background: var(--soft); font-size: 1.12rem; line-height: 1.6; }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .recording { background: var(--bad); border-color: var(--bad); color: #fff; }
@@ -78,11 +80,13 @@
       <button type="button" data-way="record" aria-pressed="true">Record</button>
       <button type="button" data-way="upload" aria-pressed="false">Upload a clip</button>
     </div>
-    <div class="languages" role="group" aria-label="Language"></div>
+    <div class="languages" role="group" aria-label="Language">
+      <select id="more" aria-label="More languages"><option value="">More languages…</option></select>
+    </div>
     <div id="record">
       <div style="display: grid; gap: 12px">
         <p class="muted">Read this aloud, in your own natural voice:</p>
-        <blockquote id="sentence"></blockquote>
+        <blockquote id="sentence" dir="auto"></blockquote>
         <div class="row">
           <button type="button" class="primary" id="microphone">Record</button>
           <span class="muted" id="time">Up to 15 seconds</span>
@@ -165,6 +169,34 @@
     ['it', 'Italiano', 'Oggi è una giornata bellissima, quindi andiamo a fare una passeggiata fino al parco, sediamoci vicino al lago e parliamo di tutto quello che è successo questa settimana.', 'Ciao! Questa è la mia nuova voce. Come ti sembra?'],
     ['ru', 'Русский', 'Сегодня прекрасная погода, так что давай не спеша прогуляемся до парка, посидим у озера и поговорим обо всём, что случилось на этой неделе.', 'Привет! Это мой новый голос. Как он звучит?'],
   ];
+  // Languages Qwen3-TTS does not speak, which VoxCPM2 reads, with a sentence of their own.
+  const MORE = [
+    ['ar', 'العربية', 'الطقس جميل جدًا اليوم، فلنتمشَّ على مهل إلى الحديقة، ونجلس قليلًا بجانب البحيرة، ونتحدث عن كل ما حدث هذا الأسبوع.', 'مرحبًا! هذا صوتي الجديد. كيف يبدو؟'],
+    ['hi', 'हिन्दी', 'आज मौसम बहुत सुहावना है, तो चलो धीरे-धीरे पार्क तक टहलते हैं, थोड़ी देर झील के किनारे बैठते हैं और इस हफ़्ते जो कुछ हुआ उसके बारे में बातें करते हैं।', 'नमस्ते! यह मेरी नई आवाज़ है। कैसी लग रही है?'],
+    ['id', 'Bahasa Indonesia', 'Cuaca hari ini sangat cerah, jadi ayo kita berjalan santai ke taman, duduk sebentar di tepi danau, dan mengobrol tentang semua yang terjadi minggu ini.', 'Halo! Ini suara baruku. Bagaimana kedengarannya?'],
+    ['ms', 'Bahasa Melayu', 'Cuaca hari ini sangat baik, jadi mari kita berjalan perlahan-lahan ke taman, duduk sebentar di tepi tasik dan berbual tentang semua yang berlaku minggu ini.', 'Helo! Ini suara baharu saya. Bagaimana bunyinya?'],
+    ['da', 'Dansk', 'Vejret er dejligt i dag, så lad os gå en rolig tur i parken, sidde lidt ved søen og snakke om alt det, der er sket i denne uge.', 'Hej! Det her er min nye stemme. Hvordan lyder den?'],
+    ['nl', 'Nederlands', 'Het is vandaag heerlijk weer, dus laten we rustig naar het park wandelen, even bij het meer zitten en praten over alles wat er deze week is gebeurd.', 'Hallo! Dit is mijn nieuwe stem. Hoe klinkt het?'],
+    ['el', 'Ελληνικά', 'Ο καιρός είναι υπέροχος σήμερα, ας κάνουμε λοιπόν μια ήρεμη βόλτα στο πάρκο, ας καθίσουμε λίγο δίπλα στη λίμνη και ας μιλήσουμε για όλα όσα έγιναν αυτή την εβδομάδα.', 'Γεια σου! Αυτή είναι η νέα μου φωνή. Πώς ακούγεται;'],
+    ['he', 'עברית', 'מזג האוויר נהדר היום, אז בואו נטייל לאט לפארק, נשב קצת ליד האגם ונדבר על כל מה שקרה השבוע.', 'שלום! זה הקול החדש שלי. איך הוא נשמע?'],
+    ['no', 'Norsk', 'Været er nydelig i dag, så la oss ta en rolig tur til parken, sitte en stund ved vannet og snakke om alt som har skjedd denne uken.', 'Hei! Dette er min nye stemme. Hvordan høres den ut?'],
+    ['pl', 'Polski', 'Dziś jest piękna pogoda, więc chodźmy powoli do parku, posiedźmy chwilę nad jeziorem i porozmawiajmy o wszystkim, co wydarzyło się w tym tygodniu.', 'Cześć! To jest mój nowy głos. Jak brzmi?'],
+    ['fi', 'Suomi', 'Tänään on ihana sää, joten kävellään rauhassa puistoon, istutaan hetki järven rannalla ja jutellaan kaikesta, mitä tällä viikolla tapahtui.', 'Hei! Tämä on uusi ääneni. Miltä se kuulostaa?'],
+    ['sv', 'Svenska', 'Vädret är underbart i dag, så låt oss ta en lugn promenad till parken, sitta en stund vid sjön och prata om allt som hänt den här veckan.', 'Hej! Det här är min nya röst. Hur låter den?'],
+    ['sw', 'Kiswahili', 'Hali ya hewa ni nzuri sana leo, kwa hiyo tutembee polepole hadi bustanini, tukae kidogo kando ya ziwa, na tuzungumze kuhusu kila kitu kilichotokea wiki hii.', 'Habari! Hii ni sauti yangu mpya. Inasikikaje?'],
+    ['tl', 'Tagalog', 'Napakaganda ng panahon ngayon, kaya maglakad tayo nang dahan-dahan papunta sa parke, umupo sandali sa tabi ng lawa, at pag-usapan ang lahat ng nangyari ngayong linggo.', 'Kumusta! Ito ang bago kong boses. Ano sa tingin mo?'],
+    ['th', 'ไทย', 'วันนี้อากาศดีมาก เราไปเดินเล่นที่สวนสาธารณะกันช้า ๆ นั่งริมทะเลสาบสักพัก แล้วคุยกันเรื่องทุกอย่างที่เกิดขึ้นในสัปดาห์นี้', 'สวัสดี! นี่คือเสียงใหม่ของฉัน ฟังแล้วเป็นอย่างไรบ้าง?'],
+    ['tr', 'Türkçe', 'Bugün hava çok güzel, hadi parka doğru yavaşça yürüyelim, gölün kenarında biraz oturalım ve bu hafta olan her şeyi konuşalım.', 'Merhaba! Bu benim yeni sesim. Nasıl duyuluyor?'],
+    ['vi', 'Tiếng Việt', 'Hôm nay trời đẹp quá, mình hãy thong thả đi dạo đến công viên, ngồi bên hồ một lúc và kể cho nhau nghe mọi chuyện đã xảy ra trong tuần này.', 'Xin chào! Đây là giọng nói mới của tôi. Nghe thế nào?'],
+  ];
+  // Languages VoxCPM2 reads that a clip may speak, with no sentence to record yet.
+  const UPLOADED = [
+    ['my', 'မြန်မာ', null, 'မင်္ဂလာပါ။ ဒါက ကျွန်ုပ်ရဲ့ အသံအသစ်ပါ။'],
+    ['km', 'ខ្មែរ', null, 'សួស្តី! នេះជាសំឡេងថ្មីរបស់ខ្ញុំ។'],
+    ['lo', 'ລາວ', null, 'ສະບາຍດີ! ນີ້ແມ່ນສຽງໃໝ່ຂອງຂ້ອຍ.'],
+  ];
+  const ALL = [...LANGUAGES, ...MORE, ...UPLOADED];
+  const speaking = (code) => ALL.find(([known]) => known === code);
   const RATE = 24000;
   const LONGEST = 15;
   const $ = (id) => document.getElementById(id);
@@ -193,12 +225,15 @@
   }
 
   function sentence() {
-    return LANGUAGES.find(([code]) => code === voice.language)[2];
+    return speaking(voice.language)?.[2] ?? LANGUAGES[0][2];
   }
 
   function show() {
     for (const button of document.querySelectorAll('[data-way]')) button.setAttribute('aria-pressed', button.dataset.way === voice.way);
     for (const button of document.querySelectorAll('[data-language]')) button.setAttribute('aria-pressed', button.dataset.language === voice.language);
+    const more = MORE.some(([code]) => code === voice.language);
+    $('more').value = more ? voice.language : '';
+    $('more').classList.toggle('chosen', more);
     $('record').hidden = voice.way !== 'record';
     $('upload').hidden = voice.way !== 'upload';
     $('sentence').textContent = sentence();
@@ -379,12 +414,19 @@
     }
   }
 
+  // Shows, after a while, that a voice is waiting for its model to arrive.
+  let fetching;
   async function hear(name, language, button) {
     const label = button.textContent;
     button.textContent = 'Speaking…';
     button.disabled = true;
     try {
-      const hello = LANGUAGES.find(([code]) => code === language)?.[3] ?? LANGUAGES[0][3];
+      const hello = speaking(language)?.[3] ?? LANGUAGES[0][3];
+      // VoxCPM2 reads the languages Qwen3-TTS does not speak; Boubou fetches it the first time.
+      if (!LANGUAGES.some(([code]) => code === language)) {
+        clearTimeout(fetching);
+        fetching = setTimeout(() => say('The first time a voice in this language speaks, Boubou gets its voice model (about 3 GB). This can take a few minutes.'), 4000);
+      }
       const spoken = await api('/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: name, input: hello }) });
       const player = new Audio(URL.createObjectURL(await spoken.blob()));
       player.onended = () => URL.revokeObjectURL(player.src);
@@ -392,6 +434,7 @@
     } catch (error) {
       say(error.message, 'bad');
     } finally {
+      clearTimeout(fetching);
       button.textContent = label;
       button.disabled = false;
     }
@@ -460,7 +503,7 @@
       const speaks = document.createElement('span');
       title.textContent = name;
       speaks.className = 'muted';
-      speaks.textContent = LANGUAGES.find(([code]) => code === language)?.[1] ?? '';
+      speaks.textContent = speaking(language)?.[1] ?? '';
       const play = button('Play', () => hear(name, language, play));
       play.id = `play-${name}`;
       const remove = button('Delete', async () => {
@@ -500,21 +543,29 @@
   }
 
   $('consent').checked = false;
-  document.querySelector('.languages').append(...LANGUAGES.map(([code, label]) => {
+  function choose(code) {
+    voice.language = code;
+    // Another sentence: a recording of the last one, finished or not, is let go.
+    if (voice.way === 'record') { choice++; voice.clip = null; recorder?.stop(); }
+    show();
+  }
+  $('more').before(...LANGUAGES.map(([code, label]) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.language = code;
     button.textContent = label;
-    button.onclick = () => {
-      voice.language = code;
-      // Another sentence: a recording of the last one, finished or not, is let go.
-      if (voice.way === 'record') { choice++; voice.clip = null; recorder?.stop(); }
-      show();
-    };
+    button.onclick = () => choose(code);
     return button;
   }));
+  $('more').append(...MORE.map(([code, label]) => Object.assign(document.createElement('option'), { value: code, textContent: label })));
+  $('more').onchange = () => $('more').value && choose($('more').value);
   for (const button of document.querySelectorAll('[data-way]')) {
-    button.onclick = () => { choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = ''; show(); say(''); };
+    button.onclick = () => {
+      choice++; recorder?.stop(); voice.way = button.dataset.way; voice.clip = null; voice.words = '';
+      // A language heard in a clip may have no sentence to record yet.
+      if (voice.way === 'record' && !speaking(voice.language)?.[2]) voice.language = 'en';
+      show(); say('');
+    };
   }
   $('microphone').onclick = record;
   $('file').onchange = () => $('file').files[0] && upload($('file').files[0]);
