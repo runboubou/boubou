@@ -385,6 +385,24 @@ pub fn scan(folder: &Path) -> Scan {
             found.attention.push((wav.clone(), hint));
             continue;
         }
+        // Boubou finds a voice's files by their names, on file systems that tell case apart too.
+        if let Some(file) = [Some(wav), json]
+            .into_iter()
+            .flatten()
+            .find(|file| !(file.ends_with(".wav") || file.ends_with(".json")))
+        {
+            let lower = format!(
+                "{stem}.{}",
+                file.rsplit('.')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            );
+            found
+                .attention
+                .push((file.clone(), format!("Rename it {lower}, in lowercase.")));
+            continue;
+        }
         if let Some(hint) =
             fs::File::open(folder.join(wav)).map_or_else(|error| Some(error.to_string()), unusable)
         {
@@ -446,21 +464,43 @@ pub fn tidy(folder: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A path as a shell reads it.
+fn quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    shlex::try_quote(&text).map_or_else(|_| text.to_string(), |quoted| quoted.into_owned())
+}
+
+/// What a command adds to find voices in `folder`: nothing for the folder Boubou keeps them in,
+/// or `--voices-dir` for a folder one command chose.
+fn elsewhere(folder: &Path) -> String {
+    let same = |a: &Path, b: &Path| match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    match data() {
+        Ok(data) if same(&kept(&data), folder) => String::new(),
+        _ => format!(" --voices-dir {}", quote(folder)),
+    }
+}
+
 /// The first lines of each launcher Boubou writes, by which it knows its own.
 const MADE: &str = "#!/bin/sh\n# Made by Boubou for the voice";
 
 /// What `<name>.command` holds: double-clicked in Finder, Terminal talks with the voice. The
-/// person's own login shell starts Boubou, so it finds npx as their terminal does.
-fn launcher(name: &str) -> String {
+/// person's own login shell starts Boubou, so it finds npx as their terminal does. `elsewhere`
+/// finds the voice's folder.
+fn launcher(name: &str, elsewhere: &str) -> String {
     let program = crate::update::program();
     // npx would first ask whether to install Boubou, in a window opened for talking.
     let program = match program.strip_prefix("npx ") {
         Some(package) => format!("npx --yes {package}"),
         None => program.to_owned(),
     };
+    let talk = format!("{program} run {MODEL} --voice {name}{elsewhere}");
+    let talk = shlex::try_quote(&talk).map_or_else(|_| talk.clone(), |quoted| quoted.into_owned());
     format!(
         "{MADE} {name}. Double-click it to talk with {name}; close the window to stop.\n\
-         exec \"${{SHELL:-/bin/zsh}}\" -lic '{program} run {MODEL} --voice {name}'\n"
+         exec \"${{SHELL:-/bin/zsh}}\" -lic {talk}\n"
     )
 }
 
@@ -469,9 +509,10 @@ fn launcher(name: &str) -> String {
 fn launchers(folder: &Path, voices: &[Voice]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
+    let elsewhere = elsewhere(folder);
     for voice in voices {
         let path = folder.join(format!("{}.command", voice.name));
-        let wanted = launcher(&voice.name);
+        let wanted = launcher(&voice.name, &elsewhere);
         let here = fs::read_to_string(&path);
         if here
             .as_deref()
@@ -634,13 +675,20 @@ pub fn import(folder: &Path, zip: &Path) -> Result<Imported> {
 }
 
 /// What a person types to use the voice `name`: to talk with it, to share it with phones and
-/// apps, and to read a text aloud through the API while `serve` runs.
-pub fn commands(name: &str) -> [(&'static str, String); 3] {
+/// apps, and to read a text aloud through the API while `serve` runs. `elsewhere` finds the
+/// voice's folder.
+pub fn commands(name: &str, elsewhere: &str) -> [(&'static str, String); 3] {
     let program = crate::update::program();
     let body = json!({"voice": name, "input": "Hello."});
     [
-        ("Talk", format!("{program} run {MODEL} --voice {name}")),
-        ("Share", format!("{program} serve {MODEL} --voice {name}")),
+        (
+            "Talk",
+            format!("{program} run {MODEL} --voice {name}{elsewhere}"),
+        ),
+        (
+            "Share",
+            format!("{program} serve {MODEL} --voice {name}{elsewhere}"),
+        ),
         (
             "API",
             format!(
@@ -653,11 +701,12 @@ pub fn commands(name: &str) -> [(&'static str, String); 3] {
 /// The folder and what it holds, as the clone page reads it.
 pub fn listing(folder: &Path) -> Value {
     let scan = scan(folder);
+    let elsewhere = elsewhere(folder);
     let voices: Vec<_> = scan
         .voices
         .iter()
         .map(|voice| {
-            let commands: Vec<_> = commands(&voice.name)
+            let commands: Vec<_> = commands(&voice.name, &elsewhere)
                 .into_iter()
                 .map(|(title, command)| json!({"title": title, "command": command}))
                 .collect();
@@ -702,7 +751,7 @@ pub fn print(folder: &Path) {
     }
     for voice in &scan.voices {
         println!("\n{} · {}", voice.name, voice.speaks());
-        for (title, command) in commands(&voice.name) {
+        for (title, command) in commands(&voice.name, &elsewhere(folder)) {
             println!("  {title:<6} {command}");
         }
         if let Some(launcher) = launcher_of(folder, &voice.name) {
@@ -993,6 +1042,10 @@ mod tests {
         fs::copy(folder.join("me.wav"), folder.join("My Voice.wav")).unwrap();
         fs::copy(folder.join("me.wav"), folder.join("aiden.wav")).unwrap();
         fs::write(folder.join("kid.m4a"), "m4a").unwrap();
+        // Extensions in capitals, which file systems that tell case apart would not find.
+        fs::copy(folder.join("me.wav"), folder.join("loud.WAV")).unwrap();
+        fs::copy(folder.join("me.wav"), folder.join("cat.wav")).unwrap();
+        fs::copy(folder.join("me.json"), folder.join("cat.JSON")).unwrap();
         // Unreadable audio, a recording too short, words without a recording, and words
         // that cannot be read.
         fs::write(folder.join("bad.wav"), "not audio").unwrap();
@@ -1038,8 +1091,10 @@ mod tests {
                 "My Voice.wav",
                 "aiden.wav",
                 "bad.wav",
+                "cat.JSON",
                 "gone.json",
                 "kid.m4a",
+                "loud.WAV",
                 "pet.json",
                 "short.wav"
             ]
@@ -1057,6 +1112,11 @@ mod tests {
         assert!(hint("short.wav").starts_with("It lasts 1 s. Give 3 to 30"));
         assert!(hint("gone.json").contains("gone.wav, is missing"));
         assert!(hint("kid.m4a").starts_with("Only WAV files"));
+        assert_eq!(hint("loud.WAV"), "Rename it loud.wav, in lowercase.");
+        assert_eq!(hint("cat.JSON"), "Rename it cat.json, in lowercase.");
+        // Tidying passes them by, and the voices stay as they are.
+        tidy(folder).unwrap();
+        assert_eq!(scan(folder).voices.len(), 2);
         assert!(scan(&folder.join("nowhere")).voices.is_empty());
     }
 
@@ -1101,7 +1161,8 @@ mod tests {
     fn each_voice_gets_a_launcher_to_double_click() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = TestDir::new("launchers");
+        // A folder that only this test names, with characters a shell would misread.
+        let dir = TestDir::new("launcher's room");
         let folder = &dir.0;
         keep(folder, "mom", "zh");
         keep(folder, "dad", "en");
@@ -1110,7 +1171,7 @@ mod tests {
         launchers(folder, &scan(folder).voices).unwrap();
         let mom = fs::read_to_string(folder.join("mom.command")).unwrap();
         assert!(mom.starts_with(MADE));
-        assert!(mom.ends_with(&format!("-lic 'boubou run {MODEL} --voice mom'\n")));
+        assert!(mom.contains("exec \"${SHELL:-/bin/zsh}\" -lic "), "{mom}");
         let mode = fs::metadata(folder.join("mom.command"))
             .unwrap()
             .permissions()
@@ -1141,10 +1202,19 @@ mod tests {
             .status()
             .unwrap();
         assert!(ran.success());
+        let flag = format!(" --voices-dir {}", quote(folder));
+        let talk = format!("boubou run {MODEL} --voice mother{flag}");
         assert_eq!(
             fs::read_to_string(folder.join("shell.args")).unwrap(),
-            format!("-lic|boubou run {MODEL} --voice mother|")
+            format!("-lic|{talk}|")
         );
+        let words = shlex::split(&talk).unwrap();
+        assert_eq!(words.last().map(PathBuf::from).as_ref(), Some(folder));
+
+        // The commands to type find the folder too; the folder Boubou keeps voices in needs no flag.
+        assert_eq!(elsewhere(folder), flag);
+        assert!(commands("mother", &elsewhere(folder))[1].1.ends_with(&flag));
+        assert_eq!(elsewhere(&kept(&data().unwrap())), "");
     }
 
     #[test]

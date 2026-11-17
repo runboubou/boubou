@@ -348,9 +348,13 @@ pub const LANGUAGES: [(&str, &str); 12] = [
     ("hi", "Hindi"),
 ];
 
-/// The voices cloned on this computer, by name, each with the language it speaks.
+/// The voices cloned on this computer, by name, each with the language it speaks. A recording
+/// renamed in the folder is found by its new name.
 pub fn clones(cache: &Path) -> Vec<profiles::Voice> {
-    let voices = library::scan(&library::folder(cache)).voices;
+    let folder = library::folder(cache);
+    // A folder Boubou cannot write to still lists the voices it holds.
+    let _ = library::tidy(&folder);
+    let voices = library::scan(&folder).voices;
     voices
         .iter()
         .map(|voice| (voice.name.clone(), voice.speaks()))
@@ -951,6 +955,13 @@ mod tests {
         fs::copy(voices.join("dad.json"), voices.join("Big.json")).unwrap();
         fs::copy(voices.join("dad.json"), voices.join("gone.json")).unwrap();
         let both = vec![("dad".into(), "English"), ("mom".into(), "Chinese")];
+        assert_eq!(clones(&cache), both);
+        // A renamed recording is its voice under the new name, without another step.
+        fs::rename(voices.join("mom.wav"), voices.join("mother.wav")).unwrap();
+        let renamed = vec![("dad".into(), "English"), ("mother".into(), "Chinese")];
+        assert_eq!(clones(&cache), renamed);
+        fs::rename(voices.join("mother.wav"), voices.join("mom.wav")).unwrap();
+        fs::rename(voices.join("mother.json"), voices.join("mom.json")).unwrap();
         assert_eq!(clones(&cache), both);
         assert_eq!(cloner(small, &cache), Some("qwen3-tts:0.6b-base"));
         let large = "qwen3-tts:1.7b-customvoice-27b";
