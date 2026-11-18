@@ -6,11 +6,12 @@ const path = require("node:path");
 const { test } = require("node:test");
 
 const launcher = path.join(__dirname, "cli.cjs");
+// npm installs this computer's binary as the launcher's optional dependency.
+const platform = `@boubou/${process.platform}-${process.arch}`;
 const native = `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
-const root = process.platform === "linux" ? path.dirname(__dirname) : __dirname;
-const result = {version: require(path.join(root, "package.json")).version, args: process.argv.slice(2), noCheck: process.env.BOUBOU_NO_UPDATE_CHECK};
+const result = {version: require(path.join(__dirname, "package.json")).version, args: process.argv.slice(2), noCheck: process.env.BOUBOU_NO_UPDATE_CHECK};
 if (process.env.FAKE_NATIVE_READY) {
   process.on("SIGINT", () => { fs.writeFileSync(process.env.FAKE_NATIVE_SIGNAL, "SIGINT"); process.exit(130); });
   fs.writeFileSync(process.env.FAKE_NATIVE_READY, "ready");
@@ -45,14 +46,14 @@ if (args[0] === "view") {
 } else throw new Error("Unexpected npm command: " + args.join(" "));
 `;
 
-async function packageAt(root, version) {
-  await fs.mkdir(root, { recursive: true });
+function binaryOf(root) { return path.join(root, "node_modules", platform, "boubou"); }
+
+async function packageAt(root, version, nativeVersion = version) {
+  await fs.mkdir(path.dirname(binaryOf(root)), { recursive: true });
   await fs.copyFile(launcher, path.join(root, "cli.cjs"));
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "boubou", version }));
-  for (const binary of ["boubou", "linux-x64/boubou"]) {
-    await fs.mkdir(path.dirname(path.join(root, binary)), { recursive: true });
-    await fs.writeFile(path.join(root, binary), native, { mode: 0o755 });
-  }
+  await fs.writeFile(path.join(path.dirname(binaryOf(root)), "package.json"), JSON.stringify({ name: platform, version: nativeVersion }));
+  await fs.writeFile(binaryOf(root), native, { mode: 0o755 });
 }
 
 async function fixture(t, version = "0.1.0-beta.10") {
@@ -238,10 +239,20 @@ test("a failed install never activates its partly written package", async (t) =>
 
 test("an incomplete or mismatched installation is rejected", async (t) => {
   const f = await fixture(t);
-  await fs.rm(path.join(f.newer, process.platform === "linux" ? "linux-x64/boubou" : "boubou"));
+  await fs.rm(binaryOf(f.newer));
+  assert.equal(result(await f.run(["list"])).version, "0.1.0-beta.10");
+  await packageAt(f.newer, "0.1.0-beta.11", "0.1.0-beta.10");
   assert.equal(result(await f.run(["list"])).version, "0.1.0-beta.10");
   await packageAt(f.newer, "0.1.0-beta.9");
   assert.equal(result(await f.run(["list"])).version, "0.1.0-beta.10");
+});
+
+test("a launcher without its platform package says how to reinstall", async (t) => {
+  const f = await fixture(t);
+  await fs.rm(path.join(f.original, "node_modules"), { recursive: true });
+  const missing = await f.run(["list"], { BOUBOU_NO_UPDATE_CHECK: "1" });
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.stderr, new RegExp(`${platform}@0\\.1\\.0-beta\\.10\\) is missing.*--omit=optional`));
 });
 
 test("malformed registry replies cannot become package paths or install arguments", async (t) => {

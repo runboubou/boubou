@@ -105,10 +105,12 @@ jobs:
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/v$version/boubou-qwen-runner-$version-darwin-arm64.tar.gz"
           reused=false
           if [ "$REUSE" = true ]; then
-            # The newest published package names the runner and model files its release verified.
+            # The newest published Mac package names the runner and model files its release verified.
+            # Releases before the platform split carried them in `boubou` itself.
             newest=$(npm view boubou time --json | jq -r 'del(.created, .modified) | to_entries | max_by(.value).key')
             mkdir "$RUNNER_TEMP/published"
-            curl -fsSL --retry 5 --retry-all-errors "$(npm view "boubou@$newest" dist.tarball)" |
+            published=$(npm view "@boubou/darwin-arm64@$newest" dist.tarball 2>/dev/null || true)
+            curl -fsSL --retry 5 --retry-all-errors "${published:-$(npm view "boubou@$newest" dist.tarball)}" |
               tar -xzf - -C "$RUNNER_TEMP/published" --strip-components 1 package/qwen package/BUILD.json
             if python -B .github/scripts/reuse_model_checks.py runner "$RUNNER_TEMP/published" "$target"; then
               reused=true
@@ -174,13 +176,16 @@ jobs:
           set -euo pipefail
           cargo fetch --locked
           python -B packaging/build-macos.py --qwen "$RUNNER_TEMP/qwen" --linux "$RUNNER_TEMP/linux"
-          tar -tzf "$(find target/dist -name 'boubou-*.tgz')" | grep -Fx "package/linux-x64/boubou"
+          version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
+          tar -tzf "$(find target/dist -name "boubou-linux-x64-$version.tgz")" | grep -Fx "package/qwen/cuda.py"
       - name: Check the installed package without loading models
         run: |
           set -euo pipefail
-          npm install --prefix "$RUNNER_TEMP/package-check" --no-audit --no-fund --ignore-scripts "$(find "$PWD/target/dist" -name 'boubou-*.tgz')"
-          cli="$RUNNER_TEMP/package-check/node_modules/.bin/boubou"
+          # Before publishing, the Mac package comes from its tarball, not the registry.
           version=$(python -c 'import json; print(json.load(open("packaging/package.json"))["version"])')
+          npm install --prefix "$RUNNER_TEMP/package-check" --no-audit --no-fund --ignore-scripts \
+            "$(find "$PWD/target/dist" -name "boubou-$version.tgz")" "$(find "$PWD/target/dist" -name "boubou-darwin-arm64-$version.tgz")"
+          cli="$RUNNER_TEMP/package-check/node_modules/.bin/boubou"
           test "$("$cli" --version)" = "boubou $version"
           "$cli" list | grep -Fx 'LFM3-Audio-2B'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
@@ -228,7 +233,9 @@ jobs:
           mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
           mv "$(find candidate -name runner.tar.gz)" "$BOUBOU_HOME/qwen/runtimes/$sha/"
           mkdir -p qwen-npm
-          npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts "$(find "$PWD/candidate" -name 'boubou-*.tgz')"
+          version=$(jq -r .version "$GITHUB_WORKSPACE/packaging/package.json")
+          npm install --prefix qwen-npm --no-audit --no-fund --ignore-scripts \
+            "$(find "$PWD/candidate" -name "boubou-$version.tgz")" "$(find "$PWD/candidate" -name "boubou-darwin-arm64-$version.tgz")"
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
           "$cli" list | grep -Fx 'qwen3-tts:1.7b-customvoice'
           "$cli" list | grep -Fx 'qwen3-tts:0.6b-customvoice'
@@ -263,7 +270,7 @@ jobs:
           export BOUBOU_HOME="$RUNNER_TEMP/qwen-cache"
           root="$BOUBOU_HOME/qwen"
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
-          manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou/qwen/models.json"
+          manifest="$RUNNER_TEMP/qwen-npm/node_modules/@boubou/darwin-arm64/qwen/models.json"
           sha=$(jq -r .sha256 "$(find "$RUNNER_TEMP/candidate" -name runtime.json)")
           python="$root/runtimes/$sha/installed/bin/python3"
           sw_vers -productVersion

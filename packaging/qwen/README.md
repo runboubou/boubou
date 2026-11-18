@@ -14,9 +14,9 @@ python3 -B packaging/build-macos.py --qwen "$candidate"
 
 The runner archive holds the interpreter, native wheels, Silero, NLTK and
 phonemizer data. It is too large for npm, so the Release workflow publishes it
-at that URL and the npm package carries its manifest. Boubou's own scripts,
+at that URL and the Mac npm package, `@boubou/darwin-arm64`, carries its manifest. Boubou's own scripts,
 clone page, runtime catalog and voice data (`APP` in `build_runner.py`) stay
-out of the runner: the npm package carries them in `qwen/` beside the manifest,
+out of the runner: each platform package carries them in `qwen/` beside the manifest,
 and `boubou` runs them with the runner's interpreter. The first
 `pull` downloads and verifies the runner, then fetches only the selected
 profile's verified weights. Profiles reuse the same runner. `runtime.json` also
@@ -69,15 +69,20 @@ export BOUBOU_NO_UPDATE_CHECK=1 # Keep acceptance on this exact candidate.
 sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$candidate/runtime.json")
 mkdir -p "$BOUBOU_HOME/qwen/runtimes/$sha"
 cp "$candidate/runner.tar.gz" "$BOUBOU_HOME/qwen/runtimes/$sha/"
-tarball=/absolute/path/to/boubou.tgz # the "Development candidate" that build-macos.py printed
-npx --yes --package "$tarball" -- boubou run qwen3-tts:1.7b-customvoice
-npx --yes --package "$tarball" -- boubou run qwen3-tts:0.6b-customvoice
-npx --yes --package "$tarball" -- boubou run kokoro:82m
-npx --yes --package "$tarball" -- boubou run kitten-tts:mini-0.8
-npx --yes --package "$tarball" -- boubou run phonon:31m-en
-npx --yes --package "$tarball" -- boubou run supertonic:3
-npx --yes --package "$tarball" -- boubou run chattts:en
-npx --yes --package "$tarball" -- boubou run pocket-tts:french_24l
+# The launcher and the Mac package that build-macos.py printed as "Development candidate".
+launcher=/absolute/path/to/boubou-<version>.tgz
+mac=/absolute/path/to/boubou-darwin-arm64-<version>.tgz
+package="$(mktemp -d)"
+npm install --prefix "$package" --no-audit --no-fund "$launcher" "$mac"
+boubou="$package/node_modules/.bin/boubou"
+"$boubou" run qwen3-tts:1.7b-customvoice
+"$boubou" run qwen3-tts:0.6b-customvoice
+"$boubou" run kokoro:82m
+"$boubou" run kitten-tts:mini-0.8
+"$boubou" run phonon:31m-en
+"$boubou" run supertonic:3
+"$boubou" run chattts:en
+"$boubou" run pocket-tts:french_24l
 ```
 
 ## Other English TTS families
@@ -167,7 +172,7 @@ target/release/boubou pull kokoro:82m
 target/release/boubou run kokoro:82m --offline
 ```
 
-The npm package carries the Linux CLI with
+The Linux npm package, `@boubou/linux-x64`, carries the Linux CLI with
 [`runner-linux-x64.json`](runner-linux-x64.json), which points at the runner
 published on Hugging Face. The Linux runner is rebuilt only when its sources
 change, and `build-macos.py --linux` refuses a manifest whose

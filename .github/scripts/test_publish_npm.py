@@ -1,6 +1,8 @@
+import io
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -210,3 +212,62 @@ class VersionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class PlatformPublishTests(unittest.TestCase):
+    version = "0.1.0-beta.10"
+    archive_url = "https://registry.npmjs.org/@boubou/darwin-arm64/-/darwin-arm64-0.1.0-beta.10.tgz"
+    metadata_url = f"{release.REGISTRY}/@boubou%2fdarwin-arm64/0.1.0-beta.10"
+
+    def tarball(self, name):
+        data = json.dumps({"name": name, "version": self.version}).encode()
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+            info = tarfile.TarInfo("package/package.json")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        path = self.folder / f"{len(list(self.folder.iterdir()))}.tgz"
+        path.write_bytes(stream.getvalue())
+        return path
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.folder = Path(temporary.name)
+        self.present = False
+        self.commands = []
+        for target, replacement in [("subprocess.run", self.run_command), ("time.sleep", lambda _: None)]:
+            patcher = patch.object(getattr(release, target.split(".")[0]), target.split(".")[1], replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        quiet = patch("builtins.print")
+        quiet.start()
+        self.addCleanup(quiet.stop)
+
+    def run_command(self, command, **kwargs):
+        if command[0] == "curl":
+            url = command[-1]
+            if url == self.metadata_url:
+                metadata = {"name": "@boubou/darwin-arm64", "version": self.version, "dist": {"tarball": self.archive_url}}
+                body, status = (json.dumps(metadata).encode(), 200) if self.present else (b"{}", 404)
+            elif url == self.archive_url:
+                body, status = self.archive, 200
+            else:
+                self.fail(f"Unexpected request: {url}")
+            return subprocess.CompletedProcess(command, 0, body + f"\n{status}".encode())
+        self.commands.append(command[1:])
+        self.present = True
+        return subprocess.CompletedProcess(command, 0)
+
+    def test_platform_package_publishes_once_without_moving_tags(self):
+        tarball = self.tarball("@boubou/darwin-arm64")
+        self.archive = tarball.read_bytes()
+        release.publish_platform(self.version, tarball)
+        release.publish_platform(self.version, tarball)
+        self.assertEqual(self.commands, [["publish", str(tarball), "--tag", "beta", "--access", "public"]])
+
+    def test_only_boubou_platform_packages_are_published_this_way(self):
+        with self.assertRaisesRegex(ValueError, "Unexpected platform package"):
+            release.publish_platform(self.version, self.tarball("boubou"))
+        self.assertEqual(self.commands, [])
