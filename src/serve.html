@@ -47,7 +47,7 @@
 
   // The character: drawn layers cut from one picture, moved like a 2.5D puppet. Coordinates are
   // pixels of the original drawing; each layer names its place there and in /character.webp.
-  const RIG = {"size":[1122,1402],"atlas":[2048,2304],"layers":[["back hair",0,0,1122,1402,4,4],["handwear-l",745,631,376,771,384,1410],["handwear-r",0,629,376,773,4,1410],["neck",460,326,218,306,1681,1410],["ears-l",669,302,80,113,4,2187],["ears-r",372,302,83,115,1903,1410],["topwear",253,361,612,1041,1130,4],["face",380,70,369,439,1308,1410],["nose",561,382,11,18,1985,2187],["earwear-r",427,406,31,107,88,2187],["earwear-l",677,406,29,105,123,2187],["mouth_closed",521,399,100,78,518,2187],["mouth_a",521,399,100,78,622,2187],["mouth_i",521,399,100,78,726,2187],["mouth_u",521,399,100,78,830,2187],["mouth_e",521,399,100,78,934,2187],["mouth_o",521,399,100,78,1038,2187],["eyebrow-r",420,269,115,19,1752,2187],["eyewhite-r",434,310,97,45,1554,2187],["eyewhite-l",603,309,93,45,1655,2187],["irides-r",458,309,58,47,1430,2187],["eyebrow-l",594,269,110,19,1871,2187],["irides-l",616,309,58,47,1492,2187],["eyelash-r",392,295,145,65,1142,2187],["eyelash-l",597,295,135,65,1291,2187],["blink",387,286,358,92,156,2187],["front hair",292,40,540,741,764,1410]],"neck":[568,585],"neckSpan":[329,630],"face":[565,272],"eyes":{"close":345},"mouth":[570,418,433],"earrings":{"earwear-r":[442,409],"earwear-l":[691,409]},"strands":{"front hair":[[343,393,768],[447,79,564],[557,54,320],[616,50,300],[676,89,409],[789,402,761]],"back hair":[[33,905,1160],[195,674,1239],[374,97,1333],[607,4,1324],[816,334,1294],[1088,912,1174]]}};
+  const RIG = {"size":[1122,1402],"atlas":[2048,2552],"layers":[["back hair",0,0,1122,1402,4,4],["handwear-l",745,631,376,771,384,1410],["handwear-r",0,629,376,773,4,1410],["neck",460,326,218,306,4,2187],["ears-l",669,302,80,113,313,2187],["ears-r",372,302,83,115,226,2187],["topwear",253,361,612,1041,1130,4],["face",402,193,327,316,1554,1410],["nose",561,382,11,17,833,2497],["earwear-r",427,406,31,107,397,2187],["earwear-l",677,406,29,105,753,2187],["mouth_closed",521,399,100,78,1145,2187],["mouth_a",521,399,100,78,1249,2187],["mouth_i",521,399,100,78,1353,2187],["mouth_u",521,399,100,78,1457,2187],["mouth_e",521,399,100,78,1561,2187],["mouth_o",521,399,100,78,1665,2187],["eyebrow-r",420,269,115,19,601,2497],["eyewhite-r",434,310,97,45,1893,2187],["eyewhite-l",603,309,93,45,4,2497],["irides-r",458,309,58,47,1769,2187],["eyebrow-l",594,269,109,19,720,2497],["irides-l",616,309,58,47,1831,2187],["eyelash-r",392,295,144,45,101,2497],["lid-r",431,331,105,29,492,2497],["eyelash-l",598,295,134,45,249,2497],["lid-l",597,330,101,30,387,2497],["blink",388,286,355,92,786,2187],["laugh",408,289,317,107,432,2187],["front hair",334,40,459,414,1091,1410],["lock-r",292,295,162,486,764,1410],["lock-l",675,295,157,471,930,1410]],"neck":[568,585],"neckSpan":[329,630],"face":[565,272],"eyes":{"r":[486,331],"l":[646,331],"close":345},"mouth":[570,418,433],"earrings":{"earwear-r":[442,409],"earwear-l":[691,409]},"strands":{"front hair":[[447,79,564],[557,54,320],[616,50,300],[676,89,409]],"back hair":[[33,905,1160],[195,674,1239],[374,97,1333],[607,4,1324],[816,334,1294],[1088,912,1174]]},"locks":{"lock-r":[383,308,776],"lock-l":[734,308,761]},"lids":{"r":335,"l":334},"bangs":[418,706]};
 
   const character = (() => {
     const canvas = document.querySelector('canvas');
@@ -57,8 +57,14 @@
     const VOWELS = ['a', 'i', 'u', 'e', 'o'];
     const DEPTH = {
       'back hair': .55, ears: .85, earwear: .95, nose: 1.12, mouth: 1.06, eyebrow: 1.05,
-      eyewhite: 1.04, irides: 1.04, eyelash: 1.04, blink: 1.04, 'front hair': 1.25, topwear: .9, neck: .95,
+      eyewhite: 1.04, irides: 1.04, eyelash: 1.04, lid: 1.04, blink: 1.04, laugh: 1.04, 'front hair': 1.25, lock: 1.25,
+      topwear: .9, neck: .95,
     };
+    const LIDS = ['eyewhite', 'eyelash', 'lid'], LEAN = .045;
+    // The bangs, with the short pieces beside the face, span between the side locks.
+    const BANGS = RIG.bangs;
+    // The middle and half width of each eye, from its white.
+    const EYES = Object.fromEntries(RIG.layers.filter(([n]) => n.startsWith('eyewhite')).map(([n, x, , w]) => [n.slice(-1), [x + w / 2, w / 2]]));
     const BODY = ['topwear', 'handwear', 'neck'];
     const calm = matchMedia('(prefers-reduced-motion: reduce)');
     const smooth = (t) => (t = Math.min(1, Math.max(0, t)), t * t * (3 - 2 * t));
@@ -66,7 +72,7 @@
 
     const layers = RIG.layers.map(([name, x, y, w, h, u, v]) => {
       const kind = name.replace(/[-_].*$/, '');
-      const cell = kind.endsWith('hair') || kind === 'earwear' ? 28 : 56;
+      const cell = kind.endsWith('hair') || kind === 'lock' || kind === 'earwear' ? 28 : LIDS.includes(kind) ? 12 : 56;
       const nx = Math.max(1, Math.round(w / cell)), ny = Math.max(1, Math.round(h / cell));
       const base = [], uv = [], index = [];
       for (let j = 0; j <= ny; j++) {
@@ -88,6 +94,9 @@
       layer.at = new Float32Array(layer.base);
       layer.pivot = RIG.earrings[name];
       if (layer.pivot) layer.spring = { x: 0, v: 0, swing: 0 };
+      // A side lock hangs from the temple: a stiff spring bends its upper part, a soft one carries the tip.
+      layer.lock = RIG.locks[name];
+      if (layer.lock) layer.springs = [{ stiff: { x: 0, v: 0 }, soft: { x: 0, v: 0 }, phase: name.endsWith('l') ? 4.1 : 1.3 }];
       const strands = RIG.strands[name];
       if (strands) hair(layer, strands, kind === 'front hair');
       return layer;
@@ -114,15 +123,20 @@
         let u = Math.min(1, Math.max(0, (y - root) / Math.max(1, tip - root)));
         if (front) u = Math.min(1, u * 1.6);
         layer.amount[v] = u ** (front ? 1.8 : 2.1) * 2;
+        // Only the bangs swing; the sides of the crown stay joined to the side locks hanging below.
+        if (front) layer.amount[v] *= 1 - smooth(Math.max(BANGS[0] - x, x - BANGS[1]) / 25);
         layer.loose[v] = Math.min(1, u ** 1.2 * (front ? .4 : 2));
       }
     }
 
     // ---- motion ----
-    const cur = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0, brow: 0, nod: 0 };
+    const cur = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0, brow: 0, nod: 0, smile: 0, sway: .5, near: 0, happy: 0 };
     const goal = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0 };
     const mouth = { open: 0, shape: 0, weights: [0, 0, 0, 0, 0], loud: 0, slow: 0 };
-    let nextLook = 0, nextBlink = 1.2, blinkAt = -1, heard = 0;
+    let nextLook = 0, nextBlink = 1.2, blinkAt = -1, heard = 0, phase = 0;
+    // A phrase ends where the voice rests after talking a while; she smiles and tilts her head there.
+    // About half of those smiles are laughs, with the drawn laughing eyes.
+    let talked = 0, quiet = 0, beamAt = -9, beamSide = 1, nextBeam = 6, laugh = false;
 
     function spring(s, target, k, damping, dt) {
       const steps = Math.ceil(dt * 120), h = dt / steps;
@@ -136,14 +150,16 @@
       const mood = document.body.dataset.state, still = calm.matches ? .3 : 1;
       if (t > nextLook) {
         // A new glance every few seconds; the head follows it, slower than the eyes.
-        nextLook = t + 1.4 + Math.random() * 2.6;
-        const span = mood ? .55 : 1;
-        goal.ax = random() * .55 * span;
+        // Talking, she looks around more often and comes back to you about half the time.
+        const talking = mood === 'boubou', span = talking ? 2 : mood ? .55 : 1;
+        nextLook = t + (talking ? .7 + Math.random() * 1.5 : 1.4 + Math.random() * 2.6);
+        const back = talking && Math.random() < .45;
+        goal.ax = back ? random() * .2 : random() * .55 * span;
         goal.ay = random() * .35 * span;
         goal.az = random() * .3 * span + (mood === 'you' ? .25 : 0);
         goal.body = random() * .3 * span;
-        goal.ex = random() * (mood ? .25 : .6);
-        goal.ey = random() * (mood ? .15 : .35);
+        goal.ex = back ? 0 : random() * (talking ? .75 : mood ? .25 : .6);
+        goal.ey = back ? 0 : random() * (talking ? .45 : mood ? .15 : .35);
         if (Math.random() < .3 && blinkAt < 0) nextBlink = t;
       }
       const voice = speech(), level = voice ? voice.level : 0;
@@ -152,19 +168,40 @@
       const stress = Math.max(0, mouth.loud - mouth.slow - .08);
       heard *= Math.exp(-dt * 3);
 
-      const head = 1 - Math.exp(-dt * 4), eyes = 1 - Math.exp(-dt * 18);
+      if (level > .12) talked += dt, quiet = 0;
+      else if ((quiet += dt) > .2 && talked > .7) talked = 0, beamAt = t, beamSide = -beamSide, laugh = Math.random() < .55;
+      if (quiet > 2) talked = 0;
+      // Now and then a smile of her own, more often while someone is there.
+      if (t > nextBeam) {
+        if (!level && beamAt < t - 2) beamAt = t, beamSide = Math.random() < .5 ? -1 : 1, laugh = Math.random() < .5;
+        nextBeam = t + (mood ? 4 : 7) + Math.random() * 6;
+      }
+      const beam = Math.max(0, Math.sin(Math.min(1, (t - beamAt) / 1.5) * Math.PI));
+      cur.happy = laugh && !calm.matches ? smooth((beam - .35) / .4) : 0;
+
+      // The whole body sways from the hips, the head leaning the other way a moment later.
+      const energy = mood === 'boubou' ? .85 + mouth.slow * .5 : mood === 'you' ? .7 : .55;
+      cur.sway += (energy * still - cur.sway) * (1 - Math.exp(-dt * 1.5));
+      phase += dt * 2 * Math.PI / (mood === 'boubou' ? 2.9 : 3.6);
+      const sway = cur.sway * (Math.sin(phase) + .22 * Math.sin(2 * phase + 1.1));
+      const head = 1 - Math.exp(-dt * (mood === 'boubou' ? 6 : 4)), eyes = 1 - Math.exp(-dt * 18);
       const drift = {
-        ax: .13 * Math.sin(t * .42) + .05 * Math.sin(t * 1.13),
-        ay: .08 * Math.sin(t * .31 + 1.7),
-        az: .07 * Math.sin(t * .23 + .5),
-        body: .1 * Math.sin(t * .19 + 2.1),
+        ax: .13 * Math.sin(t * .42) + .05 * Math.sin(t * 1.13) + (mood === 'boubou' ? .5 : .25) * sway,
+        ay: .08 * Math.sin(t * .31 + 1.7) + .12 * cur.sway * Math.sin(2 * phase - .4),
+        az: .07 * Math.sin(t * .23 + .5) - .9 * cur.sway * Math.sin(phase - .55) + beam * beamSide * .7,
+        body: sway,
       };
       for (const key of ['ax', 'ay', 'az', 'body']) cur[key] += ((goal[key] + drift[key]) * still - cur[key]) * head;
       cur.ex += (goal.ex - cur.ex) * eyes;
       cur.ey += (goal.ey - cur.ey) * eyes;
       // Stressed syllables nod the head and lift the brows; so does the listener's own voice.
-      cur.nod += (stress * 1.4 + heard * .25 - cur.nod) * (1 - Math.exp(-dt * 10));
-      cur.brow += (Math.min(1, stress * 2.5) - cur.brow) * (1 - Math.exp(-dt * 8));
+      cur.nod += (stress * 1.4 + heard * .25 + beam * .35 - cur.nod) * (1 - Math.exp(-dt * 10));
+      cur.brow += (Math.min(1, stress * 2.5 + beam * .4) - cur.brow) * (1 - Math.exp(-dt * 8));
+      // Her eyes smile while she talks, a little while she listens, fully at the end of a phrase.
+      const warm = mood === 'boubou' ? .35 + Math.min(.25, stress * 2) : mood === 'you' ? .25 : .08;
+      cur.smile += (Math.max(warm, beam * .95) - cur.smile) * (1 - Math.exp(-dt * 7));
+      // She leans in to listen.
+      cur.near += ((mood === 'you' ? .8 + heard * .6 : mood === 'boubou' ? .35 : 0) * still - cur.near) * (1 - Math.exp(-dt * 2));
 
       let open = 1;
       if (blinkAt < 0 && t > nextBlink) blinkAt = t;
@@ -183,14 +220,16 @@
       mouth.weights.forEach((w, i) => (mouth.weights[i] += ((shape === i + 1 ? 1 : 0) - w) * fade));
       mouth.open += (level - mouth.open) * fade;
 
-      const wind = calm.matches ? 0 : 1;
-      const shift = (cur.ax * 14 + cur.az * .07 * (NY - FY)) * FS;
+      const wind = calm.matches ? 0 : 1, lean = cur.body * LEAN;
+      // Where the head has moved to, counting the lean of the body; hair trails behind it.
+      const shift = (cur.ax * 14 + cur.az * .07 * (NY - FY)) * FS + lean * (H - FY);
       for (const layer of layers) {
         if (layer.springs) {
+          const slack = layer.lock ? 1.5 : 1;
           for (const s of layer.springs) {
-            const gust = (1.2 * Math.sin(t * .8 + s.phase) + .7 * Math.sin(t * 1.9 + s.phase * 2.3)) * wind * FS;
-            spring(s.stiff, shift + gust * .5, 70, 9, dt);
-            spring(s.soft, shift + gust, 16, 1.3, dt);
+            const gust = (1.2 * Math.sin(t * .8 + s.phase) + .7 * Math.sin(t * 1.9 + s.phase * 2.3)) * wind * FS * slack;
+            spring(s.stiff, shift + gust * .5, layer.lock ? 40 : 70, layer.lock ? 6 : 9, dt);
+            spring(s.soft, shift + gust, layer.lock ? 11 : 16, layer.lock ? .9 : 1.3, dt);
           }
           layer.shift = shift;
         }
@@ -201,7 +240,9 @@
         }
       }
       return {
-        ...cur, ay: cur.ay - cur.nod * .5, open,
+        // A laugh shuts the eyes like a blink, then the drawn laughing eyes take over.
+        ...cur, ay: cur.ay - cur.nod * .5, open: Math.min(open, 1 - cur.happy * 1.15), lean,
+        happy: smooth((cur.happy - .7) / .25), smile: cur.smile * (calm.matches ? .5 : 1),
         breath: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4),
         lag: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4 - .6),
       };
@@ -209,8 +250,9 @@
 
     function alpha(layer, p) {
       const eyes = smooth((p.open - .235) / .15);
-      if (['eyewhite', 'irides', 'eyelash'].includes(layer.kind)) return eyes;
-      if (layer.kind === 'blink') return 1 - eyes;
+      if (LIDS.includes(layer.kind) || layer.kind === 'irides') return eyes;
+      if (layer.kind === 'blink') return (1 - eyes) * (1 - p.happy);
+      if (layer.kind === 'laugh') return p.happy;
       if (layer.kind === 'mouth' && layer.name !== 'mouth_closed') {
         return mouth.weights[VOWELS.indexOf(layer.name.slice(6))];
       }
@@ -221,11 +263,18 @@
       const b = layer.base, o = layer.at, k = layer.kind, d = layer.depth;
       const az = p.az * .07, cz = Math.cos(az), sz = Math.sin(az);
       const swing = layer.spring?.swing ?? 0, cs = Math.cos(swing), ss = Math.sin(swing);
-      const n = layer.springs?.length ?? 0;
+      const n = layer.lock ? 0 : layer.springs?.length ?? 0;
+      const [ex, half] = EYES[layer.side] ?? [0, 1], mid = RIG.lids[layer.side];
       for (let i = 0, v = 0; i < b.length; i += 2, v++) {
         let x = b[i], y = b[i + 1];
-        if (k === 'eyewhite' || k === 'eyelash') y = CLOSE + (y - CLOSE) * (1 - .85 * (1 - p.open));
-        else if (k === 'irides') {
+        if (LIDS.includes(k)) {
+          // A smile pushes the lower lid up in an arch, and the eye white with it; the upper lid dips a little.
+          const arch = Math.max(0, 1 - ((x - ex) / (half * 1.15)) ** 2) ** .6 * p.smile * FS;
+          if (k === 'lid') y -= arch * 10;
+          else if (k === 'eyewhite') y -= arch * 10 * smooth((y - mid + 4) / 18);
+          else y += arch * 2.5 * smooth((mid - y) / 30);
+          y = CLOSE + (y - CLOSE) * (1 - .85 * (1 - p.open));
+        } else if (k === 'irides') {
           x += p.ex * 7;
           y += p.ey * 4;
           y = CLOSE + (y - CLOSE) * (1 - .8 * smooth((.32 - p.open) / .32));
@@ -243,12 +292,26 @@
             dx += w * ((sp.stiff.x - layer.shift) * (1 - loose) + (sp.soft.x - layer.shift) * loose);
           }
           x += dx * layer.amount[v];
-          y += Math.abs(dx) * layer.amount[v] * .12;
+          y -= Math.abs(dx) * layer.amount[v] * .08;
+        }
+        if (layer.lock) {
+          // Bent like a hanging chain: the upper part by the stiff spring, the tip by the soft one,
+          // and the tip lifts as it swings out.
+          const [, top, bottom] = layer.lock, length = bottom - top, u = smooth((y - top) / length);
+          const sp = layer.springs[0], root = sp.stiff.x - layer.shift, tip = sp.soft.x - layer.shift;
+          const dx = 1.3 * (root * u * (1 - u) * 2 + tip * u ** 1.6);
+          x += dx;
+          y -= dx * dx / length * .9;
         }
         if (layer.pivot) {
           const [px, py] = layer.pivot, rx = x - px, ry = y - py;
           x = px + rx * cs - ry * ss;
           y = py + rx * ss + ry * cs;
+        }
+        if (!layer.head || k === 'back hair') {
+          // The body turns with the head, less than it: the side turning away narrows.
+          const turn = p.ax * .5 * (layer.head ? smooth((y - NY) / 300) : 1), rx = x - NX;
+          x = NX + rx * (1 - turn * .06 * Math.sign(rx)) + turn * 9 * FS;
         }
         let follow = layer.head ? 1 : k === 'neck' ? .55 * smooth((NB - y) / (NB - NT)) : .16;
         if (k === 'back hair') follow *= 1 - .5 * smooth((y - NY) / 700);
@@ -256,7 +319,8 @@
           const rx = x - NX, ry = y - NY;
           x += (rx * cz - ry * sz - rx) * follow;
           y += (rx * sz + ry * cz - ry) * follow;
-          x += follow * FS * (p.ax * (14 + 40 * (d - 1)) + p.ax * (NY - y) * .028);
+          // Depth parallax levels off for big turns, so layers never part far enough to show a gap.
+          x += follow * FS * (p.ax * 14 + Math.tanh(p.ax) * 40 * (d - 1) + p.ax * (NY - y) * .028);
           y += follow * FS * (-p.ay * (9 + 30 * (d - 1)) - p.ay * (d - 1) * (y - FY) * .05);
         }
         y -= (layer.head ? p.lag * 1.6 : p.breath * 2) * FS;
@@ -267,14 +331,12 @@
         o[i] = x;
         o[i + 1] = y;
       }
-      const lean = p.body * .028;
-      if (Math.abs(lean) > 1e-4) {
-        const c = Math.cos(lean), s = Math.sin(lean);
-        for (let i = 0; i < o.length; i += 2) {
-          const rx = o[i] - NX, ry = o[i + 1] - H;
-          o[i] = NX + rx * c - ry * s;
-          o[i + 1] = H + rx * s + ry * c;
-        }
+      // The body leans from the hips, and comes a little closer when she listens.
+      const zoom = 1 + p.near * .03, c = Math.cos(p.lean) * zoom, s = Math.sin(p.lean) * zoom;
+      for (let i = 0; i < o.length; i += 2) {
+        const rx = o[i] - NX, ry = o[i + 1] - H;
+        o[i] = NX + rx * c - ry * s;
+        o[i + 1] = H + rx * s + ry * c;
       }
     }
 
