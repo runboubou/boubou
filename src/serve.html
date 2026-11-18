@@ -574,8 +574,10 @@
   }
 
   async function start() {
+    // Opened at this computer's address, directly or forwarded there, the page needs no key.
     const key = location.hash.slice(1);
-    if (!key) return show('', 'Start talking', 'This link is incomplete. Open the whole link that Boubou printed.');
+    const here = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    if (!key && !here) return show('', 'Start talking', 'This link is incomplete. Open the whole link that Boubou printed.');
     if (!navigator.mediaDevices || !window.AudioWorkletNode) {
       return show('', 'Start talking', 'This browser shares its microphone only with secure pages. Open the https link that Boubou printed.');
     }
@@ -600,12 +602,13 @@
       await microphone.audioWorklet.addModule(URL.createObjectURL(new Blob([frames], { type: 'text/javascript' })));
       if (session !== talk) return end(talk);
       // Boubou expects audio from the moment the page connects, so connect last.
-      const socket = talk.socket = new WebSocket(`${location.origin.replace('http', 'ws')}/talk?key=${key}`);
+      const socket = talk.socket = new WebSocket(`${location.origin.replace('http', 'ws')}/talk${key ? `?key=${key}` : ''}`);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => show('you', 'Stop', 'Listening. Pause and Boubou answers; speak and it stops.');
       socket.onclose = () => end(talk, document.body.dataset.state
         ? 'Boubou stopped or the connection dropped.'
-        : 'Boubou is not running, is talking with someone else, or this link no longer has the right key.');
+        : key ? 'Boubou is not running, is talking with someone else, or this link no longer has the right key.'
+          : 'Boubou is not running, is talking with someone else, or needs the whole link that it printed.');
       socket.onmessage = ({ data }) => (typeof data === 'string' ? clear(talk, JSON.parse(data).clear) : play(talk, data));
       const capture = new AudioWorkletNode(microphone, 'frames');
       capture.port.onmessage = ({ data }) => {
