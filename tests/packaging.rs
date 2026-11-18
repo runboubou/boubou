@@ -17,9 +17,9 @@ struct Package(PathBuf);
 
 /// npm installs this computer's binary as the launcher's optional dependency.
 const PLATFORM: &str = if cfg!(target_os = "macos") {
-    "@runboubou/darwin-arm64"
+    "boubou-darwin-arm64"
 } else {
-    "@runboubou/linux-x64"
+    "boubou-linux-x64"
 };
 
 impl Package {

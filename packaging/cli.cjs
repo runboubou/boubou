@@ -7,7 +7,7 @@ const { homedir } = require("node:os");
 
 const platform = `${process.platform}-${process.arch}`;
 // Each computer's binary comes in its own package, which npm installs beside this one.
-const native = { "darwin-arm64": "@runboubou/darwin-arm64", "linux-x64": "@runboubou/linux-x64" }[platform];
+const native = { "darwin-arm64": "boubou-darwin-arm64", "linux-x64": "boubou-linux-x64" }[platform];
 const args = process.argv.slice(2);
 let activeChild;
 let shutdownSignal;

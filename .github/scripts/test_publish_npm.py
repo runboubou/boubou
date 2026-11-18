@@ -217,8 +217,8 @@ if __name__ == "__main__":
 
 class PlatformPublishTests(unittest.TestCase):
     version = "0.1.0-beta.10"
-    archive_url = "https://registry.npmjs.org/@runboubou/darwin-arm64/-/darwin-arm64-0.1.0-beta.10.tgz"
-    metadata_url = f"{release.REGISTRY}/@runboubou%2fdarwin-arm64/0.1.0-beta.10"
+    archive_url = "https://registry.npmjs.org/boubou-darwin-arm64/-/boubou-darwin-arm64-0.1.0-beta.10.tgz"
+    metadata_url = f"{release.REGISTRY}/boubou-darwin-arm64/0.1.0-beta.10"
 
     def tarball(self, name):
         data = json.dumps({"name": name, "version": self.version}).encode()
@@ -249,7 +249,7 @@ class PlatformPublishTests(unittest.TestCase):
         if command[0] == "curl":
             url = command[-1]
             if url == self.metadata_url:
-                metadata = {"name": "@runboubou/darwin-arm64", "version": self.version, "dist": {"tarball": self.archive_url}}
+                metadata = {"name": "boubou-darwin-arm64", "version": self.version, "dist": {"tarball": self.archive_url}}
                 body, status = (json.dumps(metadata).encode(), 200) if self.present else (b"{}", 404)
             elif url == self.archive_url:
                 body, status = self.archive, 200
@@ -261,7 +261,7 @@ class PlatformPublishTests(unittest.TestCase):
         return subprocess.CompletedProcess(command, 0)
 
     def test_platform_package_publishes_once_without_moving_tags(self):
-        tarball = self.tarball("@runboubou/darwin-arm64")
+        tarball = self.tarball("boubou-darwin-arm64")
         self.archive = tarball.read_bytes()
         release.publish_platform(self.version, tarball)
         release.publish_platform(self.version, tarball)

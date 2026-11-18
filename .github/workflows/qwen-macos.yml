@@ -109,7 +109,7 @@ jobs:
             # Releases before the platform split carried them in `boubou` itself.
             newest=$(npm view boubou time --json | jq -r 'del(.created, .modified) | to_entries | max_by(.value).key')
             mkdir "$RUNNER_TEMP/published"
-            published=$(npm view "@runboubou/darwin-arm64@$newest" dist.tarball 2>/dev/null || true)
+            published=$(npm view "boubou-darwin-arm64@$newest" dist.tarball 2>/dev/null || true)
             curl -fsSL --retry 5 --retry-all-errors "${published:-$(npm view "boubou@$newest" dist.tarball)}" |
               tar -xzf - -C "$RUNNER_TEMP/published" --strip-components 1 package/qwen package/BUILD.json
             if python -B .github/scripts/reuse_model_checks.py runner "$RUNNER_TEMP/published" "$target"; then
@@ -270,7 +270,7 @@ jobs:
           export BOUBOU_HOME="$RUNNER_TEMP/qwen-cache"
           root="$BOUBOU_HOME/qwen"
           cli="$RUNNER_TEMP/qwen-npm/node_modules/.bin/boubou"
-          manifest="$RUNNER_TEMP/qwen-npm/node_modules/@runboubou/darwin-arm64/qwen/models.json"
+          manifest="$RUNNER_TEMP/qwen-npm/node_modules/boubou-darwin-arm64/qwen/models.json"
           sha=$(jq -r .sha256 "$(find "$RUNNER_TEMP/candidate" -name runtime.json)")
           python="$root/runtimes/$sha/installed/bin/python3"
           sw_vers -productVersion
