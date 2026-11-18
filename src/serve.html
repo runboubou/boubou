@@ -47,7 +47,7 @@
 
   // The character: drawn layers cut from one picture, moved like a 2.5D puppet. Coordinates are
   // pixels of the original drawing; each layer names its place there and in /character.webp.
-  const RIG = {"size":[1122,1402],"atlas":[2048,2584],"layers":[["back hair",0,0,1122,1402,4,4],["handwear-l",745,631,376,771,384,1410],["handwear-r",0,629,376,773,4,1410],["neck",460,326,218,306,4,2187],["ears-l",669,302,80,113,313,2187],["ears-r",372,302,83,115,226,2187],["topwear",253,361,612,1041,1130,4],["face",402,193,327,316,1554,1410],["nose",561,382,11,17,1750,2497],["earwear-r",427,406,31,107,732,2187],["earwear-l",677,406,29,105,1088,2187],["mouth_closed",521,399,100,78,1480,2187],["shymouth",523,398,95,56,351,2497],["mouth_a",521,399,100,78,1584,2187],["mouth_i",521,399,100,78,1688,2187],["mouth_u",521,399,100,78,1792,2187],["mouth_e",521,399,100,78,1896,2187],["mouth_o",521,399,100,78,4,2497],["eyebrow-r",420,269,115,19,1518,2497],["eyewhite-r",434,310,97,45,721,2497],["eyewhite-l",603,309,93,45,822,2497],["irides-r",458,309,58,47,597,2497],["eyebrow-l",594,269,109,19,1637,2497],["irides-l",616,309,58,47,659,2497],["eyelash-r",392,295,144,45,919,2497],["lid-r",431,331,105,29,1409,2497],["eyelash-l",598,295,134,45,1067,2497],["lid-l",597,330,101,30,1304,2497],["blink",388,286,355,92,1121,2187],["laugh",408,289,317,107,767,2187],["shy",401,305,331,109,397,2187],["shywhite-r",436,319,101,63,108,2497],["shywhite-l",603,321,95,39,1205,2497],["shyiris-r",458,309,58,47,597,2497],["shyiris-l",616,309,58,47,659,2497],["shylash-r",400,306,143,56,450,2497],["shylash-l",598,306,134,57,213,2497],["front hair",334,40,459,414,1091,1410],["lock-r",292,295,162,486,764,1410],["lock-l",675,295,157,471,930,1410]],"neck":[568,585],"neckSpan":[329,630],"face":[565,272],"eyes":{"r":[486,331],"l":[646,331],"close":345},"mouth":[570,418,433],"earrings":{"earwear-r":[442,409],"earwear-l":[691,409]},"strands":{"front hair":[[447,79,564],[557,54,320],[616,50,300],[676,89,409]],"back hair":[[33,905,1160],[195,674,1239],[374,97,1333],[607,4,1324],[816,334,1294],[1088,912,1174]]},"locks":{"lock-r":[383,308,776],"lock-l":[734,308,761]},"lids":{"r":335,"l":334},"bangs":[418,706]};
+  const RIG = {"size":[1122,1402],"atlas":[2048,2552],"layers":[["back hair",0,0,1122,1402,4,4],["handwear-l",745,631,376,771,384,1410],["handwear-r",0,629,376,773,4,1410],["neck",460,326,218,306,4,2187],["ears-l",669,302,80,113,313,2187],["ears-r",372,302,83,115,226,2187],["topwear",253,361,612,1041,1130,4],["face",402,193,327,316,1554,1410],["nose",561,382,11,17,833,2497],["earwear-r",427,406,31,107,397,2187],["earwear-l",677,406,29,105,753,2187],["mouth_closed",521,399,100,78,1145,2187],["mouth_a",521,399,100,78,1249,2187],["mouth_i",521,399,100,78,1353,2187],["mouth_u",521,399,100,78,1457,2187],["mouth_e",521,399,100,78,1561,2187],["mouth_o",521,399,100,78,1665,2187],["eyebrow-r",420,269,115,19,601,2497],["eyewhite-r",434,310,97,45,1893,2187],["eyewhite-l",603,309,93,45,4,2497],["irides-r",458,309,58,47,1769,2187],["eyebrow-l",594,269,109,19,720,2497],["irides-l",616,309,58,47,1831,2187],["eyelash-r",392,295,144,45,101,2497],["lid-r",431,331,105,29,492,2497],["eyelash-l",598,295,134,45,249,2497],["lid-l",597,330,101,30,387,2497],["blink",388,286,355,92,786,2187],["laugh",408,289,317,107,432,2187],["front hair",334,40,459,414,1091,1410],["lock-r",292,295,162,486,764,1410],["lock-l",675,295,157,471,930,1410]],"neck":[568,585],"neckSpan":[329,630],"face":[565,272],"eyes":{"r":[486,331],"l":[646,331],"close":345},"mouth":[570,418,433],"earrings":{"earwear-r":[442,409],"earwear-l":[691,409]},"strands":{"front hair":[[447,79,564],[557,54,320],[616,50,300],[676,89,409]],"back hair":[[33,905,1160],[195,674,1239],[374,97,1333],[607,4,1324],[816,334,1294],[1088,912,1174]]},"locks":{"lock-r":[383,308,776],"lock-l":[734,308,761]},"lids":{"r":335,"l":334},"bangs":[418,706]};
 
   const character = (() => {
     const canvas = document.querySelector('canvas');
@@ -57,7 +57,7 @@
     const VOWELS = ['a', 'i', 'u', 'e', 'o'];
     const DEPTH = {
       'back hair': .55, ears: .85, earwear: .95, nose: 1.12, mouth: 1.06, eyebrow: 1.05,
-      eyewhite: 1.04, irides: 1.04, eyelash: 1.04, lid: 1.04, blink: 1.04, laugh: 1.04, shy: 1.04, shymouth: 1.06, shywhite: 1.04, shyiris: 1.04, shylash: 1.04, 'front hair': 1.25, lock: 1.25,
+      eyewhite: 1.04, irides: 1.04, eyelash: 1.04, lid: 1.04, blink: 1.04, laugh: 1.04, 'front hair': 1.25, lock: 1.25,
       topwear: .9, neck: .95,
     };
     const LIDS = ['eyewhite', 'eyelash', 'lid'], LEAN = .045;
@@ -137,9 +137,6 @@
     // A phrase ends where the voice rests after talking a while; she smiles and tilts her head there.
     // About half of those smiles are laughs, with the drawn laughing eyes.
     let talked = 0, quiet = 0, beamAt = -9, beamSide = 1, nextBeam = 6, laugh = false;
-    // Now and then a shy glance: she blinks, looks away with her head turned and her cheeks red,
-    // and blinks back. The drawn shy eyes swap in while her eyes are shut.
-    let shyWant = false, shyOn = false, shySide = 1, shyUntil = 0, nextShy = 9;
 
     function spring(s, target, k, damping, dt) {
       const steps = Math.ceil(dt * 120), h = dt / steps;
@@ -165,22 +162,6 @@
         goal.ey = back ? 0 : random() * (talking ? .45 : mood ? .15 : .35);
         if (Math.random() < .3 && blinkAt < 0) nextBlink = t;
       }
-      if (!shyWant && t > nextShy && t > beamAt + 2 && !calm.matches) {
-        shyWant = true;
-        shySide = Math.random() < .5 ? -1 : 1;
-        shyUntil = t + 2.2 + Math.random() * 1.3;
-        blinkAt = t;
-      } else if (shyWant && t > shyUntil) {
-        shyWant = false;
-        nextShy = t + (mood ? 7 : 12) + Math.random() * 9;
-        nextLook = t + .3;
-        blinkAt = t;
-      }
-      if (shyWant) {
-        // Head a little down and aside, eyes looking away and slightly down.
-        Object.assign(goal, { ax: shySide * .35, ay: .45, az: shySide * .25, ex: shySide, ey: .3 });
-        nextLook = Math.max(nextLook, t + .3);
-      }
       const voice = speech(), level = voice ? voice.level : 0;
       mouth.loud += (level - mouth.loud) * (1 - Math.exp(-dt * 18));
       mouth.slow += (level - mouth.slow) * (1 - Math.exp(-dt * 2.5));
@@ -188,7 +169,7 @@
       heard *= Math.exp(-dt * 3);
 
       if (level > .12) talked += dt, quiet = 0;
-      else if ((quiet += dt) > .2 && talked > .7) talked = 0, beamAt = t, beamSide = -beamSide, laugh = !shyWant && Math.random() < .55;
+      else if ((quiet += dt) > .2 && talked > .7) talked = 0, beamAt = t, beamSide = -beamSide, laugh = Math.random() < .55;
       if (quiet > 2) talked = 0;
       // Now and then a smile of her own, more often while someone is there.
       if (t > nextBeam) {
@@ -223,11 +204,10 @@
       cur.near += ((mood === 'you' ? .8 + heard * .6 : mood === 'boubou' ? .35 : 0) * still - cur.near) * (1 - Math.exp(-dt * 2));
 
       let open = 1;
-      if (blinkAt < 0 && t > nextBlink && !shyOn) blinkAt = t;
+      if (blinkAt < 0 && t > nextBlink) blinkAt = t;
       if (blinkAt >= 0) {
         const d = t - blinkAt;
         open = d < .07 ? 1 - d / .07 : d < .12 ? 0 : smooth((d - .12) / .16);
-        if (open < .3) shyOn = shyWant;
         if (d >= .28) {
           blinkAt = -1;
           nextBlink = t + (Math.random() < .15 ? .1 : 1.6 + Math.random() * 3.8);
@@ -262,7 +242,7 @@
       return {
         // A laugh shuts the eyes like a blink, then the drawn laughing eyes take over.
         ...cur, ay: cur.ay - cur.nod * .5, open: Math.min(open, 1 - cur.happy * 1.15), lean,
-        happy: smooth((cur.happy - .7) / .25), smile: cur.smile * (calm.matches ? .5 : 1), shy: +shyOn,
+        happy: smooth((cur.happy - .7) / .25), smile: cur.smile * (calm.matches ? .5 : 1),
         breath: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4),
         lag: .5 + .5 * Math.sin(t * 2 * Math.PI / 3.4 - .6),
       };
@@ -270,11 +250,9 @@
 
     function alpha(layer, p) {
       const eyes = smooth((p.open - .235) / .15);
-      // The shy eyes replace the usual ones outright, so nothing of them shows between the bangs.
-      if (LIDS.includes(layer.kind) || layer.kind === 'irides') return eyes * (1 - p.shy);
+      if (LIDS.includes(layer.kind) || layer.kind === 'irides') return eyes;
       if (layer.kind === 'blink') return (1 - eyes) * (1 - p.happy);
       if (layer.kind === 'laugh') return p.happy;
-      if (layer.kind.startsWith('shy')) return p.shy;
       if (layer.kind === 'mouth' && layer.name !== 'mouth_closed') {
         return mouth.weights[VOWELS.indexOf(layer.name.slice(6))];
       }
@@ -296,10 +274,6 @@
           else if (k === 'eyewhite') y -= arch * 10 * smooth((y - mid + 4) / 18);
           else y += arch * 2.5 * smooth((mid - y) / 30);
           y = CLOSE + (y - CLOSE) * (1 - .85 * (1 - p.open));
-        } else if (k === 'shyiris') {
-          // A small look aside and down; the drawing's 21 px reads as a glare.
-          x += p.ex * 9;
-          y += 3 + p.ey * 2;
         } else if (k === 'irides') {
           x += p.ex * 7;
           y += p.ey * 4;
@@ -541,7 +515,7 @@
       const dt = Math.min(.05, (now - last) / 1000);
       last = now;
       if (!program || gl.isContextLost()) return;
-      const p = pose(now / 1000, dt), { cw, ch, view: v } = view(), whites = p.shy ? 'shywhite' : 'eyewhite';
+      const p = pose(now / 1000, dt), { cw, ch, view: v } = view();
       if (!cw || !ch) return;
       gl.useProgram(program);
       gl.uniform4fv(at.uView, v);
@@ -550,7 +524,7 @@
       gl.bindTexture(gl.TEXTURE_2D, texture);
       for (const layer of layers) {
         layer.alpha = alpha(layer, p);
-        if (layer.alpha > .003 || layer.kind === whites) deform(layer, p);
+        if (layer.alpha > .003 || layer.kind === 'eyewhite') deform(layer, p);
       }
       // The eye whites, drawn into a mask first, clip the irises as they look around.
       if (maskSize !== `${cw}x${ch}`) {
@@ -570,7 +544,7 @@
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       for (const layer of layers) {
-        if (layer.kind !== whites) continue;
+        if (layer.kind !== 'eyewhite') continue;
         gl.colorMask(layer.side === 'r', layer.side === 'l', false, false);
         draw(layer, 1, [0, 0, 2]);
       }
@@ -582,7 +556,7 @@
       gl.activeTexture(gl.TEXTURE0);
       for (const layer of layers) {
         if (layer.alpha <= .003) continue;
-        draw(layer, layer.alpha, layer.kind === 'irides' || layer.kind === 'shyiris' ? [+(layer.side === 'r'), +(layer.side === 'l'), 1] : [0, 0, 0]);
+        draw(layer, layer.alpha, layer.kind === 'irides' ? [+(layer.side === 'r'), +(layer.side === 'l'), 1] : [0, 0, 0]);
       }
     }
 
