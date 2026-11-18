@@ -45,6 +45,8 @@ mod names;
 const PAGE: &str = include_str!("serve.html");
 /// The layers of the character the page animates, drawn for Boubou, packed into one picture.
 const CHARACTER: &[u8] = include_bytes!("serve/character.webp");
+/// The tab's icon: Boubou's logo, 64 pixels square.
+const ICON: &[u8] = include_bytes!("serve/icon.png");
 /// The pictured steps for connecting a robot or an app.
 const GUIDE: &str = "https://runboubou.com/connect/robots/";
 /// The steps for any app on the same computer that has an OpenAI-compatible voice setting.
@@ -962,13 +964,17 @@ fn answer(
         ("GET", "/", None, _) if trusted => {
             return respond(&mut stream, "200 OK", "text/html", PAGE);
         }
-        ("GET", "/character.webp", None, _) if trusted => {
+        ("GET", "/character.webp" | "/icon.png", None, _) if trusted => {
+            let (kind, picture) = match path {
+                "/icon.png" => ("image/png", ICON),
+                _ => ("image/webp", CHARACTER),
+            };
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-                CHARACTER.len()
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+                picture.len()
             )?;
-            stream.write_all(CHARACTER)?;
+            stream.write_all(picture)?;
             stream.flush()?;
             return Ok(None);
         }
@@ -1362,6 +1368,13 @@ mod tests {
         assert_eq!(body, CHARACTER);
         assert!(CHARACTER.starts_with(b"RIFF") && &CHARACTER[8..12] == b"WEBP");
         assert!(PAGE.contains("'/character.webp'"));
+        let mut icon = TcpStream::connect(address(&link)).unwrap();
+        icon.write_all(b"GET /icon.png HTTP/1.1\r\n\r\n").unwrap();
+        let mut answer = Vec::new();
+        icon.read_to_end(&mut answer).unwrap();
+        assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"));
+        assert!(answer.ends_with(ICON) && ICON.starts_with(b"\x89PNG"));
+        assert!(PAGE.contains(r#"<link rel="icon" href="/icon.png">"#));
         for other in [
             "GET /talk HTTP/1.1\r\n\r\n",
             "POST / HTTP/1.1\r\n\r\n",
