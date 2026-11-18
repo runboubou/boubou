@@ -110,7 +110,7 @@ def publish_platform(version, tarball):
     """A platform package, which `boubou` names by exact version, so its tags never matter."""
     with tarfile.open(tarball) as archive:
         name = json.load(archive.extractfile("package/package.json"))["name"]
-    if not re.fullmatch(r"@boubou/[a-z0-9]+-[a-z0-9]+", name):
+    if not re.fullmatch(r"@runboubou/[a-z0-9]+-[a-z0-9]+", name):
         raise ValueError(f"Unexpected platform package {name!r}")
     expected = Path(tarball).read_bytes()
     if served(version, expected, name):

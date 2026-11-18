@@ -7,7 +7,7 @@ const { test } = require("node:test");
 
 const launcher = path.join(__dirname, "cli.cjs");
 // npm installs this computer's binary as the launcher's optional dependency.
-const platform = `@boubou/${process.platform}-${process.arch}`;
+const platform = `@runboubou/${process.platform}-${process.arch}`;
 const native = `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");

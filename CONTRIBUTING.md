@@ -48,7 +48,7 @@ merge, then push a matching `v<version>` tag on `main`. The Release workflow
 does the rest. Within a minute it rejects a tag that does not match the version
 or is not on `main`. Then it checks the model profiles, publishes the tested
 tarballs to npm and waits up to 30 minutes until npm serves each. The Mac and
-Linux packages, `@boubou/darwin-arm64` and `@boubou/linux-x64`, go first: the
+Linux packages, `@runboubou/darwin-arm64` and `@runboubou/linux-x64`, go first: the
 `boubou` launcher installs the one for its computer at its own version. If a job fails,
 re-run only that job; re-running everything can rebuild a different runner,
 which the release refuses.

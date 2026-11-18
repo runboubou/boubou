@@ -19,7 +19,7 @@ from build_runner import TARGETS, ship_app, sources_digest  # noqa: E402
 # npm publish fails above about 400 MB; each package is a few MB.
 MAX_PACKED = 32 * 1024 * 1024
 # Each computer installs only its own binary. cli.cjs names the same packages.
-PLATFORMS = {"darwin-arm64": "@boubou/darwin-arm64", "linux-x64": "@boubou/linux-x64"}
+PLATFORMS = {"darwin-arm64": "@runboubou/darwin-arm64", "linux-x64": "@runboubou/linux-x64"}
 DESCRIPTIONS = {"darwin-arm64": "Apple Silicon Macs", "linux-x64": "x86-64 Linux"}
 LICENSES = [
     (

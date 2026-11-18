@@ -14,7 +14,7 @@ python3 -B packaging/build-macos.py --qwen "$candidate"
 
 The runner archive holds the interpreter, native wheels, Silero, NLTK and
 phonemizer data. It is too large for npm, so the Release workflow publishes it
-at that URL and the Mac npm package, `@boubou/darwin-arm64`, carries its manifest. Boubou's own scripts,
+at that URL and the Mac npm package, `@runboubou/darwin-arm64`, carries its manifest. Boubou's own scripts,
 clone page, runtime catalog and voice data (`APP` in `build_runner.py`) stay
 out of the runner: each platform package carries them in `qwen/` beside the manifest,
 and `boubou` runs them with the runner's interpreter. The first
@@ -172,7 +172,7 @@ target/release/boubou pull kokoro:82m
 target/release/boubou run kokoro:82m --offline
 ```
 
-The Linux npm package, `@boubou/linux-x64`, carries the Linux CLI with
+The Linux npm package, `@runboubou/linux-x64`, carries the Linux CLI with
 [`runner-linux-x64.json`](runner-linux-x64.json), which points at the runner
 published on Hugging Face. The Linux runner is rebuilt only when its sources
 change, and `build-macos.py --linux` refuses a manifest whose
