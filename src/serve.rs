@@ -833,6 +833,22 @@ fn trusted(peer: IpAddr, encrypted: bool) -> Option<bool> {
     (peer.is_loopback() || private).then_some(peer.is_loopback() || encrypted)
 }
 
+/// Whether a browser asks from Boubou's own page, opened at this computer's address and port,
+/// as `ssh -L` or a private network's port forwarding opens it from another computer. Only a
+/// page served at that address names it as its origin: another site's page, even one whose
+/// name leads here, names its own.
+fn own_page(origin: Option<&str>, host: Option<&str>, port: u16) -> bool {
+    let (Some(origin), Some(host)) = (origin, host) else {
+        return false;
+    };
+    let Some((name, at)) = host.rsplit_once(':') else {
+        return false;
+    };
+    ["localhost", "127.0.0.1", "[::1]"].contains(&name.to_ascii_lowercase().as_str())
+        && at.parse() == Ok(port)
+        && origin.eq_ignore_ascii_case(&format!("http://{host}"))
+}
+
 /// Takes a new connection as HTTPS or plain HTTP and answers its request.
 fn accept(stream: TcpStream, desk: &Arc<Desk>) -> Result<Option<Guest>> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
@@ -871,7 +887,7 @@ fn answer(
 ) -> Result<Option<Guest>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Vec::new();
-    let (method, target, accept, bearer, page, wants, head) = loop {
+    let (method, target, accept, bearer, page, home, wants, head) = loop {
         let mut chunk = [0; 1024];
         let read = stream.read(&mut chunk)?;
         ensure!(
@@ -893,6 +909,8 @@ fn answer(
                 .map(|key| String::from_utf8_lossy(key).into_owned());
             // Browsers say which site a page comes from; programs do not.
             let page = header("Origin").is_some();
+            let text = |name| header(name).and_then(|sent| std::str::from_utf8(sent.value).ok());
+            let home = own_page(text("Origin"), text("Host"), socket.local_addr()?.port());
             // The headers a page from another site asks to send, such as its API key.
             let wants = header("Access-Control-Request-Headers").map(|asked| {
                 let asked = String::from_utf8_lossy(asked.value);
@@ -903,7 +921,7 @@ fn answer(
             });
             let method = parsed.method.unwrap_or_default().to_owned();
             let target = parsed.path.unwrap_or_default().to_owned();
-            break (method, target, accept, bearer, page, wants, head);
+            break (method, target, accept, bearer, page, home, wants, head);
         }
     };
     let (path, query) = target.split_once('?').unwrap_or((&target, ""));
@@ -977,7 +995,9 @@ fn answer(
                 &models.to_string(),
             );
         }
-        ("GET", "/talk", Some(accept), _) if trusted && keyed => (accept, None),
+        ("GET", "/talk", Some(accept), _) if trusted && (keyed || peer.is_loopback() && home) => {
+            (accept, None)
+        }
         ("GET", "/v1/realtime", Some(accept), Some(api)) if allowed => (accept, Some(api.address)),
         // A text to read aloud, or a recording to write down, which opens no socket.
         ("POST", "/v1/audio/speech" | "/v1/audio/transcriptions", None, Some(api)) if allowed => {
@@ -1386,6 +1406,48 @@ mod tests {
         let _second = once_free(|| plain(&link, key));
         assert!(remote.left());
         assert!(!wait(&door).left());
+    }
+
+    #[test]
+    fn the_page_opened_at_this_computers_address_talks_without_the_key() {
+        let (door, link) = local();
+        let port = address(&link).rsplit_once(':').unwrap().1;
+        let visit = |host: &str, origin: Option<&str>| {
+            use tungstenite::client::IntoClientRequest;
+            let url = format!("ws://{}/talk", address(&link));
+            let mut request = url.into_client_request().unwrap();
+            request.headers_mut().insert("Host", host.parse().unwrap());
+            if let Some(origin) = origin {
+                request
+                    .headers_mut()
+                    .insert("Origin", origin.parse().unwrap());
+            }
+            handshake(request, TcpStream::connect(address(&link)).unwrap())
+        };
+        let here = format!("localhost:{port}");
+        for (host, origin) in [
+            // A request that names no origin, as programs send, still needs the key here.
+            (here.as_str(), None),
+            (&here, Some("https://page.test")),
+            (&here, Some("http://localhost:1")),
+            (&here, Some(&format!("https://{here}")[..])),
+            // A site whose name leads here names itself, not this computer.
+            (
+                &format!("page.test:{port}"),
+                Some(&format!("http://page.test:{port}")[..]),
+            ),
+            ("localhost:1", Some("http://localhost:1")),
+        ] {
+            assert_eq!(status(visit(host, origin)), 404, "{host} {origin:?}");
+        }
+        let mut page = visit(&here, Some(&format!("http://{here}"))).unwrap();
+        let mut remote = wait(&door);
+        remote.enqueue(&[1]).unwrap();
+        assert_eq!(page.read().unwrap().into_data().as_ref(), [1, 0]);
+        page.close(None).unwrap();
+        let address = address(&link);
+        let _again = once_free(|| visit(address, Some(&format!("http://{address}"))));
+        assert!(PAGE.contains("/talk${key ? `?key=${key}` : ''}"));
     }
 
     #[test]
