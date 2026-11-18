@@ -1,6 +1,7 @@
 """Build a relocatable, hash-locked Qwen runner for this computer: Apple Silicon or x86-64 Linux with CUDA."""
 
 import argparse
+import csv
 import hashlib
 import gzip
 import io
@@ -18,13 +19,16 @@ from bundle_data import install
 
 HERE = Path(__file__).resolve().parent
 RELEASE = "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/"
+# Boubou's own scripts, page and voice data ship in the npm package beside the binary, not in the runner,
+# so changing them never rebuilds or re-downloads the runner. They find the runner from its interpreter.
+APP = ["voice.py", "mac.py", "cuda.py", "runtimes.json", "clone.html", "voices"]
 TARGETS = {
     ("Darwin", "arm64"): {
         "python": RELEASE + "cpython-3.11.18%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
         "python_sha256": "f3e1cd83a7f1d70e58b0d69102c18bd6867d2f973068dc5cbfd5822e445c66df",
         "lock": "requirements-macos.lock",
+        # The build checks the runner with these scripts from this folder.
         "entries": ["voice.py", "mac.py"],
-        "files": ["runtimes.json", "clone.html"],
         # A release reuses the published runner, and its check of every profile, while this digest holds,
         # so the digest also covers how the runner is built and checked.
         "tools": ["build_runner.py", "smoke.py"],
@@ -40,7 +44,6 @@ TARGETS = {
         "python_sha256": "17c4978a36c496dc53c08899ef8dad1ad2734f6325f08d6033a1e66419e0af26",
         "lock": "requirements-linux.lock",
         "entries": ["voice.py", "cuda.py"],
-        "files": [],
         # PortAudio is not installed with sounddevice here; Boubou owns audio and never imports it.
         "imports": "kittenml.kittentts_legacy.onnx_model, kokoro, nano_parakeet, omnivoice, pocket_tts, speech_to_speech.cli, torch",
         # Upstream's lighter CUDA setup serves the language model with llama.cpp, which uses PyTorch's CUDA libraries.
@@ -51,6 +54,15 @@ TARGETS = {
         "host": {"min_nvidia_driver": "580.65.06", "min_glibc": "2.39"},
     },
 }
+
+
+def ship_app(destination):
+    """Place Boubou's own files beside a runner manifest, where `boubou` runs them."""
+    for name in APP:
+        if (HERE / name).is_dir():
+            shutil.copytree(HERE / name, destination / name)
+        else:
+            shutil.copy2(HERE / name, destination / name)
 
 
 def digest(path):
@@ -67,8 +79,7 @@ def download(url, sha256, path):
 
 def sources_digest(target):
     """Hash what goes into this host's runner, so a published runner older than its sources is caught."""
-    names = [*target["entries"], *target["files"], target["lock"], "bundle_data.py", *target.get("tools", ()),
-             *sorted(path.relative_to(HERE).as_posix() for path in (HERE / "voices").rglob("*") if path.is_file())]
+    names = [target["lock"], "bundle_data.py", *target.get("tools", ())]
     pins = [target["python"], target["python_sha256"], *target.get("llama", ())]
     content = hashlib.sha256("\n".join(pins).encode())
     for name in names:
@@ -94,6 +105,18 @@ def tree_digest(root):
                 kind = "exec" if path.stat().st_mode & 0o111 else "file"
                 lines.append(f"{relative}\t{kind}\t{digest(path)}\n")
     return hashlib.sha256("".join(sorted(lines)).encode()).hexdigest()
+
+
+def forget_records(root, removed):
+    """Drop removed entry scripts from each RECORD. Their hashes cover a build-time shebang, which
+    would otherwise change the runner on every build."""
+    for record in root.glob("lib/python*/site-packages/*.dist-info/RECORD"):
+        site = record.parent.parent
+        # pip writes CRLF rows; keep every other row byte for byte.
+        lines = record.read_bytes().decode().splitlines(keepends=True)
+        kept = [line for line in lines if Path(os.path.normpath(site / next(csv.reader([line]))[0])) not in removed]
+        if len(kept) != len(lines):
+            record.write_bytes("".join(kept).encode())
 
 
 def indexed_archive(root, archive):
@@ -157,6 +180,7 @@ def main():
         # The same archive a release already verified, so people who installed it keep it.
         download(published["url"], published["sha256"], archive)
         shutil.copyfile(args.reuse, output / "runtime.json")
+        ship_app(output)
         print(f"Reused {published['url']}")
         return
     with tempfile.TemporaryDirectory(dir=output) as tmp:
@@ -173,9 +197,7 @@ def main():
                         "--no-binary=chattts,encodec,sox,jieba,unidic-lite", "--no-build-isolation",
                         "--require-hashes", "--no-deps", "--no-compile", "-r", HERE / target["lock"]], check=True)
         subprocess.run([python, "-I", "-B", "-m", "pip", "check"], check=True)
-        for name in [*target["entries"], *target["files"], target["lock"]]:
-            shutil.copy2(HERE / name, root)
-        shutil.copytree(HERE / "voices", root / "voices")
+        shutil.copy2(HERE / target["lock"], root)
         if "llama" in target:
             llama = stage / "llama.tar.gz"
             download(*target["llama"], llama)
@@ -188,10 +210,13 @@ def main():
         for path in root.rglob("__pycache__"):
             shutil.rmtree(path)
         # Only the interpreter is executed. Generated entry scripts have build-time shebangs.
+        removed = set()
         for path in (root / "bin").iterdir():
             if not (path.name == "python3" or path.name == "python3.11"):
                 if path.is_file() or path.is_symlink():
                     path.unlink()
+                    removed.add(path)
+        forget_records(root, removed)
         moved = stage / "relocated runtime"
         root.rename(moved)
         # Phonemize an unlisted word as Kokoro does: spaCy's English model, then espeak-ng.
@@ -218,7 +243,7 @@ with tempfile.TemporaryDirectory() as work:
 {target.get("check", "")}
 print({target["device"]})
 """
-        subprocess.run([moved / "bin/python3", "-I", "-B", "-c", check, *(moved / name for name in target["entries"])],
+        subprocess.run([moved / "bin/python3", "-I", "-B", "-c", check, *(HERE / name for name in target["entries"])],
                        cwd=stage, check=True)
         bundle = stage / "runner.tar.gz"
         entries = indexed_archive(moved, bundle)
@@ -228,6 +253,7 @@ print({target["device"]})
                   "entries": entries, **target["host"]}
         bundle.rename(archive)
         (output / "runtime.json").write_text(json.dumps(result, indent=2) + "\n")
+        ship_app(output)
         print(f"Built {archive} ({result['size']} bytes, sha256 {result['sha256']})")
 
 

@@ -694,9 +694,13 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
     fs::create_dir_all(&snapshot).unwrap();
     fs::write(snapshot.join("tts.bin.part"), asset).unwrap();
     // The fixture runner exits instead of serving; Boubou reports its arguments and output.
+    // Its interpreter runs the conversation script the package carries beside the manifest.
+    let entry = fs::canonicalize(&release).unwrap().join("mac.py");
+    let entry = format!("selected: {}", entry.display());
     let mut prompt = Prompt::new(&package, true, &["run", id, "--offline"]);
     for line in [
         "The modular voice runner stopped",
+        &entry,
         "selected: qwen3-tts:1.7b-customvoice",
         "selected: --port",
         "selected: hub offline 1",
@@ -1641,4 +1645,42 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[test]
+fn runner_build_forgets_deleted_entry_scripts_in_records() {
+    // Entry scripts carry the build folder in their shebangs. Leaving their hashes in RECORD
+    // would make every runner build differ, so an unchanged runner would download again.
+    let output = Command::new("python3")
+        .args(["-I", "-B", "-c"])
+        .arg(
+            r#"import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+sys.path.insert(0, sys.argv[1])
+from build_runner import forget_records
+
+with TemporaryDirectory() as folder:
+    root = Path(folder)
+    site = root / 'lib/python3.11/site-packages'
+    (site / 'tool.dist-info').mkdir(parents=True)
+    (site / 'other.dist-info').mkdir()
+    record = site / 'tool.dist-info/RECORD'
+    record.write_bytes(b'../../../bin/tool,sha256=build-folder,207\r\n"tool/a b.py",sha256=kept,1\r\ntool.dist-info/RECORD,,\r\n')
+    other = site / 'other.dist-info/RECORD'
+    other.write_bytes(b'other.py,sha256=kept,1\r\n')
+    forget_records(root, {root / 'bin/tool'})
+    assert record.read_bytes() == b'"tool/a b.py",sha256=kept,1\r\ntool.dist-info/RECORD,,\r\n', record.read_bytes()
+    assert other.read_bytes() == b'other.py,sha256=kept,1\r\n'
+"#,
+        )
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/packaging/qwen"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

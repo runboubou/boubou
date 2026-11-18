@@ -14,7 +14,10 @@ python3 -B packaging/build-macos.py --qwen "$candidate"
 
 The runner archive holds the interpreter, native wheels, Silero, NLTK and
 phonemizer data. It is too large for npm, so the Release workflow publishes it
-at that URL and the npm package carries its manifest. The first
+at that URL and the npm package carries its manifest. Boubou's own scripts,
+clone page, runtime catalog and voice data (`APP` in `build_runner.py`) stay
+out of the runner: the npm package carries them in `qwen/` beside the manifest,
+and `boubou` runs them with the runner's interpreter. The first
 `pull` downloads and verifies the runner, then fetches only the selected
 profile's verified weights. Profiles reuse the same runner. `runtime.json` also
 records a digest of the unpacked runner, so each start hashes the installed
@@ -31,12 +34,16 @@ full archive. Savings depend on which files change,
 not a fixed byte or percentage guarantee.
 
 A release builds a runner only when its sources changed. `runtime.json` records
-`sources_sha256`, a digest of the files the runner is built from,
-`build_runner.py` and `smoke.py`. While it matches the newest published
+`sources_sha256`, a digest of the Python and llama.cpp pins, the wheel lock,
+`bundle_data.py`, `build_runner.py` and `smoke.py`. Editing Boubou's scripts
+or voice data does not rebuild either runner. Rebuilding with unchanged sources
+produces the same files: the build drops the deleted entry scripts, whose
+shebangs name the build folder, from each wheel's `RECORD`. While it matches the newest published
 package's, the release ships that package's `runtime.json` unchanged, so people
 who upgrade keep the runner they installed. If `models.json` is unchanged too,
-the release checks the two pull request profiles instead of every profile: the
-release that published the runner checked them all on the same files.
+and the packaged scripts match the newest package's, the release checks the two
+pull request profiles instead of every profile: the release that published the
+runner checked them all on the same files.
 
 The [runtime catalog](runtimes.json) is
 shared by the client, asset locking and runner arguments. Its `guided` entries

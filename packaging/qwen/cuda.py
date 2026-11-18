@@ -43,7 +43,7 @@ def llama_server(model, work):
     libc = ctypes.CDLL(None)
     with (work / "llama-server.log").open("wb") as log:
         server = subprocess.Popen(
-            [HERE / "llama-b11960/llama-server", "-m", model, "--alias", "qwen", "--host", "127.0.0.1",
+            [voice.RUNNER / "llama-b11960/llama-server", "-m", model, "--alias", "qwen", "--host", "127.0.0.1",
              "--port", str(port), "-ngl", "999", "-c", "32768", "-np", "1", "-fa", "on", "--reasoning", "off",
              "--no-mmproj", "--no-webui", "--offline"],
             # llama.cpp uses the CUDA libraries installed with PyTorch, and stops when this process does.
@@ -114,7 +114,7 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_CACHE": str(hub),
         "HF_HUB_OFFLINE": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
-        "NLTK_DATA": str(HERE / "nltk_data"),
+        "NLTK_DATA": str(voice.RUNNER / "nltk_data"),
     })
     return [
         "--vad", "silero", "--smart_turn_model_path", str(cache / "smart-turn/smart-turn-v3.2-cpu.onnx"),

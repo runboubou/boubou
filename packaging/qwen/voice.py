@@ -13,6 +13,8 @@ PROMPT = ("You are a helpful and friendly AI assistant. You are polite, respectf
 # Voices chosen by listening, so a model without preset speakers keeps one voice across
 # sentences and restarts. Upstream would sample or design a new voice instead.
 VOICES = Path(__file__).resolve().parent / "voices"
+# The runner holds the interpreter and its data; Boubou's npm package holds these scripts.
+RUNNER = Path(sys.executable).resolve().parents[1]
 
 
 def pocket(voice):
@@ -124,7 +126,7 @@ def arguments(model_id, cache, manifest, work):
         "HF_HUB_CACHE": str(cache / "hub"),
         "HF_HUB_OFFLINE": "1",
         "HF_HUB_DISABLE_TELEMETRY": "1",
-        "NLTK_DATA": str(bundle / "nltk_data"),
+        "NLTK_DATA": str(RUNNER / "nltk_data"),
     })
     if tiny:
         stt = ["--stt", "whisper", "--stt_model_name", snapshots[recognizer],
@@ -320,7 +322,7 @@ def run(command, model, cache, manifest, *extra):
         hub = work / "torch/hub"
         hub.mkdir(parents=True)
         silero = "snakers4_silero-vad_master"
-        (hub / silero).symlink_to(Path(__file__).resolve().parent / "silero", target_is_directory=True)
+        (hub / silero).symlink_to(RUNNER / "silero", target_is_directory=True)
         (hub / "trusted_list").write_text("snakers4_silero-vad\n")
         os.environ.update(
             TORCH_HOME=str(hub.parent), XDG_CACHE_HOME=str(work / "cache"),

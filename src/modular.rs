@@ -47,7 +47,7 @@ enum Host {
 }
 
 impl Host {
-    /// The script beside the runner's interpreter that serves the conversation.
+    /// The packaged script, beside the runner manifest, that serves the conversation.
     fn entry(&self) -> &'static str {
         match self {
             Self::Mac { .. } => "mac.py",
@@ -804,7 +804,8 @@ pub fn run(
     };
 
     let installed = prepare(id, voice, cache, offline)?;
-    let entry = runner(&release_dir()?)?.host.entry();
+    let dir = release_dir()?;
+    let entry = dir.join(runner(&dir)?.host.entry());
     // Pipeline options may name any model, so only they let the runner reach the Hub.
     let hub = !(offline || pipeline.is_empty());
     let stopped = Arc::new(AtomicBool::new(false));
@@ -814,10 +815,10 @@ pub fn run(
     let mut command = Command::new(installed.join("bin/python3"));
     command
         .args(["-I", "-B"])
-        .arg(installed.join(entry))
+        .arg(entry)
         .arg(id)
         .arg(cache.join("qwen"))
-        .arg(release_dir()?.join("models.json"));
+        .arg(dir.join("models.json"));
     // The runner reads cloned voices with the Base weights, VoxCPM2 or OmniVoice that preparing
     // verified.
     let readers = [
@@ -965,7 +966,7 @@ pub fn clone(cache: &Path, voices: &Path) -> Result<()> {
     let mut command = Command::new(installed.join("bin/python3"));
     command
         .args(["-I", "-B"])
-        .arg(installed.join("mac.py"))
+        .arg(release_dir()?.join("mac.py"))
         .args(["clone", CLONE])
         .arg(cache.join("qwen"))
         .arg(release_dir()?.join("models.json"))

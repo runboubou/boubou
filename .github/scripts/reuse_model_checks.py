@@ -87,6 +87,7 @@ def runner(published, output):
     if (output / "runner.tar.gz").stat().st_size != manifest["size"]:
         raise ValueError("Reused runner has the wrong size")
     shutil.copyfile(manifest_path, output / "runtime.json")
+    builder.ship_app(output)
     print(f"Reusing the immutable runner verified by v{build['version']}", file=sys.stderr)
     return True
 

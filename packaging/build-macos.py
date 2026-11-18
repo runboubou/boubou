@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "packaging/qwen"))
+from build_runner import TARGETS, ship_app, sources_digest  # noqa: E402
 # npm publish fails above about 400 MB; the package itself is a few MB.
 MAX_PACKED = 32 * 1024 * 1024
 LICENSES = [
@@ -123,6 +125,7 @@ def main():
             (folder / "qwen").mkdir()
             for file in ["runtime.json", "models.json"]:
                 shutil.copyfile(args.qwen / file, folder / "qwen" / file)
+            ship_app(folder / "qwen")
             runtime = json.loads((folder / "qwen/runtime.json").read_text())
             # npm cannot publish the runner (about 650 MB); users download it on first pull.
             if not str(runtime.get("url") or "").startswith("https://"):
@@ -142,12 +145,11 @@ def main():
             (linux / "boubou").chmod(0o755)
             for file in ["runtime.json", "models.json"]:
                 shutil.copyfile(args.linux / "qwen" / file, linux / "qwen" / file)
+            ship_app(linux / "qwen")
             runtime = json.loads((linux / "qwen/runtime.json").read_text())
             if not str(runtime.get("url") or "").startswith("https://"):
                 raise SystemExit("The Linux Qwen runner must be published at an HTTPS URL.")
             # The Linux runner is rebuilt only when its sources change, so check it is current.
-            sys.path.insert(0, str(ROOT / "packaging/qwen"))
-            from build_runner import TARGETS, sources_digest
             if runtime.get("sources_sha256") != sources_digest(TARGETS["Linux", "x86_64"]):
                 raise SystemExit(
                     "The published Linux runner is older than its sources. Rebuild and publish it "

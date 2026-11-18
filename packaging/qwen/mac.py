@@ -10,7 +10,7 @@ import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# voice.py stays the conversation both hosts share, so the published Linux runner stays current.
+# voice.py is the conversation both hosts share.
 _spec = importlib.util.spec_from_file_location("voice", HERE / "voice.py")
 voice = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(voice)
@@ -185,7 +185,7 @@ def read_aloud():
     cloned on this Mac, which Qwen3-TTS's Base weights, VoxCPM2 or OmniVoice read, by its language.
 
     Any other name, such as OpenAI's own, keeps the voice Boubou started with, as every other
-    model does. voice.py reads in that voice only, and stays as the Linux runner published it.
+    model does. voice.py reads in that voice only.
     """
     import threading
 

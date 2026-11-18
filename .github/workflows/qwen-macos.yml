@@ -128,11 +128,17 @@ jobs:
           REUSED: ${{ steps.runner.outputs.reused }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Runner/model identity avoids the full matrix, but changed CLI integration still checks two voices.
-          published() { cmp -s "$RUNNER_TEMP/published/qwen/$1" "$RUNNER_TEMP/qwen/$1"; }
+          # Runner/model/script identity avoids the full matrix, but changed CLI integration still checks two voices.
+          # The npm package, not the runner, carries Boubou's scripts, so a changed script checks every profile.
+          published() { diff -rq "$RUNNER_TEMP/published/qwen/$1" "$RUNNER_TEMP/qwen/$1" > /dev/null; }
+          same_scripts() {
+            for name in $(python -B -c 'import sys; sys.path.insert(0, "packaging/qwen"); from build_runner import APP; print(*APP)'); do
+              published "$name" || return 1
+            done
+          }
           same_models=false
           inference=true
-          if [ "$REUSED" = true ] && published runtime.json && published models.json; then
+          if [ "$REUSED" = true ] && published runtime.json && published models.json && same_scripts; then
             same_models=true
             if python -B .github/scripts/reuse_model_checks.py qwen; then
               inference=false
