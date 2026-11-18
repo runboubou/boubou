@@ -133,7 +133,7 @@
     const cur = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0, brow: 0, nod: 0, smile: 0, sway: .5, near: 0, happy: 0 };
     const goal = { ax: 0, ay: 0, az: 0, body: 0, ex: 0, ey: 0 };
     const mouth = { open: 0, shape: 0, weights: [0, 0, 0, 0, 0], loud: 0, slow: 0 };
-    let nextLook = 0, nextBlink = 1.2, blinkAt = -1, heard = 0, phase = 0;
+    let nextLook = 0, nextBlink = 1.2, blinkAt = -1, blinked = 0, heard = 0, phase = 0;
     // A phrase ends where the voice rests after talking a while; she smiles and tilts her head there.
     // About half of those smiles are laughs, with the drawn laughing eyes.
     let talked = 0, quiet = 0, beamAt = -9, beamSide = 1, nextBeam = 6, laugh = false;
@@ -160,7 +160,8 @@
         goal.body = random() * .3 * span;
         goal.ex = back ? 0 : random() * (talking ? .75 : mood ? .25 : .6);
         goal.ey = back ? 0 : random() * (talking ? .45 : mood ? .15 : .35);
-        if (Math.random() < .3 && blinkAt < 0) nextBlink = t;
+        // A big look sometimes brings a blink, but not right after another one.
+        if (Math.random() < .12 && blinkAt < 0 && t > blinked + 2.5) nextBlink = t;
       }
       const voice = speech(), level = voice ? voice.level : 0;
       mouth.loud += (level - mouth.loud) * (1 - Math.exp(-dt * 18));
@@ -169,15 +170,16 @@
       heard *= Math.exp(-dt * 3);
 
       if (level > .12) talked += dt, quiet = 0;
-      else if ((quiet += dt) > .2 && talked > .7) talked = 0, beamAt = t, beamSide = -beamSide, laugh = Math.random() < .55;
+      else if ((quiet += dt) > .2 && talked > .7) talked = 0, beamAt = t, beamSide = -beamSide, laugh = Math.random() < .25;
       if (quiet > 2) talked = 0;
       // Now and then a smile of her own, more often while someone is there.
       if (t > nextBeam) {
-        if (!level && beamAt < t - 2) beamAt = t, beamSide = Math.random() < .5 ? -1 : 1, laugh = Math.random() < .5;
+        if (!level && beamAt < t - 2) beamAt = t, beamSide = Math.random() < .5 ? -1 : 1, laugh = Math.random() < .2;
         nextBeam = t + (mood ? 4 : 7) + Math.random() * 6;
       }
-      const beam = Math.max(0, Math.sin(Math.min(1, (t - beamAt) / 1.5) * Math.PI));
-      cur.happy = laugh && !calm.matches ? smooth((beam - .35) / .4) : 0;
+      // A laugh lasts longer than a smile: the eyes smile first, close slowly, and open slowly.
+      const beam = Math.max(0, Math.sin(Math.min(1, (t - beamAt) / (laugh ? 2.4 : 1.5)) * Math.PI));
+      cur.happy = laugh && !calm.matches ? smooth((beam - .25) / .5) : 0;
 
       // The whole body sways from the hips, the head leaning the other way a moment later.
       const energy = mood === 'boubou' ? .85 + mouth.slow * .5 : mood === 'you' ? .7 : .55;
@@ -204,13 +206,15 @@
       cur.near += ((mood === 'you' ? .8 + heard * .6 : mood === 'boubou' ? .35 : 0) * still - cur.near) * (1 - Math.exp(-dt * 2));
 
       let open = 1;
-      if (blinkAt < 0 && t > nextBlink) blinkAt = t;
+      // No blink during a smile or just after it: closing and opening around one looks abrupt.
+      if (blinkAt < 0 && t > nextBlink && t > beamAt + (laugh ? 2.4 : 1.5) + 1.2) blinkAt = t;
       if (blinkAt >= 0) {
         const d = t - blinkAt;
         open = d < .07 ? 1 - d / .07 : d < .12 ? 0 : smooth((d - .12) / .16);
         if (d >= .28) {
           blinkAt = -1;
-          nextBlink = t + (Math.random() < .15 ? .1 : 1.6 + Math.random() * 3.8);
+          blinked = t;
+          nextBlink = t + (Math.random() < .08 ? .1 : 2.2 + Math.random() * 3.3);
         }
       }
 
