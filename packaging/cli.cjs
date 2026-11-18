@@ -2,11 +2,12 @@
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const { constants } = require("node:fs");
-const { join, sep, resolve } = require("node:path");
+const { join, sep, resolve, dirname } = require("node:path");
 const { homedir } = require("node:os");
 
 const platform = `${process.platform}-${process.arch}`;
-const executable = { "darwin-arm64": "boubou", "linux-x64": "linux-x64/boubou" }[platform];
+// Each computer's binary comes in its own package, which npm installs beside this one.
+const native = { "darwin-arm64": "boubou-darwin-arm64", "linux-x64": "boubou-linux-x64" }[platform];
 const args = process.argv.slice(2);
 let activeChild;
 let shutdownSignal;
@@ -69,13 +70,24 @@ function cacheDirectory() {
     : join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "boubou")));
 }
 
+// The binary of the platform package npm installed for the launcher in `directory`, at its version.
+async function binary(directory, expected) {
+  try {
+    const manifest = require.resolve(`${native}/package.json`, { paths: [directory] });
+    const { name, version: found } = JSON.parse(await fs.readFile(manifest, "utf8"));
+    if (name !== native || found !== expected) return;
+    const path = join(dirname(manifest), "boubou");
+    await fs.access(path, constants.X_OK);
+    return path;
+  } catch { return; }
+}
+
 async function ready(directory, expected) {
   try {
     const manifest = JSON.parse(await fs.readFile(join(directory, "package.json"), "utf8"));
     if (manifest.name !== "boubou" || manifest.version !== expected || !version(expected)) return false;
     await fs.access(join(directory, "cli.cjs"), constants.R_OK);
-    await fs.access(join(directory, executable), constants.X_OK);
-    return true;
+    return Boolean(await binary(directory, expected));
   } catch { return false; }
 }
 
@@ -168,7 +180,7 @@ async function selectPackage() {
 }
 
 async function main() {
-  if (!executable) throw new Error("Boubou's npm package runs on Apple Silicon Macs and x86-64 Linux.");
+  if (!native) throw new Error("Boubou's npm package runs on Apple Silicon Macs and x86-64 Linux.");
   const selected = process.env.BOUBOU_UPDATE_CHECKED === "1" ? { directory: __dirname } : await selectPackage();
   if (shutdownSignal) return finish(1);
   const folders = __dirname.split(sep);
@@ -176,7 +188,13 @@ async function main() {
   const env = { ...process.env, ...(source && { BOUBOU_NPM: source }) };
   // Run the new launcher as well as the new binary; future launcher fixes take effect immediately.
   const replaced = selected.directory !== __dirname;
-  activeChild = spawn(replaced ? process.execPath : join(__dirname, executable),
+  let executable = process.execPath;
+  if (!replaced) {
+    const own = JSON.parse(await fs.readFile(join(__dirname, "package.json"), "utf8")).version;
+    executable = await binary(__dirname, own);
+    if (!executable) throw new Error(`Boubou's binary for this computer (${native}@${own}) is missing. npm installs it as an optional dependency; install boubou again without --omit=optional.`);
+  }
+  activeChild = spawn(executable,
     replaced ? [join(selected.directory, "cli.cjs"), ...args] : args,
     { stdio: "inherit", env: { ...env,
       BOUBOU_UPDATE_CHECKED: selected.checked === false ? "0" : "1",

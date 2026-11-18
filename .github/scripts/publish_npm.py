@@ -1,4 +1,4 @@
-"""Publish the tested tarball and reconcile npm tags without moving them backwards."""
+"""Publish the tested tarballs and reconcile npm tags without moving them backwards."""
 
 import json
 import os
@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tarfile
 import time
 
 REGISTRY = "https://registry.npmjs.org"
@@ -50,12 +51,12 @@ def tags():
     return values
 
 
-def served(version, expected):
-    body = request(f"{REGISTRY}/boubou/{version}", missing=True)
+def served(version, expected, name="boubou"):
+    body = request(f"{REGISTRY}/{name.replace('/', '%2f')}/{version}", missing=True)
     if body is None:
         return False
     metadata = json.loads(body)
-    if not isinstance(metadata, dict) or metadata.get("name") != "boubou" or metadata.get("version") != version:
+    if not isinstance(metadata, dict) or metadata.get("name") != name or metadata.get("version") != version:
         raise ValueError("npm returned a different package identity")
     dist = metadata.get("dist")
     url = dist.get("tarball") if isinstance(dist, dict) else None
@@ -63,7 +64,7 @@ def served(version, expected):
         raise ValueError("npm returned an invalid tarball URL")
     actual = request(url)
     if actual != expected:
-        raise ValueError(f"npm already holds different bytes for boubou@{version}. Release a new version.")
+        raise ValueError(f"npm already holds different bytes for {name}@{version}. Release a new version.")
     return True
 
 
@@ -101,9 +102,29 @@ def reconcile_tag(tag, version, deadline, prerelease_only=False):
     print(f"npm {tag} serves {version} or a newer version")
 
 
+def channel_of(version):
+    return version.split("-", 1)[1].split("+", 1)[0].split(".", 1)[0] if not version_key(version)[3] else "latest"
+
+
+def publish_platform(version, tarball):
+    """A platform package, which `boubou` names by exact version, so its tags never matter."""
+    with tarfile.open(tarball) as archive:
+        name = json.load(archive.extractfile("package/package.json"))["name"]
+    if not re.fullmatch(r"boubou-(darwin-arm64|linux-x64)", name):
+        raise ValueError(f"Unexpected platform package {name!r}")
+    expected = Path(tarball).read_bytes()
+    if served(version, expected, name):
+        print(f"npm already serves {name}@{version}")
+        return
+    subprocess.run(["npm", "publish", str(tarball), "--tag", channel_of(version), "--access", "public"],
+                   check=True, timeout=300)
+    wait_for(f"the exact {name}@{version} tarball", lambda: served(version, expected, name),
+             time.monotonic() + 30 * 60)
+
+
 def publish(version, tarball):
     wanted = version_key(version)
-    channel = version.split("-", 1)[1].split("+", 1)[0].split(".", 1)[0] if not wanted[3] else "latest"
+    channel = channel_of(version)
     expected = Path(tarball).read_bytes()
     current = tags().get(channel)
     deadline = time.monotonic() + 30 * 60
@@ -123,6 +144,9 @@ def publish(version, tarball):
 
 if __name__ == "__main__":
     try:
+        # `boubou` installs its platform packages by exact version, so they must be served first.
+        for platform in os.environ.get("PLATFORM_TARBALLS", "").split():
+            publish_platform(os.environ["VERSION"], platform)
         publish(os.environ["VERSION"], os.environ["TARBALL"])
     except (ValueError, KeyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         sys.exit(f"::error::{error}")

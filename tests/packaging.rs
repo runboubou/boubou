@@ -15,6 +15,13 @@ use std::{
 
 struct Package(PathBuf);
 
+/// npm installs this computer's binary as the launcher's optional dependency.
+const PLATFORM: &str = if cfg!(target_os = "macos") {
+    "boubou-darwin-arm64"
+} else {
+    "boubou-linux-x64"
+};
+
 impl Package {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -34,13 +41,26 @@ impl Package {
             include_str!("../packaging/package.json"),
         )
         .unwrap();
+        // Every copy of the launcher below `root` finds this platform package, as Node resolves it.
+        let native = root.join("node_modules").join(PLATFORM);
+        fs::create_dir_all(&native).unwrap();
+        fs::write(
+            native.join("package.json"),
+            serde_json::json!({"name": PLATFORM, "version": env!("CARGO_PKG_VERSION")}).to_string(),
+        )
+        .unwrap();
         // macOS checks every fresh copy of the binary on its first start, one copy after another,
         // which made parallel fixtures wait for each other. A hard link starts at once.
-        let (built, binary) = (env!("CARGO_BIN_EXE_boubou"), root.join("boubou"));
+        let (built, binary) = (env!("CARGO_BIN_EXE_boubou"), native.join("boubou"));
         if fs::hard_link(built, &binary).is_err() {
             fs::copy(built, &binary).unwrap();
         }
         Self(root)
+    }
+
+    /// The platform package: the binary, with its Qwen manifests and scripts in `qwen/`.
+    fn native(&self) -> PathBuf {
+        self.0.join("node_modules").join(PLATFORM)
     }
 
     fn command(&self) -> Command {
@@ -58,7 +78,7 @@ impl Package {
         let copy = self.0.join(folder);
         if !copy.exists() {
             fs::create_dir_all(&copy).unwrap();
-            for file in ["cli.cjs", "package.json", "boubou"] {
+            for file in ["cli.cjs", "package.json"] {
                 fs::hard_link(self.0.join(file), copy.join(file)).unwrap();
             }
         }
@@ -100,7 +120,7 @@ impl Package {
     }
 
     fn script(&self, text: &str) {
-        let path = self.0.join("boubou");
+        let path = self.native().join("boubou");
         // Writing through the link would overwrite the built binary.
         fs::remove_file(&path).unwrap();
         fs::write(&path, text).unwrap();
@@ -145,7 +165,7 @@ impl Prompt {
 
     /// Starts the native binary; without `controlling`, closing the terminal sends no SIGHUP.
     fn native(package: &Package, controlling: bool) -> Self {
-        let mut command = Command::new(package.0.join("boubou"));
+        let mut command = Command::new(package.native().join("boubou"));
         command
             .env("BOUBOU_VOICES_DIR", package.0.join("voices"))
             .env("BOUBOU_NO_UPDATE_CHECK", "1")
@@ -392,7 +412,7 @@ fn guided_start_accepts_a_pasted_offline_command_after_an_error() {
 #[test]
 fn guided_start_runs_a_pasted_command_that_names_a_voice() {
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     fs::create_dir(&release).unwrap();
     // Empty manifests list the packaged voices and stop a run before it downloads.
     fs::write(release.join("runtime.json"), "{}").unwrap();
@@ -412,7 +432,7 @@ fn guided_start_runs_a_pasted_command_that_names_a_voice() {
 #[test]
 fn guided_start_offers_to_clone_a_voice_above_the_library() {
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     fs::create_dir(&release).unwrap();
     fs::write(release.join("runtime.json"), "{}").unwrap();
     fs::write(release.join("models.json"), "[]").unwrap();
@@ -571,7 +591,7 @@ fn guided_start_redraws_when_the_terminal_resizes() {
 #[test]
 fn guided_start_filters_incompatible_packaged_voices_before_download() {
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     fs::create_dir(&release).unwrap();
     fs::write(
         release.join("runtime.json"),
@@ -654,7 +674,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
         return;
     }
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     let cache = package.0.join("menu-cache/qwen");
     fs::create_dir(&release).unwrap();
     let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
@@ -753,7 +773,7 @@ fn packaged_qwen_recovers_partial_assets_and_starts_its_server_offline() {
 #[test]
 fn qwen_package_lists_its_models_and_doctor_is_read_only() {
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     fs::create_dir(&release).unwrap();
     fs::write(
         release.join("runtime.json"),
@@ -824,7 +844,7 @@ fn qwen_package_lists_its_models_and_doctor_is_read_only() {
 #[test]
 fn qwen_microphone_profiles_reject_liquid_file_input_before_downloading() {
     let package = Package::new();
-    let release = package.0.join("qwen");
+    let release = package.native().join("qwen");
     fs::create_dir(&release).unwrap();
     fs::write(release.join("runtime.json"), "{}").unwrap();
     fs::write(release.join("models.json"), "[]").unwrap();
@@ -1003,14 +1023,16 @@ fn npm_package_leaves_the_qwen_runner_to_the_release() {
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../packaging/package.json")).unwrap();
     let files = manifest["files"].as_array().unwrap();
-    assert!(
-        files
-            .iter()
-            .all(|file| !file.as_str().unwrap().ends_with(".tar.gz"))
-    );
-    // The x86-64 Linux CLI and its manifests ride along; its runner comes from Hugging Face.
+    // The launcher package carries no runner and no manifests: each platform package carries
+    // its binary and manifests, and the runners come from GitHub and Hugging Face.
+    assert!(files.iter().all(|file| {
+        let file = file.as_str().unwrap();
+        file != "qwen" && !file.ends_with(".tar.gz")
+    }));
+    // Launchers from before the split accept an update only with these paths executable.
+    assert!(files.iter().any(|file| file == "boubou"));
     assert!(files.iter().any(|file| file == "linux-x64"));
-    assert!(include_str!("../packaging/build-macos.py").contains("if size > MAX_PACKED:"));
+    assert!(include_str!("../packaging/build-macos.py").contains("> MAX_PACKED:"));
 }
 
 #[test]
@@ -1049,10 +1071,10 @@ fn npm_launcher_preserves_arguments_with_spaces_and_exit_codes() {
 #[test]
 fn npm_launcher_reports_a_missing_executable() {
     let package = Package::new();
-    fs::remove_file(package.0.join("boubou")).unwrap();
+    fs::remove_file(package.native().join("boubou")).unwrap();
     let result = package.run(&["--version"]);
     assert_eq!(result.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&result.stderr).contains("Could not start boubou"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("--omit=optional"));
 }
 
 #[test]

@@ -95,18 +95,25 @@ jobs:
       - name: Check the candidate
         run: |
           set -euo pipefail
-          tarball=$(find candidate -name 'boubou-*.tgz')
+          version=${GITHUB_REF_NAME#v}
+          # `boubou` is the launcher; each platform package carries its binary and Qwen manifests.
+          tarball=$(find candidate -name "boubou-$version.tgz")
+          mac=$(find candidate -name "boubou-darwin-arm64-$version.tgz")
+          linux=$(find candidate -name "boubou-linux-x64-$version.tgz")
           runtime=$(find candidate -name runtime.json)
           runner=$(find candidate -name runner.tar.gz)
-          version=$(basename "$tarball" .tgz)
-          version=${version#boubou-}
-          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match package $version"; exit 1; }
-          # npm publish fails above about 400 MB; the runner is a release asset instead.
-          size=$(stat -c %s "$tarball")
-          test "$size" -le $((32 * 1024 * 1024)) || { echo "npm tarball is $size bytes"; exit 1; }
-          tar -xzOf "$tarball" package/qwen/runtime.json | cmp - "$runtime"
+          for package in "$tarball" "$mac" "$linux"; do
+            test -f "$package" || { echo "Missing a $version package for $GITHUB_REF_NAME"; exit 1; }
+            # npm publish fails above about 400 MB; the runner is a release asset instead.
+            size=$(stat -c %s "$package")
+            test "$size" -le $((32 * 1024 * 1024)) || { echo "$package is $size bytes"; exit 1; }
+            test "$(tar -xzOf "$package" package/package.json | jq -r .version)" = "$version"
+          done
+          test "$(tar -xzOf "$tarball" package/package.json | jq -c .optionalDependencies)" = \
+            "$(jq -cn --arg v "$version" '{"boubou-darwin-arm64": $v, "boubou-linux-x64": $v}')"
+          tar -xzOf "$mac" package/qwen/runtime.json | cmp - "$runtime"
           # The Linux runner is published on Hugging Face before the release; make sure the package can fetch it.
-          linux_url=$(tar -xzOf "$tarball" package/linux-x64/qwen/runtime.json | jq -r .url)
+          linux_url=$(tar -xzOf "$linux" package/qwen/runtime.json | jq -r .url)
           curl -fsSL --retry 5 --retry-all-errors -r 0-0 -o /dev/null "$linux_url"
           url=$(jq -r .url "$runtime")
           asset=${url##*/}
@@ -119,6 +126,7 @@ jobs:
           test "$url" != "$releases/$GITHUB_REF_NAME/$asset" || cp "$runner" "release/$asset"
           {
             echo "TARBALL=$tarball"
+            echo "PLATFORM_TARBALLS=$mac $linux"
             echo "VERSION=$version"
             echo "RUNNER_URL=$url"
             echo "RUNNER_SHA=$(jq -r .sha256 "$runtime")"

@@ -15,11 +15,6 @@
     "boubou",
     "cli.cjs",
     "LICENSE",
-    "qwen",
-    "linux-x64",
-    "licenses",
-    "BUILD.json",
-    "SHA256SUMS",
-    "THIRD_PARTY_NOTICES.txt"
+    "linux-x64"
   ]
 }
